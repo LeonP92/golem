@@ -1,0 +1,32 @@
+# Build outputs
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test cache
+*.test
+*.out
+
+# Go workspace
+go.work
+go.work.sum
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code local state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
+# Design and scratch docs (committed separately if needed)
+*.md.bak

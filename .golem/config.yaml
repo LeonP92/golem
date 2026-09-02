@@ -1,0 +1,9 @@
+backend: claude-code
+gate:
+  commands: []
+tool_policy:
+  allow_network: []
+  allow_worktree_only: true
+ask_and_wait_timeout:
+  claude-code: 5m
+role_models: {}
