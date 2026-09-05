@@ -14,8 +14,8 @@ func TestSlug(t *testing.T) {
 		{".", "_"},
 	}
 	for _, c := range cases {
-		if got := slug(c[0]); got != c[1] {
-			t.Errorf("slug(%q) = %q, want %q", c[0], got, c[1])
+		if got := Slug(c[0]); got != c[1] {
+			t.Errorf("Slug(%q) = %q, want %q", c[0], got, c[1])
 		}
 	}
 }

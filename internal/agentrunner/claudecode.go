@@ -165,6 +165,10 @@ var claudeCodeAllowList = []string{
 	"Bash(grep *)",
 	"Bash(sed *)",
 	"Bash(awk *)",
+	// Windows PowerShell
+	"PowerShell(git *)",
+	"PowerShell(go *)",
+	`PowerShell(.\golem*)`,
 	// File operations
 	"Edit(**)",
 	"Write(**)",

@@ -175,6 +175,7 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 	validPhases := map[string]bool{
 		"brainstorm": true, "plan": true, "implement": true,
 		"review": true, "ready-for-review": true, "needs-attention": true,
+		"in-progress": true,
 	}
 	if !validPhases[body.Phase] {
 		http.Error(w, "invalid phase", http.StatusBadRequest)

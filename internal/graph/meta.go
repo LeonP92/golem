@@ -3,6 +3,7 @@ package graph
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -22,7 +23,6 @@ type Meta struct {
 
 type Edges struct {
 	Imports map[string][]string `json:"imports"`
-	Calls   map[string][]string `json:"calls"`
 }
 
 func LoadMeta(indexDir string) (*Meta, error) {
@@ -45,7 +45,7 @@ func SaveMeta(indexDir string, m *Meta) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(indexDir, "graph-meta.json"), data, 0o644)
+	return atomicWriteFile(filepath.Join(indexDir, "graph-meta.json"), data, 0o644)
 }
 
 func SaveEdges(indexDir string, graphs []ModuleGraph) error {
@@ -54,21 +54,17 @@ func SaveEdges(indexDir string, graphs []ModuleGraph) error {
 	}
 	e := Edges{
 		Imports: map[string][]string{},
-		Calls:   map[string][]string{},
 	}
 	for _, g := range graphs {
 		if len(g.Imports) > 0 {
 			e.Imports[g.Module] = g.Imports
-		}
-		if len(g.Calls) > 0 {
-			e.Calls[g.Module] = g.Calls
 		}
 	}
 	data, err := json.MarshalIndent(e, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(indexDir, "graph-edges.json"), data, 0o644)
+	return atomicWriteFile(filepath.Join(indexDir, "graph-edges.json"), data, 0o644)
 }
 
 func SaveModuleGraph(indexDir string, g ModuleGraph) error {
@@ -80,8 +76,8 @@ func SaveModuleGraph(indexDir string, g ModuleGraph) error {
 	if err != nil {
 		return err
 	}
-	name := strings.NewReplacer("/", "_", "\\", "_", ".", "_").Replace(g.Module) + ".json"
-	return os.WriteFile(filepath.Join(dir, name), data, 0o644)
+	name := Slug(g.Module) + ".json"
+	return atomicWriteFile(filepath.Join(dir, name), data, 0o644)
 }
 
 func LoadAllModuleGraphs(indexDir string) ([]ModuleGraph, error) {
@@ -134,4 +130,18 @@ func ModuleHashes(repoRoot string, files []string) (map[string]string, error) {
 		hashes[f] = h
 	}
 	return hashes, nil
+}
+
+// DeleteModuleGraph removes the stored JSON and wiki markdown for a module.
+// No-op if files do not exist.
+func DeleteModuleGraph(indexDir, wikiDir, modulePath string) error {
+	jsonPath := filepath.Join(indexDir, "graph-modules", Slug(modulePath)+".json")
+	if err := os.Remove(jsonPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	mdPath := filepath.Join(wikiDir, "graph", "modules", Slug(modulePath)+".md")
+	if err := os.Remove(mdPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }

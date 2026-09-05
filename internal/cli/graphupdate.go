@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -57,6 +58,24 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		rolePrompt = data
 	}
 
+	wikiDir := filepath.Join(golemDir, "wiki")
+	indexDir := filepath.Join(golemDir, "index")
+
+	// Separate deleted files and remove their stored graph data.
+	var nonDeleted []string
+	for _, f := range changed {
+		if _, err := os.Stat(filepath.Join(*repo, f)); errors.Is(err, os.ErrNotExist) {
+			modulePath := filepath.ToSlash(filepath.Dir(f))
+			if delErr := graph.DeleteModuleGraph(indexDir, wikiDir, modulePath); delErr != nil {
+				fmt.Fprintf(stderr, "deleting module graph %s: %v\n", modulePath, delErr)
+				// non-fatal: aggregate regeneration will skip the missing JSON anyway
+			}
+		} else {
+			nonDeleted = append(nonDeleted, f)
+		}
+	}
+	changed = nonDeleted
+
 	stale := staleModules(changed, meta)
 	modules, err := graph.Discover(*repo, cfg.Graph.MaxFileSizeKB, cfg.Graph.ExtraExtensions, cfg.Graph.IgnorePatterns)
 	if err != nil {
@@ -71,15 +90,22 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		}
 	}
 
-	wikiDir := filepath.Join(golemDir, "wiki")
+	if err := os.MkdirAll(indexDir, 0o755); err != nil {
+		fmt.Fprintf(stderr, "creating index dir: %v\n", err)
+		return 1
+	}
+	cache, err := graph.LoadLLMCache(filepath.Join(indexDir, ".llm_cache.json"))
+	if err != nil {
+		fmt.Fprintf(stderr, "loading LLM cache: %v\n", err)
+		return 1
+	}
+
 	fmt.Fprintf(stdout, "updating %d stale modules...\n", len(toRebuild))
-	graphs, err := runModules(runner, string(rolePrompt), *repo, wikiDir, toRebuild, *concurrency)
+	graphs, err := runModules(runner, string(rolePrompt), *repo, wikiDir, toRebuild, *concurrency, cache)
 	if err != nil {
 		fmt.Fprintf(stderr, "graph update: %v\n", err)
 		return 1
 	}
-
-	indexDir := filepath.Join(golemDir, "index")
 
 	for _, g := range graphs {
 		if err := graph.WriteModule(wikiDir, g); err != nil {
@@ -90,6 +116,11 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "saving module graph: %v\n", err)
 			return 1
 		}
+	}
+
+	if err := cache.Save(); err != nil {
+		fmt.Fprintf(stderr, "saving LLM cache: %v\n", err)
+		// non-fatal — graph files written, cache miss on next run is safe
 	}
 
 	allGraphs, err := graph.LoadAllModuleGraphs(indexDir)

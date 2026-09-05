@@ -30,7 +30,7 @@ func WriteModule(wikiDir string, g ModuleGraph) error {
 	if len(g.Imports) > 0 {
 		fmt.Fprintf(&b, "\n## Imports\n\n%s\n", strings.Join(g.Imports, ", "))
 	}
-	return os.WriteFile(filepath.Join(dir, slug(g.Module)+".md"), []byte(b.String()), 0o644)
+	return atomicWriteFile(filepath.Join(dir, Slug(g.Module)+".md"), []byte(b.String()), 0o644)
 }
 
 func AppendSymbols(wikiDir string, g ModuleGraph) error {
@@ -86,10 +86,10 @@ func WriteIndex(wikiDir string, graphs []ModuleGraph) error {
 	for _, sub := range subsystems {
 		fmt.Fprintf(&b, "## %s\n\n", sub)
 		for _, g := range bySubsystem[sub] {
-			fmt.Fprintf(&b, "### [%s](modules/%s.md)\n\n%s\n\n", g.Module, slug(g.Module), g.Summary)
+			fmt.Fprintf(&b, "### [%s](modules/%s.md)\n\n%s\n\n", g.Module, Slug(g.Module), g.Summary)
 		}
 	}
-	return os.WriteFile(filepath.Join(wikiDir, "graph", "index.md"), []byte(b.String()), 0o644)
+	return atomicWriteFile(filepath.Join(wikiDir, "graph", "index.md"), []byte(b.String()), 0o644)
 }
 
 func ResetAggregates(wikiDir string) error {
@@ -97,14 +97,14 @@ func ResetAggregates(wikiDir string) error {
 		return err
 	}
 	for _, name := range []string{"symbols.md", "types.md"} {
-		if err := os.WriteFile(filepath.Join(wikiDir, "graph", name), nil, 0o644); err != nil {
+		if err := atomicWriteFile(filepath.Join(wikiDir, "graph", name), nil, 0o644); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func slug(path string) string {
+func Slug(path string) string {
 	r := strings.NewReplacer("/", "_", "\\", "_", ".", "_")
 	return r.Replace(path)
 }

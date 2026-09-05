@@ -28,6 +28,15 @@ func (e *GolemExecutor) repoMutex(repoPath string) *sync.Mutex {
 	return v.(*sync.Mutex)
 }
 
+// initRepo acquires the per-repo mutex, runs ensureRepoReady, and releases the
+// mutex before returning. Using a helper keeps the defer scope tight.
+func (e *GolemExecutor) initRepo(ctx context.Context, repoPath string) error {
+	mu := e.repoMutex(repoPath)
+	mu.Lock()
+	defer mu.Unlock()
+	return ensureRepoReady(ctx, repoPath)
+}
+
 // RunTicket executes a claimed ticket:
 //  1. Pre-creates the local ticket with `golem ticket new` (scaffolding only, no Claude).
 //  2. Ensures the repo is initialized and the code graph is current.
@@ -40,11 +49,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		return fmt.Errorf("no local path for repo %q", claim.RepoRemote)
 	}
 
-	mu := e.repoMutex(repoPath)
-	mu.Lock()
-	err := ensureRepoReady(ctx, repoPath)
-	mu.Unlock()
-	if err != nil {
+	if err := e.initRepo(ctx, repoPath); err != nil {
 		log.Printf("executor: repo pre-flight warning: %v", err)
 	}
 

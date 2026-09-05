@@ -3,14 +3,26 @@
 # CGO is disabled — the pure-Go SQLite driver (glebarez/sqlite) is used.
 
 FROM golang:1.27-alpine AS builder
-RUN apk add --no-cache git
+# build-base provides musl-gcc (C toolchain) required for tree-sitter CGO bindings.
+# libstdc++ is needed by the TypeScript grammar (C++ runtime).
+RUN apk add --no-cache \
+    build-base \
+    libstdc++ \
+    git
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/golem           ./cmd/golem
-RUN CGO_ENABLED=0 go build -o /out/golem-orchestrator ./cmd/orchestrator
-RUN CGO_ENABLED=0 go build -o /out/golem-shem       ./cmd/shem
+RUN CGO_ENABLED=0 go build -o /out/golem              ./cmd/golem
+RUN CGO_ENABLED=0 go build -o /out/golem-orchestrator  ./cmd/orchestrator
+# golem-shem uses tree-sitter (CGO) — build statically with musl-gcc.
+RUN CGO_ENABLED=1 \
+    CC=musl-gcc \
+    go build \
+      -tags netgo \
+      -ldflags '-linkmode=external -extldflags=-static' \
+      -o /out/golem-shem \
+      ./cmd/shem
 
 # ── orchestrator runtime ───────────────────────────────────────────────────────
 FROM alpine:3.21 AS orchestrator
