@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func gitCommit(t *testing.T, dir, file, content, message string) string {

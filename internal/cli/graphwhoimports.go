@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonpham/golem/internal/graph"
+	"github.com/leonp92/golem/internal/graph"
 )
 
 func GraphWhoImports(args []string, stdout, stderr io.Writer) int {

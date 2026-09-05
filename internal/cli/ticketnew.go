@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/config"
-	"github.com/leonpham/golem/internal/ticket"
-	"github.com/leonpham/golem/internal/workspace"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/workspace"
 )
 
 func TicketNew(args []string, stdout, stderr io.Writer) int {
@@ -18,13 +18,19 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("id", "", "ticket id (required)")
+	ticketID := fs.String("ticket-id", "", "ticket id assigned by orchestrator (alternative to --id)")
 	trivial := fs.Bool("trivial", false, "skip brainstorm, go straight to plan with developer+reviewer only")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
+	if *ticketID != "" {
+		*id = *ticketID
+	}
 	description := strings.Join(fs.Args(), " ")
 	if *id == "" || description == "" {
-		fmt.Fprintln(stderr, "usage: golem ticket new --id <id> <description>")
+		fmt.Fprintln(stderr, "usage: golem ticket new (--id | --ticket-id) <id> <description>")
+		fmt.Fprintln(stderr, "  --id: ticket id (can be omitted for human users, required for orchestrator)")
+		fmt.Fprintln(stderr, "  --ticket-id: alias for --id used by Shem workers; if both provided, --ticket-id wins")
 		return 1
 	}
 

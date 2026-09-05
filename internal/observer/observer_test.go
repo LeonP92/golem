@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 func TestDispatchForCommitAppendsFindingFromResult(t *testing.T) {

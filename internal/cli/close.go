@@ -8,13 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/config"
-	"github.com/leonpham/golem/internal/graph"
-	"github.com/leonpham/golem/internal/soul"
-	"github.com/leonpham/golem/internal/ticket"
-	"github.com/leonpham/golem/internal/workspace"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/soul"
+	"github.com/leonp92/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/workspace"
 )
 
 type soulProposal struct {

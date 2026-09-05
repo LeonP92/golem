@@ -9,10 +9,10 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/config"
-	"github.com/leonpham/golem/internal/graph"
-	"github.com/leonpham/golem/internal/roles"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/roles"
 )
 
 func GraphBuild(args []string, stdout, stderr io.Writer) int {

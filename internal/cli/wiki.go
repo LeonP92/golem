@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonpham/golem/internal/wiki"
+	"github.com/leonp92/golem/internal/wiki"
 )
 
 func wikiPaths(repo string) (wikiDir, indexPath string) {

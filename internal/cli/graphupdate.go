@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonpham/golem/internal/config"
-	"github.com/leonpham/golem/internal/graph"
-	"github.com/leonpham/golem/internal/roles"
+	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/roles"
 )
 
 func GraphUpdate(args []string, stdout, stderr io.Writer) int {

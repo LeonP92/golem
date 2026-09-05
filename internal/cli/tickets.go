@@ -7,7 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func Tickets(args []string, stdout, stderr io.Writer) int {

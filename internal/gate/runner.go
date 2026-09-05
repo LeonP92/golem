@@ -4,7 +4,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/leonpham/golem/internal/config"
+	"github.com/leonp92/golem/internal/config"
 )
 
 type Result struct {

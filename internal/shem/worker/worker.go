@@ -1,0 +1,180 @@
+package worker
+
+import (
+	"context"
+	"log"
+	"sync"
+	"time"
+
+	ws "github.com/leonp92/golem/internal/orchestrator/ws"
+	"github.com/leonp92/golem/internal/shem/client"
+	"github.com/leonp92/golem/internal/shem/config"
+)
+
+// Executor is the interface for running a ticket.
+type Executor interface {
+	RunTicket(ctx context.Context, cfg *config.Config, c *client.Client, claim *client.ClaimResponse) error
+}
+
+// Worker polls for available tickets, claims them, and runs them via Executor.
+type Worker struct {
+	cfg      *config.Config
+	client   *client.Client
+	executor Executor
+	wsc      *client.WSClient
+	stop     chan struct{}
+	mu       sync.Mutex
+	running  map[string]context.CancelFunc // ticketID → cancel for each active ticket
+}
+
+// New creates a new Worker. exec may be nil for testing (skips actual execution).
+func New(cfg *config.Config, c *client.Client, exec Executor) *Worker {
+	return &Worker{
+		cfg:      cfg,
+		client:   c,
+		executor: exec,
+		stop:     make(chan struct{}),
+		running:  make(map[string]context.CancelFunc),
+	}
+}
+
+// maxConcurrent returns the configured parallelism limit, defaulting to 1.
+func (w *Worker) maxConcurrent() int {
+	if w.cfg.MaxConcurrent > 0 {
+		return w.cfg.MaxConcurrent
+	}
+	return 1
+}
+
+// SetWSClient attaches a WebSocket client for heartbeat pings.
+func (w *Worker) SetWSClient(wsc *client.WSClient) {
+	w.wsc = wsc
+}
+
+// Start registers with the orchestrator and begins the poll loop.
+// It does not block; call Shutdown to stop.
+func (w *Worker) Start() {
+	repos := make([]string, len(w.cfg.Repos))
+	for i, r := range w.cfg.Repos {
+		repos[i] = r.NormalizedRemote
+	}
+	if _, err := w.client.Register(w.cfg.Name, repos); err != nil {
+		log.Printf("worker: register error: %v", err)
+	}
+
+	go w.pollLoop()
+}
+
+// HandleMessage processes a WebSocket push message from the orchestrator.
+func (w *Worker) HandleMessage(msg ws.WSMessage) {
+	if msg.Type == "ticket_available" && msg.TicketID != nil {
+		go w.tryClaimAndRun(*msg.TicketID)
+	}
+}
+
+// tryClaimAndRun attempts to claim the ticket and run it.
+// On 409 (ErrNotAvailable) it returns silently.
+func (w *Worker) tryClaimAndRun(ticketID string) {
+	w.mu.Lock()
+	// Deduplicate: skip if this ticket is already running.
+	if _, ok := w.running[ticketID]; ok {
+		w.mu.Unlock()
+		return
+	}
+	// Enforce concurrency limit.
+	if len(w.running) >= w.maxConcurrent() {
+		w.mu.Unlock()
+		return
+	}
+	// Reserve a slot with a placeholder before releasing the lock.
+	w.running[ticketID] = func() {}
+	w.mu.Unlock()
+
+	claim, err := w.client.ClaimTicket(ticketID)
+	if err != nil {
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+		if err != client.ErrNotAvailable {
+			log.Printf("worker: claim ticket %s error: %v", ticketID, err)
+		}
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.running[ticketID] = cancel
+	w.mu.Unlock()
+
+	defer func() {
+		cancel()
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+	}()
+
+	if w.executor != nil {
+		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			log.Printf("worker: ticket %s error: %v", ticketID, err)
+			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
+				log.Printf("worker: post phase error: %v", phaseErr)
+			}
+		}
+	}
+}
+
+// pollLoop polls for available tickets every 10 seconds.
+func (w *Worker) pollLoop() {
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-w.stop:
+			return
+		case <-ticker.C:
+			for _, r := range w.cfg.Repos {
+				select {
+				case <-w.stop:
+					return
+				default:
+				}
+				id, err := w.client.GetAvailable(r.NormalizedRemote)
+				if err != nil {
+					log.Printf("worker: get available error: %v", err)
+					continue
+				}
+				if id != nil {
+					go w.tryClaimAndRun(*id)
+				}
+			}
+		}
+	}
+}
+
+// Shutdown signals all running tickets to stop, waits up to 10 minutes for
+// them to exit, then closes the stop channel and deregisters from the orchestrator.
+func (w *Worker) Shutdown() {
+	w.mu.Lock()
+	for _, cancel := range w.running {
+		cancel()
+	}
+	w.mu.Unlock()
+
+	deadline := time.Now().Add(10 * time.Minute)
+	for time.Now().Before(deadline) {
+		w.mu.Lock()
+		idle := len(w.running) == 0
+		w.mu.Unlock()
+		if idle {
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	close(w.stop)
+
+	if err := w.client.Deregister(); err != nil {
+		log.Printf("worker: deregister error: %v", err)
+	}
+}

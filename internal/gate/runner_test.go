@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leonpham/golem/internal/config"
+	"github.com/leonp92/golem/internal/config"
 )
 
 func TestRunAllCommandsPass(t *testing.T) {

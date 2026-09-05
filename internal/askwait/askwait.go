@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"time"
 
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 // MaxRounds caps back-and-forth on a single question thread before

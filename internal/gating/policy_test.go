@@ -3,7 +3,7 @@ package gating
 import (
 	"testing"
 
-	"github.com/leonpham/golem/internal/config"
+	"github.com/leonp92/golem/internal/config"
 )
 
 func basePolicy() config.PolicyConfig {

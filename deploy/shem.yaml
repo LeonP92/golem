@@ -1,0 +1,21 @@
+orchestrator: http://orchestrator:8080
+name: shem-local
+# api_key is set via GOLEM_SHEM_API_KEY env var — no need to edit this file.
+# To set it here instead: docker compose run orchestrator shems add --name default
+
+# no_push: true routes git push to the local repo instead of a remote.
+# Ideal for local testing — the ticket branch is visible via git log --all
+# in the mounted repo volume without any network call.
+no_push: true
+max_concurrent: 3
+
+repos:
+  # Local test repo — created automatically by the repo-init service.
+  # Use this for testing the full shem workflow without a real remote.
+  - path: /repos/test
+    remote: local://test
+
+  # Optional: your actual project repo.
+  # Uncomment and set GOLEM_REPO_PATH=/path/to/your/repo on the host.
+  # - path: /repos/myproject
+  #   remote: https://github.com/your-org/your-repo

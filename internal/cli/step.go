@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/bloat"
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/bloat"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func SetStep(args []string, stdout, stderr io.Writer) int {

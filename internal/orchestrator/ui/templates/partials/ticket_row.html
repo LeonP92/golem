@@ -1,0 +1,24 @@
+{{define "ticket_row"}}
+<tr>
+  <td class="font-mono text-xs text-base-content/50">{{slice .Ticket.ID 0 8}}</td>
+  <td class="max-w-xs">
+    <a href="/tickets/{{.Ticket.ID}}" class="link link-hover font-medium truncate block">{{.Ticket.Description}}</a>
+    <span class="text-xs text-base-content/40 font-mono">{{.Ticket.RepoRemote}}</span>
+  </td>
+  <td class="font-mono text-xs text-base-content/60">{{.Ticket.Branch}}</td>
+  <td>
+    <span class="badge badge-sm phase-{{.Ticket.Phase}} rounded font-medium">{{.Ticket.Phase}}</span>
+  </td>
+  <td class="text-sm text-base-content/60">{{if .ShemName}}{{.ShemName}}{{else}}&mdash;{{end}}</td>
+  <td class="text-sm text-base-content/50">{{.Age}}</td>
+  <td class="text-right">
+    {{if .HasPendingApproval}}
+    <span class="iconify text-warning text-lg mr-1" data-icon="heroicons:exclamation-triangle"
+          title="Needs approval"></span>
+    {{end}}
+    <a href="/tickets/{{.Ticket.ID}}" class="btn btn-ghost btn-xs">
+      <span class="iconify" data-icon="heroicons:arrow-top-right-on-square"></span>
+    </a>
+  </td>
+</tr>
+{{end}}

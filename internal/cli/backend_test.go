@@ -3,8 +3,8 @@ package cli
 import (
 	"testing"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/config"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/config"
 )
 
 func TestNewRunnerReturnsClaudeCodeForClaudeCodeBackend(t *testing.T) {

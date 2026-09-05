@@ -18,7 +18,7 @@ func buildGolemBinary(t *testing.T) string {
 	if runtime.GOOS == "windows" {
 		binPath += ".exe"
 	}
-	cmd := exec.Command("go", "build", "-o", binPath, "github.com/leonpham/golem/cmd/golem")
+	cmd := exec.Command("go", "build", "-o", binPath, "github.com/leonp92/golem/cmd/golem")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}

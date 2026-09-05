@@ -22,7 +22,7 @@ The cli module is the command layer of Golem, exposing every user-facing subcomm
 - func TicketResume(args []string, stdout, stderr io.Writer) int — prints ticket phase, branch, and last log entry for a given ticket
 - func SetStep(args []string, stdout, stderr io.Writer) int — records the expected diff line count for the next implementation step on a ticket
 - func CheckBloat(args []string, stdout, stderr io.Writer) int — checks a commit's changed line count against the step expectation and logs a SCOPE_BLOAT finding if exceeded
-- func TicketNew(args []string, stdout, stderr io.Writer) int — creates a new ticket with a worktree, branch, and initial log entry
+- func TicketNew(args []string, stdout, stderr io.Writer) int — creates a new ticket with a worktree, branch, and initial log entry; accepts --ticket-id (intended for Shem workers) as an alternative to --id; if both flags are provided, --ticket-id takes precedence and overrides --id
 - func Tickets(args []string, stdout, stderr io.Writer) int — lists all tickets with their id, phase, and branch
 - func WikiSearch(args []string, stdout, stderr io.Writer) int — searches the wiki index for documents matching a query
 - func WikiRebuild(args []string, stdout, stderr io.Writer) int — rebuilds the TF-IDF wiki index from all wiki documents on disk

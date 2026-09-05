@@ -6,8 +6,8 @@ import (
 	"io"
 	"path/filepath"
 
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func TicketResume(args []string, stdout, stderr io.Writer) int {

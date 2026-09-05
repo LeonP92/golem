@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/leonpham/golem/internal/cli"
+	"github.com/leonp92/golem/internal/cli"
 )
 
 var version = "dev" // set by -ldflags="-X main.version=<tag>" at release build time

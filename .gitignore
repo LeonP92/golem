@@ -30,3 +30,9 @@ Thumbs.db
 
 # Design and scratch docs (committed separately if needed)
 *.md.bak
+
+# Superpowers SDD workspace (implementation artifacts, not source)
+.superpowers/
+
+# Local environment — contains secrets, never commit
+.env

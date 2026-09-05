@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/leonpham/golem/internal/askwait"
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/askwait"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 var emittableTypes = map[string]blog.EntryType{

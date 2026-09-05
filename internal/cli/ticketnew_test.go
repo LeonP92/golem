@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func initRepoForCLI(t *testing.T) string {
@@ -77,5 +77,18 @@ func TestTicketNewTrivialFlagSkipsBrainstorm(t *testing.T) {
 	}
 	if s.Phase != ticket.PhasePlan {
 		t.Errorf("Phase = %q, want plan for a trivial ticket", s.Phase)
+	}
+}
+
+func TestTicketNew_WithTicketID(t *testing.T) {
+	repo := initRepoForCLI(t)
+	var stdout, stderr bytes.Buffer
+
+	code := TicketNew([]string{"--repo", repo, "--ticket-id", "42", "fix the bug"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".golem", "tickets", "42")); os.IsNotExist(err) {
+		t.Error("expected ticket dir .golem/tickets/42 to exist")
 	}
 }

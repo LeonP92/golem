@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 func TestBuildPromptIncludesRolePromptLogAndDiff(t *testing.T) {

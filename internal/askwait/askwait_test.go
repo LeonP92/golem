@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 func TestAskWritesQuestionEntry(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 func TestObserverDispatchAppendsFindingFromRealCommit(t *testing.T) {

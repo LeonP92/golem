@@ -7,9 +7,9 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/leonpham/golem/internal/config"
-	"github.com/leonpham/golem/internal/observer"
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/observer"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func ObserverDispatch(args []string, stdout, stderr io.Writer) int {

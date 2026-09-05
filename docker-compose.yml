@@ -1,0 +1,89 @@
+services:
+  orchestrator:
+    build:
+      context: .
+      target: orchestrator
+    ports:
+      - "8080:8080"
+    volumes:
+      - orchestrator-data:/data
+      - ./deploy/orchestrator.yaml:/etc/golem/orchestrator.yaml:ro
+    environment:
+      - ORCHESTRATOR_DB=/data/orchestrator.db
+      # Auto-provision admin user on startup. Override with GOLEM_ADMIN_USERNAME.
+      - GOLEM_ADMIN_PASSWORD=${GOLEM_ADMIN_PASSWORD:-admin}
+      - GOLEM_ADMIN_USERNAME=${GOLEM_ADMIN_USERNAME:-admin}
+      # Auto-register the shem. Override with GOLEM_SHEM_NAME.
+      - GOLEM_SHEM_API_KEY=${GOLEM_SHEM_API_KEY:-changeme-set-golem-shem-api-key-in-env}
+      - GOLEM_SHEM_NAME=${GOLEM_SHEM_NAME:-default}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # Initialises the local test repo that the shem works on.
+  # Runs once; subsequent starts are no-ops because the volume persists.
+  repo-init:
+    build:
+      context: .
+      target: shem
+    volumes:
+      - test-repo:/repos/test
+    environment:
+      - GIT_AUTHOR_NAME=Golem
+      - GIT_AUTHOR_EMAIL=golem@local
+      - GIT_COMMITTER_NAME=Golem
+      - GIT_COMMITTER_EMAIL=golem@local
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        if [ -f /repos/test/.git/HEAD ]; then
+          echo "test repo already initialised"
+          exit 0
+        fi
+        git init /repos/test
+        cd /repos/test
+        golem init --backend claude-code
+        git add -A
+        git commit -m "init: golem test repo"
+        echo "test repo ready"
+    restart: "no"
+
+  shem:
+    build:
+      context: .
+      target: shem
+    depends_on:
+      orchestrator:
+        condition: service_healthy
+      repo-init:
+        condition: service_completed_successfully
+    volumes:
+      - ./deploy/shem.yaml:/etc/golem/shem.yaml:ro
+      # Test repo the shem works on by default.
+      - test-repo:/repos/test
+      # Optional: mount a real repo (e.g. your project) for real tickets.
+      # Set GOLEM_REPO_PATH to the absolute path on the host.
+      - ${GOLEM_REPO_PATH:-.}:/repos/golem
+      # ── Auth mode: session (option A) ──────────────────────────────────────
+      # Mount your host ~/.claude so the shem reuses your desktop Claude Code
+      # session. No ANTHROPIC_API_KEY needed.
+      #   Windows: CLAUDE_HOME=C:\Users\you\.claude
+      #   Mac/Linux: CLAUDE_HOME=$HOME/.claude
+      # Leave CLAUDE_HOME unset to use a throwaway volume (API key mode only).
+      - ${CLAUDE_HOME:-shem-claude}:/root/.claude
+    environment:
+      # ── Auth mode: API key (option B) ──────────────────────────────────────
+      # Set ANTHROPIC_API_KEY in .env and leave CLAUDE_HOME unset.
+      # The entrypoint bootstraps a headless Claude Code config automatically.
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Must match what the orchestrator was started with.
+      - GOLEM_SHEM_API_KEY=${GOLEM_SHEM_API_KEY:-changeme-set-golem-shem-api-key-in-env}
+      - GOLEM_SHEM_NAME=${GOLEM_SHEM_NAME:-default}
+
+volumes:
+  orchestrator-data:
+  test-repo:
+  shem-claude:   # fallback volume when CLAUDE_HOME is not set

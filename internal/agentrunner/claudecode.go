@@ -131,16 +131,43 @@ Run ` + "`golem tickets --repo .`" + ` and report the output.
 `
 
 var claudeCodeAllowList = []string{
+	// Version control
 	"Bash(git *)",
+	// Golem CLI
 	"Bash(golem *)",
 	"Bash(./golem *)",
 	"Bash(./golem.exe *)",
+	// Language build tools
 	"Bash(go *)",
-	"PowerShell(git *)",
-	"PowerShell(go *)",
-	`PowerShell(.\golem*)`,
-	"Write(**)",
+	"Bash(python3 *)",
+	"Bash(python *)",
+	"Bash(pip *)",
+	"Bash(pip3 *)",
+	"Bash(npm *)",
+	"Bash(npx *)",
+	"Bash(node *)",
+	"Bash(cargo *)",
+	"Bash(rustc *)",
+	"Bash(mvn *)",
+	"Bash(gradle *)",
+	"Bash(make *)",
+	// Shell utilities (needed for any language)
+	"Bash(ls *)",
+	"Bash(cat *)",
+	"Bash(echo *)",
+	"Bash(mkdir *)",
+	"Bash(cp *)",
+	"Bash(mv *)",
+	"Bash(rm *)",
+	"Bash(touch *)",
+	"Bash(chmod *)",
+	"Bash(find *)",
+	"Bash(grep *)",
+	"Bash(sed *)",
+	"Bash(awk *)",
+	// File operations
 	"Edit(**)",
+	"Write(**)",
 }
 
 func settingsJSON(allowList []string) string {

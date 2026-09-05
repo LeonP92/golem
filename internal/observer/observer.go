@@ -4,8 +4,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 // Observer is the single persistent, deterministic process per ticket.

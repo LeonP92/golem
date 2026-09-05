@@ -6,11 +6,11 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/observer"
-	"github.com/leonpham/golem/internal/ticket"
-	"github.com/leonpham/golem/internal/workspace"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/observer"
+	"github.com/leonp92/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/workspace"
 )
 
 func initFixtureRepo(t *testing.T) string {

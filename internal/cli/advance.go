@@ -7,11 +7,11 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/config"
-	"github.com/leonpham/golem/internal/gate"
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/gate"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 var knownPhases = map[string]ticket.Phase{

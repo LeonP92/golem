@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/leonpham/golem/internal/blog"
+	"github.com/leonp92/golem/internal/blog"
 )
 
 // Context is everything a one-shot role invocation needs, reconstructed

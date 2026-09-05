@@ -1,0 +1,64 @@
+{{define "action_card"}}
+<div class="action-card" id="action-{{.ID}}">
+  <div class="flex items-start justify-between mb-2">
+    <div>
+      <a href="/tickets/{{.TicketID}}" class="link link-hover font-semibold text-sm">Ticket #{{.TicketID}}</a>
+      <span class="badge badge-sm badge-ghost ml-2">{{.Kind}}</span>
+    </div>
+  </div>
+  <p class="text-sm mb-3 text-base-content/80">{{.Prompt}}</p>
+  {{if eq .Kind "approval"}}
+    <div class="flex flex-col gap-2">
+      <form hx-post="/api/tickets/{{.TicketID}}/actions"
+            hx-vals='{"action":"approve"}'
+            hx-on::after-request="if(event.detail.successful) window.location.reload()">
+        <button type="submit" class="btn btn-success btn-sm gap-1.5 w-full">
+          <span class="iconify" data-icon="heroicons:check"></span>
+          Approve
+        </button>
+      </form>
+      <details>
+        <summary class="btn btn-outline btn-warning btn-sm gap-1.5 w-full cursor-pointer list-none">
+          <span class="iconify" data-icon="heroicons:pencil-square"></span>
+          Request Changes
+        </summary>
+        <form hx-post="/api/tickets/{{.TicketID}}/actions"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()"
+              class="mt-2 flex flex-col gap-2">
+          <input type="hidden" name="action" value="request-changes">
+          <textarea name="feedback" rows="3"
+                    class="textarea textarea-bordered textarea-sm w-full"
+                    required placeholder="What needs to change?"></textarea>
+          <button type="submit" class="btn btn-warning btn-sm gap-1.5">
+            <span class="iconify" data-icon="heroicons:paper-airplane"></span>
+            Send Feedback
+          </button>
+        </form>
+      </details>
+    </div>
+  {{else if eq .Kind "blocker_ack"}}
+    <form hx-post="/api/tickets/{{.TicketID}}/actions"
+          hx-vals='{"action":"answer","input_id":{{.ID}},"response":"acknowledged"}'
+          hx-on::after-request="if(event.detail.successful) window.location.reload()">
+      <button type="submit" class="btn btn-warning btn-sm gap-1.5">
+        <span class="iconify" data-icon="heroicons:check-circle"></span>
+        Acknowledge Blocker
+      </button>
+    </form>
+  {{else}}
+    <form hx-post="/api/tickets/{{.TicketID}}/actions"
+          hx-on::after-request="if(event.detail.successful) window.location.reload()">
+      <input type="hidden" name="action" value="answer">
+      <input type="hidden" name="input_id" value="{{.ID}}">
+      <div class="form-control mb-2">
+        <textarea name="response" rows="3" class="textarea textarea-bordered textarea-sm" required
+                  placeholder="Your answer…"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary btn-sm gap-1.5">
+        <span class="iconify" data-icon="heroicons:paper-airplane"></span>
+        Submit Answer
+      </button>
+    </form>
+  {{end}}
+</div>
+{{end}}

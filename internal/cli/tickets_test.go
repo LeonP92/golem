@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func TestTicketsListsAllTicketsWithPhase(t *testing.T) {

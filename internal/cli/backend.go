@@ -3,8 +3,8 @@ package cli
 import (
 	"fmt"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/config"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/config"
 )
 
 func NewRunner(cfg *config.Config, worktreeRoot string) (agentrunner.Runner, error) {

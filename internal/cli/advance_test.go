@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/leonpham/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 func TestTicketAdvanceChangesPhase(t *testing.T) {

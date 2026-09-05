@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/leonpham/golem/internal/blog"
-	"github.com/leonpham/golem/internal/ticket"
-	"github.com/leonpham/golem/internal/workspace"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/ticket"
+	"github.com/leonp92/golem/internal/workspace"
 )
 
 func setUpRealWorktreeTicket(t *testing.T) (repo, ticketID string) {

@@ -1,0 +1,37 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Shems</h1>
+</div>
+
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <table class="table table-zebra">
+      <thead>
+        <tr>
+          <th class="w-12">#</th>
+          <th>Name</th>
+          <th>Status</th>
+          <th>Current Ticket</th>
+          <th>Last Heartbeat</th>
+          <th>Repos</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{range .Shems}}
+          {{template "shem_row" .}}
+        {{else}}
+          <tr>
+            <td colspan="6" class="text-center py-12 text-base-content/50">
+              <div class="flex flex-col items-center gap-2">
+                <span class="iconify text-4xl" data-icon="heroicons:server-stack"></span>
+                <p>No shems registered.</p>
+                <p class="text-sm">Start a shem worker and it will appear here.</p>
+              </div>
+            </td>
+          </tr>
+        {{end}}
+      </tbody>
+    </table>
+  </div>
+</div>
+{{end}}

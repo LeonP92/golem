@@ -1,0 +1,6 @@
+port: 8080
+db_path: /data/orchestrator.db
+
+# tls:
+#   cert: /etc/golem/tls/cert.pem
+#   key:  /etc/golem/tls/key.pem

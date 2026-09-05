@@ -1,0 +1,96 @@
+{{define "page_content"}}
+<div class="mb-6">
+  <a href="/dashboard" class="btn btn-ghost btn-sm gap-1.5 -ml-2 mb-2">
+    <span class="iconify" data-icon="heroicons:arrow-left"></span>
+    Dashboard
+  </a>
+  <h1 class="text-2xl font-bold">New Ticket</h1>
+</div>
+
+<div class="card bg-base-100 shadow-sm max-w-2xl">
+  <div class="card-body">
+    {{if .Error}}
+    <div class="alert alert-error mb-4">
+      <span class="iconify" data-icon="heroicons:x-circle"></span>
+      {{.Error}}
+    </div>
+    {{end}}
+
+    <form method="POST" action="/tickets/new" class="flex flex-col gap-4">
+
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Repository</span>
+          <span class="label-text-alt text-base-content/50">Select a repo registered with a shem</span>
+        </label>
+        {{if .AvailableRepos}}
+        <select name="repo_remote" class="select select-bordered" required>
+          <option value="" disabled {{if not .Form.RepoRemote}}selected{{end}}>Choose a repository…</option>
+          {{range .AvailableRepos}}
+          <option value="{{.}}" {{if eq . $.Form.RepoRemote}}selected{{end}}>{{.}}</option>
+          {{end}}
+          <option value="__custom__">↗ Enter a different URL…</option>
+        </select>
+        <input type="text" id="custom-repo" name="custom_repo_remote"
+               class="input input-bordered mt-2 hidden"
+               placeholder="https://github.com/org/repo.git">
+        <script>
+          document.querySelector('select[name=repo_remote]').addEventListener('change', function() {
+            var custom = document.getElementById('custom-repo');
+            if (this.value === '__custom__') {
+              custom.classList.remove('hidden');
+              custom.required = true;
+            } else {
+              custom.classList.add('hidden');
+              custom.required = false;
+            }
+          });
+          // On submit, override repo_remote with custom if selected.
+          document.querySelector('form').addEventListener('submit', function() {
+            var sel = document.querySelector('select[name=repo_remote]');
+            var custom = document.getElementById('custom-repo');
+            if (sel.value === '__custom__' && custom.value) {
+              sel.value = custom.value;
+            }
+          });
+        </script>
+        {{else}}
+        <input type="text" name="repo_remote" value="{{.Form.RepoRemote}}"
+               class="input input-bordered" required
+               placeholder="https://github.com/org/repo.git">
+        <p class="text-sm text-base-content/50 mt-1">
+          No shems registered yet. Enter a repo URL manually, or
+          <a href="/shems" class="link">start a shem</a> first.
+        </p>
+        {{end}}
+      </div>
+
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Base Branch</span>
+          <span class="label-text-alt text-base-content/50">Branch the ticket will start from</span>
+        </label>
+        <input type="text" name="base_branch" value="{{.Form.BaseBranch}}"
+               class="input input-bordered" required placeholder="main">
+      </div>
+
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Description</span>
+          <span class="label-text-alt text-base-content/50">What should the agent build?</span>
+        </label>
+        <textarea name="description" rows="5" class="textarea textarea-bordered" required
+                  placeholder="Describe the work to be done in plain language…">{{.Form.Description}}</textarea>
+      </div>
+
+      <div class="flex gap-2 mt-2">
+        <button type="submit" class="btn btn-primary gap-1.5">
+          <span class="iconify" data-icon="heroicons:ticket"></span>
+          Create Ticket
+        </button>
+        <a href="/dashboard" class="btn btn-ghost">Cancel</a>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

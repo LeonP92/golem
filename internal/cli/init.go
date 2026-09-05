@@ -9,8 +9,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/leonpham/golem/internal/agentrunner"
-	"github.com/leonpham/golem/internal/roles"
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/roles"
 )
 
 var supportedBackends = []string{"claude-code"}

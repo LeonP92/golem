@@ -1,19 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git *)",
-      "Bash(golem *)",
-      "Bash(./golem *)",
-      "Bash(./golem.exe *)",
-      "Bash(./golem_new.exe *)",
-      "Bash(go build *)",
-      "Bash(go test *)",
-      "Bash(go vet *)",
-      "Bash(go fmt *)",
-      "Bash(go *)",
-      "PowerShell(git *)",
-      "PowerShell(go *)",
-      "PowerShell(.\\golem*)",
+      "Bash(*)",
       "Write(**)",
       "Edit(**)"
     ]
