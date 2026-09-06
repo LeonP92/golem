@@ -3,6 +3,7 @@ package admin
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 
@@ -72,13 +73,12 @@ func ShemsAddOrUpdate(gdb *gorm.DB, name, key string) error {
 		return err
 	}
 	var shem db.Shem
-	result := gdb.Where("name = ?", name).FirstOrCreate(&shem, db.Shem{
-		Name:   name,
-		Repos:  "[]",
-		Status: "offline",
-	})
-	if result.Error != nil {
-		return result.Error
+	err = gdb.Where("name = ?", name).First(&shem).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return gdb.Create(&db.Shem{Name: name, APIKeyHash: string(hash), Repos: "[]", Status: "offline"}).Error
+	}
+	if err != nil {
+		return err
 	}
 	return gdb.Model(&shem).Update("api_key_hash", string(hash)).Error
 }
@@ -91,12 +91,12 @@ func UsersAddOrUpdate(gdb *gorm.DB, username, password string) error {
 		return err
 	}
 	var user db.User
-	result := gdb.Where("username = ?", username).FirstOrCreate(&user, db.User{
-		Username:     username,
-		PasswordHash: string(hash),
-	})
-	if result.Error != nil {
-		return result.Error
+	err = gdb.Where("username = ?", username).First(&user).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return gdb.Create(&db.User{Username: username, PasswordHash: string(hash)}).Error
+	}
+	if err != nil {
+		return err
 	}
 	return gdb.Model(&user).Update("password_hash", string(hash)).Error
 }

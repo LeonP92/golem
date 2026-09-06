@@ -39,7 +39,7 @@ func setupAPIKeyTest(t *testing.T) (*api.Handlers, *http.ServeMux, string) {
 func makeSessionCookie(t *testing.T, h *api.Handlers, userID uint) *http.Cookie {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	if err := auth.CreateSession(h.DB, rec, userID); err != nil {
+	if err := auth.CreateSession(h.DB, rec, userID, false); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	cookies := rec.Result().Cookies()

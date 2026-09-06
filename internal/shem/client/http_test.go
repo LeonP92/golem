@@ -22,7 +22,7 @@ func TestClient_RetriesOn5xx(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "key")
+	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	c.RetryMax = 5 * time.Second
 	err := c.PostPhase("ticket-1", "brainstorm")
@@ -42,7 +42,7 @@ func TestClient_AuthorizationHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "myapikey")
+	c := client.New(srv.URL, "myapikey", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	_ = c.PostPhase("ticket-1", "brainstorm")
 	if gotAuth != "Bearer myapikey" {
@@ -56,7 +56,7 @@ func TestClient_ExhaustsRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "key")
+	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 1 * time.Millisecond
 	c.RetryMax = 5 * time.Millisecond
 	c.RetryAttempts = 3
@@ -77,7 +77,7 @@ func TestClient_Register(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "key")
+	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	id, err := c.Register("node-a", []string{"https://github.com/org/repo"})
 	if err != nil {
@@ -94,7 +94,7 @@ func TestClient_ClaimTicket_409(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "key")
+	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	_, err := c.ClaimTicket("some-uuid")
 	if err != client.ErrNotAvailable {
@@ -117,7 +117,7 @@ func TestClient_GetAvailable(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "key")
+	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	id, err := c.GetAvailable("https://github.com/org/repo")
 	if err != nil {
@@ -138,7 +138,7 @@ func TestClient_GetAvailable_Empty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "key")
+	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	id, err := c.GetAvailable("https://github.com/org/repo")
 	if err != nil {

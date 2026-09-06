@@ -20,8 +20,9 @@ const sessionTTL = 7 * 24 * time.Hour
 const cookieName = "golem_session"
 
 // CreateSession generates a random token, stores its SHA-256 hash in db.Session,
-// sets an HTTP-only Secure cookie named "golem_session", 7-day TTL.
-func CreateSession(gdb *gorm.DB, w http.ResponseWriter, userID uint) error {
+// sets an HTTP-only cookie named "golem_session", 7-day TTL.
+// secure should be true when the server is running behind TLS.
+func CreateSession(gdb *gorm.DB, w http.ResponseWriter, userID uint, secure bool) error {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
 		return err
@@ -42,7 +43,7 @@ func CreateSession(gdb *gorm.DB, w http.ResponseWriter, userID uint) error {
 		Path:     "/",
 		Expires:  session.ExpiresAt,
 		HttpOnly: true,
-		Secure:   true,
+		Secure:   secure,
 		SameSite: http.SameSiteLaxMode,
 	})
 	return nil

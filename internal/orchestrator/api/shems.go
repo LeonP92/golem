@@ -55,16 +55,9 @@ func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	reposJSON, _ := json.Marshal(normalized)
 	now := time.Now()
-	updates := map[string]any{
+	h.DB.Model(shem).Updates(map[string]any{
 		"repos": string(reposJSON), "status": "online", "last_heartbeat": now,
-	}
-	// Allow the shem to self-report its name on registration so that
-	// auto-provisioned records get the correct name even if provisioned under
-	// a placeholder.
-	if body.Name != "" {
-		updates["name"] = body.Name
-	}
-	h.DB.Model(shem).Updates(updates)
+	})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"shem_id": shem.ID}) //nolint:errcheck
 }

@@ -55,7 +55,7 @@ func TestWorker_ClaimsOnPush(t *testing.T) {
 			{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"},
 		},
 	}
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 	// nil executor = don't actually run golem
 	w := worker.New(cfg, c, nil)
 	go w.Start()
@@ -102,7 +102,7 @@ func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 		Name:         "n",
 		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 	w := worker.New(cfg, c, nil)
 	go w.Start()
 	defer w.Shutdown()
@@ -142,7 +142,7 @@ func TestWorker_HandlesClaim409(t *testing.T) {
 		Name:         "n",
 		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 	w := worker.New(cfg, c, nil)
 	go w.Start()
 	defer w.Shutdown()

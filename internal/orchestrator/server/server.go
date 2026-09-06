@@ -13,14 +13,15 @@ import (
 
 // Server holds the shared dependencies used by all HTTP handlers.
 type Server struct {
-	DB     *gorm.DB
-	Hub    *ws.Hub
-	Broker *sse.Broker
+	DB           *gorm.DB
+	Hub          *ws.Hub
+	Broker       *sse.Broker
+	SecureCookie bool
 }
 
 // New creates a Server with the given dependencies.
-func New(gdb *gorm.DB, hub *ws.Hub, broker *sse.Broker) *Server {
-	return &Server{DB: gdb, Hub: hub, Broker: broker}
+func New(gdb *gorm.DB, hub *ws.Hub, broker *sse.Broker, secureCookie bool) *Server {
+	return &Server{DB: gdb, Hub: hub, Broker: broker, SecureCookie: secureCookie}
 }
 
 // Routes returns the full HTTP mux with all handler groups registered.
@@ -41,7 +42,7 @@ func (s *Server) Routes() http.Handler {
 	h.RegisterLogRoutes(mux)
 	h.RegisterHumanRoutes(mux)
 
-	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls)
+	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls, s.SecureCookie)
 	uiHandlers.RegisterRoutes(mux)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

@@ -135,9 +135,10 @@ func main() {
 	hub := ws.NewHub()
 	broker := sse.NewBroker()
 	ws.StartHeartbeatMonitor(context.Background(), gdb, hub, 60*time.Second, 90*time.Second)
-	srv := server.New(gdb, hub, broker)
+	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
+	srv := server.New(gdb, hub, broker, secureCookie)
 	addr := fmt.Sprintf(":%d", cfg.Port)
-	if cfg.TLS.Cert != "" && cfg.TLS.Key != "" {
+	if secureCookie {
 		log.Printf("listening on %s (TLS)", addr)
 		log.Fatal(http.ListenAndServeTLS(addr, cfg.TLS.Cert, cfg.TLS.Key, srv.Routes()))
 	} else {

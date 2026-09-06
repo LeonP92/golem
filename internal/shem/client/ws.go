@@ -18,8 +18,11 @@ type WSClient struct {
 }
 
 // Connect establishes a WebSocket connection to the orchestrator.
-func (wc *WSClient) Connect(url, apiKey string) error {
-	hdr := http.Header{"Authorization": {"Bearer " + apiKey}}
+func (wc *WSClient) Connect(url, apiKey, name string) error {
+	hdr := http.Header{
+		"Authorization": {"Bearer " + apiKey},
+		"X-Shem-Name":   {name},
+	}
 	conn, _, err := websocket.DefaultDialer.Dial(url, hdr)
 	if err != nil {
 		return err

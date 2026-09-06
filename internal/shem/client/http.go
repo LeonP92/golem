@@ -54,6 +54,7 @@ type PendingInput struct {
 type Client struct {
 	baseURL       string
 	apiKey        string
+	name          string
 	http          *http.Client
 	RetryInitial  time.Duration
 	RetryFactor   float64
@@ -61,11 +62,12 @@ type Client struct {
 	RetryAttempts int
 }
 
-// New creates a new Client with the given base URL and API key.
-func New(baseURL, apiKey string) *Client {
+// New creates a new Client with the given base URL, API key, and shem name.
+func New(baseURL, apiKey, name string) *Client {
 	return &Client{
 		baseURL:       baseURL,
 		apiKey:        apiKey,
+		name:          name,
 		http:          &http.Client{Timeout: 30 * time.Second},
 		RetryInitial:  time.Second,
 		RetryFactor:   2.0,
@@ -95,6 +97,7 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 		}
 
 		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+		req.Header.Set("X-Shem-Name", c.name)
 		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := c.http.Do(req)

@@ -83,9 +83,10 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 
 // Handlers holds the shared dependencies for the UI HTTP handlers.
 type Handlers struct {
-	DB    *gorm.DB
-	tmpl  *template.Template // kept for backward compat; nil = use tmpls map
-	tmpls map[string]*template.Template
+	DB           *gorm.DB
+	secureCookie bool
+	tmpl         *template.Template // kept for backward compat; nil = use tmpls map
+	tmpls        map[string]*template.Template
 }
 
 // NewHandlers creates a Handlers.  Pass tmpl=nil in tests that do not exercise
@@ -96,9 +97,9 @@ func NewHandlers(gdb *gorm.DB, tmpl *template.Template) *Handlers {
 }
 
 // NewHandlersWithMap creates a Handlers using a pre-built page-template map
-// (see LoadTemplates).
-func NewHandlersWithMap(gdb *gorm.DB, tmpls map[string]*template.Template) *Handlers {
-	return &Handlers{DB: gdb, tmpls: tmpls}
+// (see LoadTemplates). Set secureCookie=true when the server is behind TLS.
+func NewHandlersWithMap(gdb *gorm.DB, tmpls map[string]*template.Template, secureCookie bool) *Handlers {
+	return &Handlers{DB: gdb, tmpls: tmpls, secureCookie: secureCookie}
 }
 
 // RegisterRoutes registers all UI routes on mux.
@@ -164,7 +165,7 @@ func (h *Handlers) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/login?error=1", http.StatusFound)
 		return
 	}
-	if err := auth.CreateSession(h.DB, w, user.ID); err != nil {
+	if err := auth.CreateSession(h.DB, w, user.ID, h.secureCookie); err != nil {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return
 	}

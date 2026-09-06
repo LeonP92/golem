@@ -15,7 +15,7 @@ func TestSessionRoundTrip(t *testing.T) {
 	gdb.Create(&user)
 
 	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID); err != nil {
+	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	cookie := w.Result().Cookies()[0]

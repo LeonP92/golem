@@ -24,7 +24,7 @@ func TestGolemExecutor_RepoNotFound(t *testing.T) {
 			{Path: t.TempDir(), Remote: "https://github.com/org/repo", NormalizedRemote: "github.com/org/repo"},
 		},
 	}
-	c := client.New("http://localhost", "k")
+	c := client.New("http://localhost", "k", "test-shem")
 	exec := &worker.GolemExecutor{}
 
 	claim := &client.ClaimResponse{
@@ -75,7 +75,7 @@ func TestGolemExecutor_LogTailForwardsEntries(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 
 	// We test the tail indirectly: use the exported ForwardLines helper via
 	// a short-lived RunTicket call that hits a fake "golem" binary that exits 0.

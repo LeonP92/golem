@@ -24,7 +24,7 @@ func TestPostCheckpointWithRetry_RetriesAndSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
 	c.RetryMax = 50 * time.Millisecond
 
@@ -44,7 +44,7 @@ func TestPostCheckpointWithRetry_ExhaustsRetries(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 	c.RetryInitial = 1 * time.Millisecond
 	c.RetryMax = 5 * time.Millisecond
 
@@ -62,7 +62,7 @@ func TestPostCheckpointWithRetry_RestoresRetryAttempts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := client.New(srv.URL, "k")
+	c := client.New(srv.URL, "k", "test-shem")
 	origAttempts := c.RetryAttempts
 
 	_ = worker.PostCheckpointWithRetry(c, "ticket-uuid-1", "plan", "sha1", 3)

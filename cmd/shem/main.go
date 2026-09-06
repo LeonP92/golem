@@ -23,7 +23,7 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
-	httpClient := client.New(cfg.Orchestrator, cfg.APIKey)
+	httpClient := client.New(cfg.Orchestrator, cfg.APIKey, cfg.Name)
 	exec := &worker.GolemExecutor{}
 	w := worker.New(cfg, httpClient, exec)
 
@@ -41,7 +41,7 @@ func main() {
 	go func() {
 		delay := time.Second
 		for {
-			if err := wsc.Connect(wsURL, cfg.APIKey); err != nil {
+			if err := wsc.Connect(wsURL, cfg.APIKey, cfg.Name); err != nil {
 				log.Printf("WS connect failed: %v, retrying in %s", err, delay)
 				time.Sleep(delay)
 				delay = minDuration(delay*2, 60*time.Second)

@@ -19,6 +19,7 @@ func TestAPIKeyAuth(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/api/shems/register", nil)
 	req.Header.Set("Authorization", "Bearer secret")
+	req.Header.Set("X-Shem-Name", "node-a")
 	w := httptest.NewRecorder()
 
 	called := false
@@ -42,6 +43,24 @@ func TestAPIKeyAuth_Unauthorized(t *testing.T) {
 
 	req := httptest.NewRequest("POST", "/api/shems/register", nil)
 	req.Header.Set("Authorization", "Bearer wrongkey")
+	req.Header.Set("X-Shem-Name", "node-b")
+	w := httptest.NewRecorder()
+
+	auth.RequireAPIKey(gdb)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("should not reach handler")
+	})).ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("expected 401, got %d", w.Code)
+	}
+}
+
+func TestAPIKeyAuth_MissingName(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+
+	req := httptest.NewRequest("POST", "/api/shems/register", nil)
+	req.Header.Set("Authorization", "Bearer secret")
+	// No X-Shem-Name header
 	w := httptest.NewRecorder()
 
 	auth.RequireAPIKey(gdb)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -36,7 +36,7 @@ func TestWSClient_Connect(t *testing.T) {
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 
 	wc := &client.WSClient{}
-	err := wc.Connect(wsURL, "test-key")
+	err := wc.Connect(wsURL, "test-key", "test-shem")
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -72,7 +72,7 @@ func TestWSClient_SendPing(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 	wc := &client.WSClient{}
-	err := wc.Connect(wsURL, "test-key")
+	err := wc.Connect(wsURL, "test-key", "test-shem")
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}
@@ -118,7 +118,7 @@ func TestWSClient_Listen(t *testing.T) {
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
 	wc := &client.WSClient{}
-	err := wc.Connect(wsURL, "test-key")
+	err := wc.Connect(wsURL, "test-key", "test-shem")
 	if err != nil {
 		t.Fatalf("Connect failed: %v", err)
 	}

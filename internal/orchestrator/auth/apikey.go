@@ -13,32 +13,33 @@ import (
 
 const shemKey contextKey = "shem"
 
-// RequireAPIKey middleware: reads "Authorization: Bearer <key>" header,
-// iterates all db.Shem rows (bcrypt.CompareHashAndPassword against APIKeyHash),
-// stores *db.Shem in request context via shemKey.
-// Returns 401 on failure.
+// RequireAPIKey middleware: reads "X-Shem-Name" and "Authorization: Bearer <key>"
+// headers, looks up the shem by name, verifies the key, and stores *db.Shem in
+// the request context. Returns 401 on any failure.
 func RequireAPIKey(gdb *gorm.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			hdr := r.Header.Get("Authorization")
-			key, ok := strings.CutPrefix(hdr, "Bearer ")
+			name := r.Header.Get("X-Shem-Name")
+			if name == "" {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+			key, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
 			if !ok || key == "" {
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			var shems []db.Shem
-			if err := gdb.Find(&shems).Error; err != nil {
-				http.Error(w, "internal error", http.StatusInternalServerError)
+			var shem db.Shem
+			if err := gdb.Where("name = ?", name).First(&shem).Error; err != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			for i := range shems {
-				if bcrypt.CompareHashAndPassword([]byte(shems[i].APIKeyHash), []byte(key)) == nil {
-					ctx := context.WithValue(r.Context(), shemKey, &shems[i])
-					next.ServeHTTP(w, r.WithContext(ctx))
-					return
-				}
+			if bcrypt.CompareHashAndPassword([]byte(shem.APIKeyHash), []byte(key)) != nil {
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
 			}
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			ctx := context.WithValue(r.Context(), shemKey, &shem)
+			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}
 }
