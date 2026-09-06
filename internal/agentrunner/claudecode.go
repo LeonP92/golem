@@ -46,33 +46,24 @@ func GenerateClaudeCodeArtifacts(repoRoot string, roleContent map[string]string)
 		_ = json.Unmarshal(existing, &raw)
 	}
 
-	// Extract the current allow list, if any.
-	var allow []string
-	if permRaw, ok := raw["permissions"]; ok {
-		var perms struct {
-			Allow []string `json:"allow"`
-		}
-		if err := json.Unmarshal(permRaw, &perms); err == nil {
-			allow = perms.Allow
-		}
-	}
-
-	// Union with our entries (dedup).
-	seen := make(map[string]bool, len(allow))
-	for _, e := range allow {
-		seen[e] = true
-	}
-	for _, e := range claudeCodeAllowList {
-		if !seen[e] {
-			allow = append(allow, e)
-		}
-	}
-
-	// Write back: merge our permissions into the raw map to preserve other fields.
-	permsDoc := struct {
+	// Extract existing allow/deny in one pass.
+	var existingPerms struct {
 		Allow []string `json:"allow"`
-	}{Allow: allow}
-	permBytes, err := json.Marshal(permsDoc)
+		Deny  []string `json:"deny"`
+	}
+	if permRaw, ok := raw["permissions"]; ok {
+		_ = json.Unmarshal(permRaw, &existingPerms)
+	}
+
+	// Union allow and deny lists (dedup each).
+	allow := union(existingPerms.Allow, claudeCodeAllowList)
+	deny := union(existingPerms.Deny, claudeCodeDenyList)
+
+	// Write back, preserving unrelated top-level fields.
+	permBytes, err := json.Marshal(struct {
+		Allow []string `json:"allow"`
+		Deny  []string `json:"deny"`
+	}{Allow: allow, Deny: deny})
 	if err != nil {
 		return err
 	}
@@ -174,13 +165,39 @@ var claudeCodeAllowList = []string{
 	"Write(**)",
 }
 
-func settingsJSON(allowList []string) string {
+// claudeCodeDenyList blocks destructive or network-exfiltrating commands that
+// agents have no legitimate need for inside a repo worktree.
+var claudeCodeDenyList = []string{
+	"Bash(git push origin main)",
+	"Bash(git push --force *)",
+	"Bash(curl *)",
+	"Bash(wget *)",
+	"Bash(sudo *)",
+}
+
+func union(base, additions []string) []string {
+	seen := make(map[string]bool, len(base))
+	for _, e := range base {
+		seen[e] = true
+	}
+	result := append([]string(nil), base...)
+	for _, e := range additions {
+		if !seen[e] {
+			result = append(result, e)
+		}
+	}
+	return result
+}
+
+func settingsJSON(allowList, denyList []string) string {
 	doc := struct {
 		Permissions struct {
 			Allow []string `json:"allow"`
+			Deny  []string `json:"deny"`
 		} `json:"permissions"`
 	}{}
 	doc.Permissions.Allow = allowList
+	doc.Permissions.Deny = denyList
 	b, _ := json.MarshalIndent(doc, "", "  ")
 	return string(b)
 }
@@ -201,7 +218,7 @@ func (c ClaudeCode) WorktreeSetup(worktreePath string) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	settings := settingsJSON(claudeCodeAllowList)
+	settings := settingsJSON(claudeCodeAllowList, claudeCodeDenyList)
 	return os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o644)
 }
 

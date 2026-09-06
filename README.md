@@ -5,7 +5,6 @@
 <div align="center">
 
 [![Go](https://img.shields.io/badge/Go-1.27+-00ADD8?style=flat&logo=go)](https://go.dev)
-[![License](https://img.shields.io/badge/license-MIT-purple?style=flat)](LICENSE)
 [![Backend](https://img.shields.io/badge/backend-agnostic-06b6d4?style=flat)](#backends)
 
 </div>
@@ -81,14 +80,14 @@ Four roles ship by default. Each is a markdown prompt in `.golem/roles/` — own
 
 #### Observer
 
-The observer runs watcher roles after each commit. You call it manually — this keeps you in control of when checks fire:
+The observer dispatches watcher roles after commits. You call it manually, keeping control of when checks fire:
 
 ```sh
 golem observer dispatch --ticket <id> --role convention-enforcer --commit $(git rev-parse HEAD)
 golem observer dispatch --ticket <id> --role spec-adherence     --commit $(git rev-parse HEAD)
 ```
 
-Each dispatch is fire-and-forget: the role runs as a one-shot agent, reads the diff and ticket log, and writes its findings back to the blackboard. Multiple dispatches run in parallel.
+Each dispatch is fire-and-forget: the role reads the diff and ticket log, writes findings to the blackboard. Multiple dispatches run in parallel.
 
 #### Gate
 
@@ -109,18 +108,7 @@ golem graph update             # incremental — only changed modules since last
 golem graph status             # show what's stale
 ```
 
-The graph-builder agent analyses each module and emits structured output:
-
-```
-GRAPH_MODULE:src/auth
-GRAPH_SUMMARY:Handles JWT validation, session creation, and RBAC.
-GRAPH_EXPORT_FN:validate_token(token: str) -> Claims
-GRAPH_EXPORT_TYPE:Claims — JWT payload: user_id, role, expires_at
-GRAPH_IMPORTS:src/models,src/config
-GRAPH_SUBSYSTEM:auth
-```
-
-Stored in `.golem/wiki/graph/` and included in wiki search. Language-agnostic — works on any codebase your backend can read.
+The graph-builder agent analyses each module and writes structured summaries — exports, types, imports, subsystem — into `.golem/wiki/graph/`, included in wiki search. Language-agnostic.
 
 #### Wiki
 
@@ -215,18 +203,11 @@ Browser ──► Orchestrator (dashboard, approval gates)
 ### Quick Start (Docker Compose)
 
 ```sh
-cd deploy/
-
-# Copy and fill in credentials
-cp .env.example .env
-# Set GOLEM_ADMIN_PASSWORD and GOLEM_SHEM_API_KEY in .env
-
-# Start everything
-docker compose up -d
-
-# Open the dashboard
-open http://localhost:8080
+# Clone the repo, then:
+./run.sh
 ```
+
+On first run the script creates `.env` from the example and exits — fill in `ANTHROPIC_API_KEY` and `GOLEM_ADMIN_PASSWORD`, then run it again. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
 
 Create a ticket from the UI. The shem will pick it up within seconds, run brainstorm, and pause for your approval before proceeding to plan and implementation.
 
@@ -270,26 +251,6 @@ Register each shem with a unique name:
 
 ```sh
 golem-orchestrator shems add --name shem-2
-```
-
-### Production Permissions
-
-The `.claude/settings.json` in each checked-out repo should use a tight allow-list:
-
-```json
-{
-  "permissions": {
-    "allow": [
-      "Bash(make *)", "Bash(git add *)", "Bash(git commit *)",
-      "Bash(git push origin ticket/*)", "Bash(git fetch *)", "Bash(git checkout *)",
-      "Edit(**)"
-    ],
-    "deny": [
-      "Bash(git push origin main)", "Bash(git push --force *)",
-      "Bash(curl *)", "Bash(wget *)", "Bash(sudo *)"
-    ]
-  }
-}
 ```
 
 ### Running Without Docker
@@ -343,12 +304,5 @@ deploy/
   shem.yaml         ← shem config for Docker Compose
 ```
 
-Golem is developed on itself — new features ship as tickets on the same workflow described above.
+Golem built Golem. The reviewer approved.
 
----
-
-<div align="center">
-
-`golem build .. golem`
-
-</div>
