@@ -4,9 +4,9 @@ This is the main entry point for the golem CLI binary. It owns the top-level com
 
 ## Functions
 
-- func dispatch(args []string, stdout, stderr io.Writer) int — routes top-level CLI arguments to registered command handlers
-- func main() — binary entry point; calls dispatch with os.Args and exits with the returned code
+- TestDispatchUnknownCommand
+- TestDispatchNoArgs
 
 ## Imports
 
-internal/cli
+fmt, io, os, strings, github.com/leonp92/golem/internal/cli, bytes, testing

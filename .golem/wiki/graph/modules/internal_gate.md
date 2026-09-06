@@ -4,12 +4,14 @@ The gate module executes a configured sequence of shell commands against a worki
 
 ## Functions
 
-- func Run(dir string, cfg config.GateConfig) (Result, error) — runs configured gate commands sequentially, stopping at first failure
+- Run
+- TestRunAllCommandsPass
+- TestRunStopsAtFirstFailure
 
 ## Types
 
-- Result — holds the pass/fail outcome and combined stdout+stderr output of gate command execution
+- Result
 
 ## Imports
 
-github.com/leonpham/golem/internal/config
+os/exec, strings, github.com/leonp92/golem/internal/config, testing

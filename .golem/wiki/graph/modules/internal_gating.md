@@ -4,12 +4,19 @@ The gating module implements tool-call policy enforcement for Golem agent roles.
 
 ## Functions
 
-- func Evaluate(policy config.PolicyConfig, worktreePath, tool string, args []string) Decision — decides whether a role may execute a tool call given the active policy
+- Evaluate
+- TestEvaluateDeniesGitPush
+- TestEvaluateDeniesGhPrCreate
+- TestEvaluateDeniesObfuscationVectors
+- TestEvaluateAllowsWritesInsideWorktree
+- TestEvaluateDeniesWritesOutsideWorktree
+- TestEvaluateAllowsExplicitlyAllowedNetworkHost
+- TestEvaluateDeniesEvalAndSource
 
 ## Types
 
-- Decision — holds the allow/deny outcome and a human-readable reason string
+- Decision
 
 ## Imports
 
-internal/config
+path/filepath, strings, github.com/leonp92/golem/internal/config, testing

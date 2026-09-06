@@ -1,29 +1,55 @@
-- `internal/agentrunner` — Context — all inputs needed for a one-shot role invocation: log slice, diff, and role prompt
-- `internal/agentrunner` — Result — output of a role invocation: text output and model identifier
-- `internal/agentrunner` — Runner — interface satisfied by ClaudeCode and Mock; defines RunAgent and WorktreeSetup
-- `internal/agentrunner` — ClaudeCode — Claude CLI-backed Runner with repo root and optional model override
-- `internal/agentrunner` — Mock — scripted test double for Runner with a per-role queue of Results
-- `internal/askwait` — MaxRounds — constant capping the number of question/answer back-and-forth rounds before forcing human escalation
-- `internal/blog` — Entry — one structured record in the ticket's append-only blackboard log
-- `internal/blog` — EntryType — string enum discriminating the kind of log entry
-- `internal/blog` — Writer — mutex-guarded, append-only writer for a ticket log file
-- `internal/config` — Config — top-level configuration struct holding backend, gate, tool policy, timeouts, role models, and graph settings
-- `internal/config` — GateConfig — holds the list of gate commands to run before accepting agent work
-- `internal/config` — PolicyConfig — defines tool policy rules: allowed network hosts and worktree-only restriction
-- `internal/config` — GraphConfig — configuration for the graph subsystem: ignore patterns, max file size, and extra extensions
-- `internal/gate` — Result — holds the pass/fail outcome and combined stdout+stderr output of gate command execution
-- `internal/gating` — Decision — holds the allow/deny outcome and a human-readable reason string
-- `internal/graph` — Module — a directory path and its list of source file paths
-- `internal/graph` — ModuleGraph — parsed LLM description of a module including exports, imports, calls, and subsystem
-- `internal/graph` — ModuleMeta — per-module commit and file hash snapshot for change detection
-- `internal/graph` — Meta — top-level metadata index mapping module paths to ModuleMeta entries
-- `internal/graph` — Edges — serialized import and call relationships across all modules
-- `internal/observer` — Observer — persistent per-ticket coordinator that claims signals and dispatches one-shot agent invocations with duplicate-prevention guarantees
-- `internal/roles` — Defaults — embedded filesystem (embed.FS) containing defaults/*.md role files
-- `internal/roles` — RoleNames — ordered list of canonical role name strings
-- `internal/soul` — Candidate — pairs a blog entry (the human resolution) with the extracted suggestion string
-- `internal/ticket` — Phase — string enum representing a ticket's current lifecycle phase
-- `internal/ticket` — State — holds all persistent fields for a ticket (ID, description, phase, branch, worktree path, trivial flag, expected lines)
-- `internal/wiki` — Doc — a wiki document with file path, text content, and SHA-256 content hash
-- `internal/wiki` — Index — TF-IDF search index holding document vectors, vocabulary, and co-mention link graph
-- `internal/wiki` — Match — a search result with document path, similarity score, and optional Via provenance path
+- `internal/config` — GateConfig
+- `internal/config` — PolicyConfig
+- `internal/config` — GraphConfig
+- `internal/config` — Config
+- `internal/graph` — LLMCache
+- `internal/graph` — Module
+- `internal/graph` — StructuralData
+- `internal/graph` — ModuleMeta
+- `internal/graph` — Meta
+- `internal/graph` — Edges
+- `internal/graph` — ModuleGraph
+- `internal/agentrunner` — ClaudeCode
+- `internal/agentrunner` — Mock
+- `internal/agentrunner` — Context
+- `internal/agentrunner` — Result
+- `internal/agentrunner` — Runner
+- `internal/gating` — Decision
+- `internal/orchestrator/api` — Handlers
+- `internal/orchestrator/api` — ClaimResponse
+- `internal/orchestrator/ws` — WSMessage
+- `internal/orchestrator/ws` — Hub
+- `internal/shem/client` — LogPayload
+- `internal/shem/client` — ClaimResponse
+- `internal/shem/client` — PendingInput
+- `internal/shem/client` — Client
+- `internal/shem/client` — WSClient
+- `internal/orchestrator/config` — TLSConfig
+- `internal/orchestrator/config` — Config
+- `internal/orchestrator/server` — Server
+- `internal/soul` — Candidate
+- `internal/wiki` — Match
+- `internal/wiki` — Index
+- `internal/wiki` — Doc
+- `internal/observer` — Observer
+- `internal/orchestrator/sse` — LogEntryEvent
+- `internal/orchestrator/sse` — Broker
+- `internal/orchestrator/ui` — Handlers
+- `internal/orchestrator/ui` — TicketRow
+- `internal/shem/worker` — GolemExecutor
+- `internal/shem/worker` — Executor
+- `internal/shem/worker` — Worker
+- `internal/ticket` — Phase
+- `internal/ticket` — State
+- `internal/shem/config` — RepoConfig
+- `internal/shem/config` — Config
+- `internal/blog` — EntryType
+- `internal/blog` — Entry
+- `internal/blog` — Writer
+- `internal/gate` — Result
+- `internal/orchestrator/db` — User
+- `internal/orchestrator/db` — Session
+- `internal/orchestrator/db` — Shem
+- `internal/orchestrator/db` — Ticket
+- `internal/orchestrator/db` — LogEntry
+- `internal/orchestrator/db` — HumanInput

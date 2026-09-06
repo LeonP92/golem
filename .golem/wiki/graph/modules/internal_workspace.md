@@ -4,5 +4,10 @@ The workspace module manages Git worktrees for Golem tickets. It provides two op
 
 ## Functions
 
-- func Create(repoRoot, ticketID, branchBaseSHA string) (worktreePath, branch string, err error) — creates a git worktree and branch for a ticket under .golem/tickets/<ticketID>/worktree
-- func Remove(repoRoot, worktreePath, branch string) error — removes the git worktree directory and deletes the branch, tolerating already-absent state
+- Create
+- Remove
+- TestCreateAndRemoveWorktree
+
+## Imports
+
+fmt, os, os/exec, path/filepath, testing

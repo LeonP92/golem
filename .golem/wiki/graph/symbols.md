@@ -1,81 +1,338 @@
-- `cmd/golem` — func dispatch(args []string, stdout, stderr io.Writer) int — routes top-level CLI arguments to registered command handlers
-- `cmd/golem` — func main() — binary entry point; calls dispatch with os.Args and exits with the returned code
-- `internal/agentrunner` — func GenerateClaudeCodeArtifacts(repoRoot string, roleContent map[string]string) error — writes Claude Code subagent .md files and merges permissions into .claude/settings.json
-- `internal/agentrunner` — func GenerateClaudeCodeCommands(repoRoot string) error — writes golem skill files (new-ticket.md, tickets.md) into .claude/commands/golem/
-- `internal/agentrunner` — func BuildPrompt(ctx Context) string — assembles a role prompt with log and diff wrapped in injection-resistant delimiters
-- `internal/agentrunner` — func NewMock() *Mock — constructs a scripted Mock runner for use in tests
-- `internal/agentrunner` — func (c ClaudeCode) RunAgent(role string, ctx Context) (Result, error) — dispatches a one-shot `claude --print` invocation with the built prompt
-- `internal/agentrunner` — func (c ClaudeCode) WorktreeSetup(worktreePath string) error — writes a minimal .claude/settings.json with the allow list into a worktree
-- `internal/agentrunner` — func (m *Mock) RunAgent(role string, ctx Context) (Result, error) — returns the next scripted Result queued for the given role
-- `internal/agentrunner` — func (m *Mock) ScriptResponse(role string, result Result) — enqueues a scripted Result for a given role
-- `internal/agentrunner` — func (m *Mock) WorktreeSetup(_ string) error — no-op worktree setup for the mock runner
-- `internal/askwait` — func Ask(w *blog.Writer, from, to, question string) (string, error) — posts a QUESTION entry to the blog and returns its generated ID
-- `internal/askwait` — func PollForAnswer(logPath, questionID string) (*blog.Entry, error) — reads the blog and returns the ANSWER entry matching the given question ID, or nil if not yet present
-- `internal/askwait` — func WaitForAnswer(logPath, questionID string, timeout, pollInterval time.Duration) (answer string, found bool, err error) — polls for an answer in a loop until found or timeout elapses
-- `internal/askwait` — func RoundsSoFar(entries []blog.Entry, thread string) int — counts completed answer rounds for a thread to enforce MaxRounds
-- `internal/bloat` — func Check(actualLines, expectedLines int) (exceeded bool, ratio float64) — compares actual diff line count against plan expectation, returning whether scope bloat threshold is exceeded and the computed ratio
-- `internal/blog` — func NewEntry(role string, typ EntryType, message string) Entry — constructs an Entry with the current timestamp
-- `internal/blog` — func NewWriter(path string) (*Writer, error) — opens or creates a JSONL log file for appending
-- `internal/blog` — func (w *Writer) Append(e Entry) error — mutex-guarded append of one JSON line to the log
-- `internal/blog` — func (w *Writer) Close() error — closes the underlying file
-- `internal/blog` — func ReadAll(path string) ([]Entry, error) — reads and parses all entries from a log file; missing file returns empty slice
-- `internal/cli` — func TicketAdvance(args []string, stdout, stderr io.Writer) int — advances a ticket to a specified phase by name
-- `internal/cli` — func TicketReview(args []string, stdout, stderr io.Writer) int — runs the reviewer agent on a ticket and sets phase to ready-for-review or needs-attention based on gate outcome
-- `internal/cli` — func NewRunner(cfg *config.Config, worktreeRoot string) (agentrunner.Runner, error) — constructs the appropriate agent runner for the configured backend
-- `internal/cli` — func TicketClose(args []string, stdout, stderr io.Writer) int — closes a ticket by promoting soul entries, updating the graph, tearing down the worktree, and marking phase closed
-- `internal/cli` — func GraphBuild(args []string, stdout, stderr io.Writer) int — discovers all source modules and runs the graph-builder agent in parallel to produce the codebase graph
-- `internal/cli` — func GraphCheckBoundary(args []string, stdout, stderr io.Writer) int — reports modules outside a subsystem that import modules inside it
-- `internal/cli` — func GraphDeps(args []string, stdout, stderr io.Writer) int — prints the recorded imports of a named module from the graph index
-- `internal/cli` — func GraphStatus(args []string, stdout, stderr io.Writer) int — reports graph index staleness by comparing stored file hashes against current content
-- `internal/cli` — func GraphUpdate(args []string, stdout, stderr io.Writer) int — rebuilds only the stale modules in the graph index since the last recorded commit
-- `internal/cli` — func GraphWhoImports(args []string, stdout, stderr io.Writer) int — lists all modules that import a given module
-- `internal/cli` — func Init(args []string, stdout, stderr io.Writer) int — initialises a .golem directory with config, role files, and optional graph build
-- `internal/cli` — func LogEmit(args []string, stdout, stderr io.Writer) int — appends a STATUS, FINDING, BLOCKER, or RESOLVED entry to a ticket's log
-- `internal/cli` — func Ask(args []string, stdout, stderr io.Writer) int — posts a QUESTION to a ticket log and blocks until an ANSWER arrives or times out
-- `internal/cli` — func Answer(args []string, stdout, stderr io.Writer) int — appends an ANSWER entry to a ticket log in reply to a prior question
-- `internal/cli` — func ObserverDispatch(args []string, stdout, stderr io.Writer) int — dispatches a watcher role agent for a specific commit diff and records findings
-- `internal/cli` — func TicketResume(args []string, stdout, stderr io.Writer) int — prints ticket phase, branch, and last log entry for a given ticket
-- `internal/cli` — func SetStep(args []string, stdout, stderr io.Writer) int — records the expected diff line count for the next implementation step on a ticket
-- `internal/cli` — func CheckBloat(args []string, stdout, stderr io.Writer) int — checks a commit's changed line count against the step expectation and logs a SCOPE_BLOAT finding if exceeded
-- `internal/cli` — func TicketNew(args []string, stdout, stderr io.Writer) int — creates a new ticket with a worktree, branch, and initial log entry
-- `internal/cli` — func Tickets(args []string, stdout, stderr io.Writer) int — lists all tickets with their id, phase, and branch
-- `internal/cli` — func WikiSearch(args []string, stdout, stderr io.Writer) int — searches the wiki index for documents matching a query
-- `internal/cli` — func WikiRebuild(args []string, stdout, stderr io.Writer) int — rebuilds the TF-IDF wiki index from all wiki documents on disk
-- `internal/config` — func Load(path string) (*Config, error) — reads and validates a config.yaml, requiring a non-empty backend field
-- `internal/config` — func (c *Config) AskAndWaitTimeoutFor(backend string) (time.Duration, error) — returns the configured ask-and-wait timeout for the given backend, or an error if not set
-- `internal/gate` — func Run(dir string, cfg config.GateConfig) (Result, error) — runs configured gate commands sequentially, stopping at first failure
-- `internal/gating` — func Evaluate(policy config.PolicyConfig, worktreePath, tool string, args []string) Decision — decides whether a role may execute a tool call given the active policy
-- `internal/graph` — Discover(repoRoot string, maxFileSizeKB int, extraExts, ignorePatterns []string) ([]Module, error) — discovers source files grouped by directory using git ls-files
-- `internal/graph` — Parse(output string) ModuleGraph — parses tagged LLM output into a ModuleGraph struct
-- `internal/graph` — LoadMeta(indexDir string) (*Meta, error) — loads graph metadata from graph-meta.json
-- `internal/graph` — SaveMeta(indexDir string, m *Meta) error — persists graph metadata to graph-meta.json
-- `internal/graph` — SaveEdges(indexDir string, graphs []ModuleGraph) error — writes import and call edges to graph-edges.json
-- `internal/graph` — SaveModuleGraph(indexDir string, g ModuleGraph) error — persists a single module graph to graph-modules/
-- `internal/graph` — LoadAllModuleGraphs(indexDir string) ([]ModuleGraph, error) — loads all persisted module graphs from graph-modules/
-- `internal/graph` — FileHash(path string) (string, error) — computes SHA-256 hash of a file
-- `internal/graph` — ModuleHashes(repoRoot string, files []string) (map[string]string, error) — computes hashes for a set of files
-- `internal/graph` — WriteModule(wikiDir string, g ModuleGraph) error — writes a module's wiki markdown page
-- `internal/graph` — AppendSymbols(wikiDir string, g ModuleGraph) error — appends exported functions to the aggregate symbols.md
-- `internal/graph` — AppendTypes(wikiDir string, g ModuleGraph) error — appends exported types to the aggregate types.md
-- `internal/graph` — WriteIndex(wikiDir string, graphs []ModuleGraph) error — writes the top-level codebase index grouped by subsystem
-- `internal/graph` — ResetAggregates(wikiDir string) error — clears symbols.md and types.md before a full rebuild
-- `internal/observer` — New(logPath string, runner agentrunner.Runner) *Observer — constructs an Observer with an empty in-memory claim map
-- `internal/observer` — (o *Observer) IsInFlight(role, commitSHA string) bool — reports whether a dispatch for this role+commit is already claimed in the current process lifetime
-- `internal/observer` — (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) error — claims a signal, checks for prior-run log entries, runs the agent, classifies output, and appends FINDING/BLOCKER to the blog
-- `internal/roles` — func Unpack(golemDir string) ([]string, error) — writes embedded default role .md files into <golemDir>/roles/, skipping any that already exist; returns paths of newly written files
-- `internal/soul` — func ExtractCandidates(entries []blog.Entry) []Candidate — scans blog entries and returns candidates where a human resolved a blocker differently than the role suggested
-- `internal/soul` — func Promote(soulDir, filename, content string) error — writes a principle file into the soul directory, creating the directory if needed
-- `internal/ticket` — func New(id, description string, trivial bool) *State — constructs a new State with defaults, skipping brainstorm for trivial tickets
-- `internal/ticket` — func (s *State) Save(ticketDir string) error — serialises State to JSON in the given directory
-- `internal/ticket` — func Load(ticketDir string) (*State, error) — deserialises State from JSON in the given directory
-- `internal/wiki` — func Build(docs []Doc) *Index — builds a TF-IDF index with co-mention link graph from a slice of documents
-- `internal/wiki` — func (idx *Index) Search(query string, topK int) []Match — returns topK documents ranked by cosine similarity to query
-- `internal/wiki` — func (idx *Index) SearchExpanded(query string, topK int) []Match — returns TF-IDF matches plus one-hop linked documents with half-score provenance
-- `internal/wiki` — func SaveToFile(idx *Index, path string) error — serializes the index to disk via gob encoding
-- `internal/wiki` — func LoadFromFile(path string) (*Index, error) — deserializes a previously saved index from disk
-- `internal/wiki` — func EnsureIndex(wikiDir, indexPath string) (*Index, error) — loads a fresh on-disk index or rebuilds it if missing or stale
-- `internal/wiki` — func LoadAll(wikiDir string) ([]Doc, error) — recursively reads all .md files under wikiDir into Doc slices
-- `internal/wiki` — func Hash(content string) string — returns a SHA-256 hex digest of a string
-- `internal/wiki` — func IsStale(doc Doc, storedHash string) bool — reports whether a doc's content has changed from a stored hash
-- `internal/workspace` — func Create(repoRoot, ticketID, branchBaseSHA string) (worktreePath, branch string, err error) — creates a git worktree and branch for a ticket under .golem/tickets/<ticketID>/worktree
-- `internal/workspace` — func Remove(repoRoot, worktreePath, branch string) error — removes the git worktree directory and deletes the branch, tolerating already-absent state
+- `internal/config` — Load
+- `internal/config` — AskAndWaitTimeoutFor
+- `internal/config` — TestLoadValidConfig
+- `internal/config` — TestLoadMissingBackendFails
+- `internal/config` — TestAskAndWaitTimeoutForUnknownBackendFails
+- `internal/graph` — TestAtomicWriteFile_writesContent
+- `internal/graph` — TestAtomicWriteFile_overwritesExisting
+- `internal/graph` — TestAtomicWriteFile_leavesNoTempOnSuccess
+- `internal/graph` — TestAtomicWriteFile_setsPermissions
+- `internal/graph` — LoadLLMCache
+- `internal/graph` — Get
+- `internal/graph` — Set
+- `internal/graph` — Save
+- `internal/graph` — ModuleCacheKey
+- `internal/graph` — TestModuleCacheKey_deterministic
+- `internal/graph` — TestModuleCacheKey_changesWithContent
+- `internal/graph` — TestLLMCache_roundTrip
+- `internal/graph` — TestLLMCache_missingFileReturnsEmpty
+- `internal/graph` — TestLLMCache_concurrentGetSet
+- `internal/graph` — Discover
+- `internal/graph` — TestExtSet_includesDefaults
+- `internal/graph` — TestExtSet_includesExtras
+- `internal/graph` — TestSkipped
+- `internal/graph` — LangForExt
+- `internal/graph` — Extract
+- `internal/graph` — TestLangForExt
+- `internal/graph` — TestExtract_go
+- `internal/graph` — TestExtract_python
+- `internal/graph` — TestExtract_javascript
+- `internal/graph` — TestExtract_unknownLang
+- `internal/graph` — LoadMeta
+- `internal/graph` — SaveMeta
+- `internal/graph` — SaveEdges
+- `internal/graph` — SaveModuleGraph
+- `internal/graph` — LoadAllModuleGraphs
+- `internal/graph` — FileHash
+- `internal/graph` — ModuleHashes
+- `internal/graph` — DeleteModuleGraph
+- `internal/graph` — Parse
+- `internal/graph` — TestParse_happyPath
+- `internal/graph` — TestParse_missingTags
+- `internal/graph` — TestParse_ignoresStructuralTags
+- `internal/graph` — TestParse_moduleStillParsed
+- `internal/graph` — WriteModule
+- `internal/graph` — AppendSymbols
+- `internal/graph` — AppendTypes
+- `internal/graph` — WriteIndex
+- `internal/graph` — ResetAggregates
+- `internal/graph` — Slug
+- `internal/graph` — TestSlug
+- `internal/graph` — TestWriteModule_idempotent
+- `internal/graph` — TestWriteIndex_groupsBySubsystem
+- `internal/agentrunner` — GenerateClaudeCodeArtifacts
+- `internal/agentrunner` — GenerateClaudeCodeCommands
+- `internal/agentrunner` — WorktreeSetup
+- `internal/agentrunner` — RunAgent
+- `internal/agentrunner` — TestGenerateClaudeCodeArtifactsWritesAgentFiles
+- `internal/agentrunner` — TestGenerateClaudeCodeCommandsWritesNewTicketSkill
+- `internal/agentrunner` — TestRunAgentInvokesClaudeCLI
+- `internal/agentrunner` — NewMock
+- `internal/agentrunner` — ScriptResponse
+- `internal/agentrunner` — TestMockReturnsScriptedResponse
+- `internal/agentrunner` — TestMockErrorsOnUnscriptedRole
+- `internal/agentrunner` — TestMockPopsQueuedResponsesInOrder
+- `internal/agentrunner` — BuildPrompt
+- `internal/agentrunner` — TestBuildPromptIncludesRolePromptLogAndDiff
+- `internal/agentrunner` — TestBuildPromptLabelsContentAsDataNotInstructions
+- `internal/gating` — Evaluate
+- `internal/gating` — TestEvaluateDeniesGitPush
+- `internal/gating` — TestEvaluateDeniesGhPrCreate
+- `internal/gating` — TestEvaluateDeniesObfuscationVectors
+- `internal/gating` — TestEvaluateAllowsWritesInsideWorktree
+- `internal/gating` — TestEvaluateDeniesWritesOutsideWorktree
+- `internal/gating` — TestEvaluateAllowsExplicitlyAllowedNetworkHost
+- `internal/gating` — TestEvaluateDeniesEvalAndSource
+- `internal/orchestrator/api` — RegisterHumanRoutes
+- `internal/orchestrator/api` — TestApproveTicket_TransitionsPhase
+- `internal/orchestrator/api` — TestApproveTicket_PlanToImplement
+- `internal/orchestrator/api` — TestApproveTicket_WrongPhase
+- `internal/orchestrator/api` — TestAnswerHumanInput_ResolvesAndLogs
+- `internal/orchestrator/api` — TestAnswerHumanInput_MissingFields
+- `internal/orchestrator/api` — TestRequeueTicket_TransitionsToUnassigned
+- `internal/orchestrator/api` — TestRequeueTicket_WrongPhase
+- `internal/orchestrator/api` — TestRequeueTicket_AnyActivePhase
+- `internal/orchestrator/api` — TestCloseTicket_TransitionsToClosed
+- `internal/orchestrator/api` — TestCloseTicket_WrongPhase
+- `internal/orchestrator/api` — TestNeedsAttentionTicket
+- `internal/orchestrator/api` — TestRequestApproval_CreatesHumanInput
+- `internal/orchestrator/api` — TestRequestApproval_EmptyPrompt
+- `internal/orchestrator/api` — TestPendingApproval_ReturnsPending
+- `internal/orchestrator/api` — TestPendingApproval_NoneReturnsEmpty
+- `internal/orchestrator/api` — TestPendingHumanInput_ReturnsOldest
+- `internal/orchestrator/api` — TestAckHumanInput
+- `internal/orchestrator/api` — RegisterLogRoutes
+- `internal/orchestrator/api` — TestPostLog_AssignsSequenceNum
+- `internal/orchestrator/api` — TestPostLog_CreatesHumanInput_WhenToRoleHuman
+- `internal/orchestrator/api` — NewHandlers
+- `internal/orchestrator/api` — RegisterShemRoutes
+- `internal/orchestrator/api` — TestRegisterShem
+- `internal/orchestrator/api` — TestClaimTicket_AtomicOneWinner
+- `internal/orchestrator/api` — TestDeregisterShem
+- `internal/orchestrator/api` — ClaimTicket
+- `internal/orchestrator/api` — RegisterTicketRoutes
+- `internal/orchestrator/api` — TestAvailableTickets
+- `internal/orchestrator/api` — TestClaimTicket_HTTPEndpoint
+- `internal/orchestrator/api` — TestUpdatePhase
+- `internal/orchestrator/api` — TestAppendLog
+- `internal/orchestrator/ws` — StartHeartbeatMonitor
+- `internal/orchestrator/ws` — TestHeartbeatMonitor_RequeuesDeadShem
+- `internal/orchestrator/ws` — NewHub
+- `internal/orchestrator/ws` — Register
+- `internal/orchestrator/ws` — Unregister
+- `internal/orchestrator/ws` — Push
+- `internal/orchestrator/ws` — Broadcast
+- `internal/orchestrator/ws` — TestHubPush
+- `internal/workspace` — Create
+- `internal/workspace` — Remove
+- `internal/workspace` — TestCreateAndRemoveWorktree
+- `internal/shem/client` — New
+- `internal/shem/client` — Register
+- `internal/shem/client` — Deregister
+- `internal/shem/client` — ClaimTicket
+- `internal/shem/client` — PostPhase
+- `internal/shem/client` — PostCheckpoint
+- `internal/shem/client` — PostLog
+- `internal/shem/client` — PostDocumentFile
+- `internal/shem/client` — GetPendingInput
+- `internal/shem/client` — PostApprovalRequest
+- `internal/shem/client` — GetPendingApproval
+- `internal/shem/client` — GetPendingFeedback
+- `internal/shem/client` — AckInput
+- `internal/shem/client` — GetAvailable
+- `internal/shem/client` — TestClient_RetriesOn5xx
+- `internal/shem/client` — TestClient_AuthorizationHeader
+- `internal/shem/client` — TestClient_ExhaustsRetries
+- `internal/shem/client` — TestClient_Register
+- `internal/shem/client` — TestClient_ClaimTicket_409
+- `internal/shem/client` — TestClient_GetAvailable
+- `internal/shem/client` — TestClient_GetAvailable_Empty
+- `internal/shem/client` — Connect
+- `internal/shem/client` — Listen
+- `internal/shem/client` — SendPing
+- `internal/shem/client` — TestWSClient_Connect
+- `internal/shem/client` — TestWSClient_SendPing
+- `internal/shem/client` — TestWSClient_Listen
+- `internal/bloat` — Check
+- `internal/bloat` — TestCheckWithinExpectedDoesNotFlag
+- `internal/bloat` — TestCheckWildlyOverFlags
+- `internal/bloat` — TestCheckZeroExpectedNeverDivides
+- `internal/orchestrator/auth` — RequireAPIKey
+- `internal/orchestrator/auth` — ShemFromRequest
+- `internal/orchestrator/auth` — TestAPIKeyAuth
+- `internal/orchestrator/auth` — TestAPIKeyAuth_Unauthorized
+- `internal/orchestrator/auth` — CreateSession
+- `internal/orchestrator/auth` — RequireSession
+- `internal/orchestrator/auth` — SessionUser
+- `internal/orchestrator/auth` — TestSessionRoundTrip
+- `internal/orchestrator/auth` — TestRequireSession_RedirectsWithoutCookie
+- `internal/orchestrator/config` — Load
+- `internal/orchestrator/config` — TestLoad
+- `internal/orchestrator/server` — New
+- `internal/orchestrator/server` — Routes
+- `internal/roles` — Unpack
+- `internal/roles` — TestUnpackWritesAllDefaultRoleFiles
+- `internal/roles` — TestUnpackNeverOverwritesExistingRoleFile
+- `internal/soul` — ExtractCandidates
+- `internal/soul` — Promote
+- `internal/soul` — TestExtractCandidatesFindsDivergentResolution
+- `internal/soul` — TestExtractCandidatesIgnoresNonDivergentActivity
+- `internal/soul` — TestExtractCandidatesIgnoresResolutionMatchingOriginal
+- `internal/soul` — TestExtractCandidatesIgnoresResolutionWithNoMatchingBlocker
+- `internal/soul` — TestPromoteWritesFile
+- `internal/soul` — TestPromoteCreatesSoulDirIfMissing
+- `internal/wiki` — Build
+- `internal/wiki` — Search
+- `internal/wiki` — SearchExpanded
+- `internal/wiki` — SaveToFile
+- `internal/wiki` — LoadFromFile
+- `internal/wiki` — EnsureIndex
+- `internal/wiki` — TestBuildLinksDetectsCoMentions
+- `internal/wiki` — TestBuildLinksIgnoresSelfReference
+- `internal/wiki` — TestSearchExpandedIncludesLinkedDocs
+- `internal/wiki` — TestSearchExpandedNoDuplicates
+- `internal/wiki` — TestSearchRanksSimilarDocAboveUnrelatedDoc
+- `internal/wiki` — TestSearchFindsNearDuplicateWithDifferentWording
+- `internal/wiki` — TestSearchReturnsEmptyForEmptyIndex
+- `internal/wiki` — TestSaveAndLoadRoundTrip
+- `internal/wiki` — TestLoadFromFileMissingReturnsError
+- `internal/wiki` — TestEnsureIndexBuildsWhenMissing
+- `internal/wiki` — TestEnsureIndexRebuildsWhenWikiContentChanges
+- `internal/wiki` — TestEnsureIndexReusesFreshIndex
+- `internal/wiki` — LoadAll
+- `internal/wiki` — Hash
+- `internal/wiki` — IsStale
+- `internal/wiki` — TestLoadAllReadsMarkdownFiles
+- `internal/wiki` — TestHashIsStableAndDistinguishesContent
+- `internal/wiki` — TestIsStaleDetectsChangedContent
+- `internal/e2e` — TestCLILifecycleThroughRealBinary
+- `internal/e2e` — TestFullTicketLifecycleWithMockBackend
+- `internal/e2e` — TestConcurrentClaim_ExactlyOneWinner
+- `internal/e2e` — TestHeartbeatMonitor_RequeuesAndNewShemClaims
+- `internal/e2e` — TestLogForwarding_SSEDeliversInSequenceOrder
+- `internal/observer` — New
+- `internal/observer` — IsInFlight
+- `internal/observer` — DispatchForCommit
+- `internal/observer` — TestDispatchForCommitAppendsFindingFromResult
+- `internal/observer` — TestDispatchForCommitSkipsAlreadyClaimedSignal
+- `internal/observer` — TestDispatchForCommitSkipsIfAlreadyLoggedFromPriorRun
+- `internal/orchestrator/admin` — UsersAdd
+- `internal/orchestrator/admin` — UsersRemove
+- `internal/orchestrator/admin` — ShemsAdd
+- `internal/orchestrator/admin` — ShemsAddOrUpdate
+- `internal/orchestrator/admin` — UsersAddOrUpdate
+- `internal/orchestrator/admin` — ShemsRemove
+- `internal/orchestrator/sse` — NewBroker
+- `internal/orchestrator/sse` — Subscribe
+- `internal/orchestrator/sse` — Publish
+- `internal/orchestrator/ui` — LoadTemplates
+- `internal/orchestrator/ui` — MakeLogEntryRenderer
+- `internal/orchestrator/ui` — NewHandlers
+- `internal/orchestrator/ui` — NewHandlersWithMap
+- `internal/orchestrator/ui` — RegisterRoutes
+- `internal/orchestrator/ui` — TestLoginHandler_ValidCredentials
+- `internal/orchestrator/ui` — TestLoginHandler_InvalidCredentials
+- `internal/orchestrator/ui` — TestLoginHandler_UnknownUser
+- `internal/orchestrator/ui` — TestDashboard_RequiresSession
+- `internal/orchestrator/ui` — TestLoadTemplates
+- `internal/shem/worker` — PostCheckpointWithRetry
+- `internal/shem/worker` — TestPostCheckpointWithRetry_RetriesAndSucceeds
+- `internal/shem/worker` — TestPostCheckpointWithRetry_ExhaustsRetries
+- `internal/shem/worker` — TestPostCheckpointWithRetry_RestoresRetryAttempts
+- `internal/shem/worker` — RunTicket
+- `internal/shem/worker` — TestGolemExecutor_RepoNotFound
+- `internal/shem/worker` — TestGolemExecutor_LogTailForwardsEntries
+- `internal/shem/worker` — RecoverTicket
+- `internal/shem/worker` — ReconstructState
+- `internal/shem/worker` — CloneIfMissing
+- `internal/shem/worker` — TestReconstructState_WritesFiles
+- `internal/shem/worker` — TestReconstructState_Idempotent
+- `internal/shem/worker` — TestReconstructState_EmptyLogs
+- `internal/shem/worker` — New
+- `internal/shem/worker` — SetWSClient
+- `internal/shem/worker` — Start
+- `internal/shem/worker` — HandleMessage
+- `internal/shem/worker` — Shutdown
+- `internal/shem/worker` — TestWorker_ClaimsOnPush
+- `internal/shem/worker` — TestWorker_IgnoresNonAvailableMessages
+- `internal/shem/worker` — TestWorker_HandlesClaim409
+- `internal/ticket` — New
+- `internal/ticket` — Save
+- `internal/ticket` — Load
+- `internal/ticket` — TestNewSetsDefaults
+- `internal/ticket` — TestNewTrivialSkipsBrainstorm
+- `internal/ticket` — TestSaveAndLoadPreservesExpectedLines
+- `internal/ticket` — TestSaveAndLoadRoundTrip
+- `internal/orchestrator/urlnorm` — Normalize
+- `internal/orchestrator/urlnorm` — TestNormalize
+- `internal/cli` — TicketAdvance
+- `internal/cli` — TicketReview
+- `internal/cli` — TestTicketAdvanceChangesPhase
+- `internal/cli` — TestTicketAdvanceRejectsUnknownPhase
+- `internal/cli` — TestTicketReviewRunsGateAndSetsReadyForReview
+- `internal/cli` — TestTicketReviewSetsNeedsAttentionOnGateFailure
+- `internal/cli` — NewRunner
+- `internal/cli` — TestNewRunnerReturnsClaudeCodeForClaudeCodeBackend
+- `internal/cli` — TestNewRunnerRejectsUnknownBackend
+- `internal/cli` — TicketClose
+- `internal/cli` — TestTicketCloseTearsDownWorktreeAndSetsClosed
+- `internal/cli` — TestTicketClosePromotesSoulEntryFromDivergence
+- `internal/cli` — TestTicketCloseIgnoresMalformedSoulLines
+- `internal/cli` — GraphBuild
+- `internal/cli` — GraphCheckBoundary
+- `internal/cli` — GraphDeps
+- `internal/cli` — GraphStatus
+- `internal/cli` — GraphUpdate
+- `internal/cli` — GraphWhoImports
+- `internal/cli` — Init
+- `internal/cli` — TestInitRequiresBackendFlag
+- `internal/cli` — TestInitCreatesGolemLayout
+- `internal/cli` — LogEmit
+- `internal/cli` — Ask
+- `internal/cli` — Answer
+- `internal/cli` — TestLogEmitAppendsEntry
+- `internal/cli` — TestLogEmitRejectsQuestionAndAnswerTypes
+- `internal/cli` — TestAskThenAnswerRoundTrip
+- `internal/cli` — TestAskReturnsAnswerWhenPostedInTime
+- `internal/cli` — ObserverDispatch
+- `internal/cli` — TestObserverDispatchAppendsFindingFromRealCommit
+- `internal/cli` — TicketResume
+- `internal/cli` — TestTicketResumeShowsPhaseAndLastLogEntry
+- `internal/cli` — TestTicketResumeMissingTicketFails
+- `internal/cli` — SetStep
+- `internal/cli` — CheckBloat
+- `internal/cli` — TestSetStepUpdatesExpectedLines
+- `internal/cli` — TestCheckBloatFlagsCommitFarOverExpectation
+- `internal/cli` — TestCheckBloatStaysSilentWithinExpectation
+- `internal/cli` — TicketNew
+- `internal/cli` — TestTicketNewCreatesStateWorktreeAndLog
+- `internal/cli` — TestTicketNewTrivialFlagSkipsBrainstorm
+- `internal/cli` — TestTicketNew_WithTicketID
+- `internal/cli` — Tickets
+- `internal/cli` — TestTicketsListsAllTicketsWithPhase
+- `internal/cli` — TestTicketsHandlesNoTicketsDir
+- `internal/cli` — WikiSearch
+- `internal/cli` — WikiRebuild
+- `internal/cli` — TestWikiRebuildThenSearchFindsRankedMatch
+- `internal/cli` — TestWikiSearchRequiresQuery
+- `internal/shem/config` — Load
+- `internal/shem/config` — TestLoad_NormalizesRepos
+- `internal/shem/config` — TestLoad_Fields
+- `internal/shem/config` — TestLoad_MissingFile
+- `cmd/golem` — TestDispatchUnknownCommand
+- `cmd/golem` — TestDispatchNoArgs
+- `internal/blog` — NewEntry
+- `internal/blog` — TestNewEntrySetsFields
+- `internal/blog` — NewWriter
+- `internal/blog` — Append
+- `internal/blog` — Close
+- `internal/blog` — ReadAll
+- `internal/blog` — TestWriterAppendAndReadAll
+- `internal/blog` — TestWriterAppendIsConcurrencySafe
+- `internal/blog` — TestReadAllMissingFile
+- `internal/gate` — Run
+- `internal/gate` — TestRunAllCommandsPass
+- `internal/gate` — TestRunStopsAtFirstFailure
+- `internal/askwait` — Ask
+- `internal/askwait` — PollForAnswer
+- `internal/askwait` — WaitForAnswer
+- `internal/askwait` — RoundsSoFar
+- `internal/askwait` — TestAskWritesQuestionEntry
+- `internal/askwait` — TestPollForAnswerFindsMatchingAnswer
+- `internal/askwait` — TestPollForAnswerNotFoundYet
+- `internal/askwait` — TestWaitForAnswerReturnsAsSoonAsAnswerAppears
+- `internal/askwait` — TestWaitForAnswerTimesOut
+- `internal/askwait` — TestRoundsSoFarCountsQuestionAnswerPairs
+- `internal/orchestrator/db` — Open
+- `internal/orchestrator/db` — TestOpenAndMigrate
+- `internal/orchestrator/db` — BeforeCreate

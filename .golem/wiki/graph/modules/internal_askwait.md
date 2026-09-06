@@ -1,18 +1,20 @@
 # internal/askwait
 
-The askwait module implements a question-and-answer protocol over the blog log, allowing one agent role to post a question and another to poll or block-wait for the answer. It enforces a configurable cap on back-and-forth rounds to prevent infinite loops between agents, escalating to human intervention when the limit is reached.
+The askwait module implements a question-and-answer coordination protocol over the shared blog log, allowing one agent role to post a typed QUESTION entry and another to poll or block-wait until a matching ANSWER entry appears. It generates random IDs to correlate question/answer pairs, enforces a configurable round cap (MaxRounds=3) to prevent agents from looping indefinitely, and provides both a non-blocking poll and a timeout-bounded blocking wait so callers can choose their own concurrency model.
 
 ## Functions
 
-- func Ask(w *blog.Writer, from, to, question string) (string, error) — posts a QUESTION entry to the blog and returns its generated ID
-- func PollForAnswer(logPath, questionID string) (*blog.Entry, error) — reads the blog and returns the ANSWER entry matching the given question ID, or nil if not yet present
-- func WaitForAnswer(logPath, questionID string, timeout, pollInterval time.Duration) (answer string, found bool, err error) — polls for an answer in a loop until found or timeout elapses
-- func RoundsSoFar(entries []blog.Entry, thread string) int — counts completed answer rounds for a thread to enforce MaxRounds
-
-## Types
-
-- MaxRounds — constant capping the number of question/answer back-and-forth rounds before forcing human escalation
+- Ask
+- PollForAnswer
+- WaitForAnswer
+- RoundsSoFar
+- TestAskWritesQuestionEntry
+- TestPollForAnswerFindsMatchingAnswer
+- TestPollForAnswerNotFoundYet
+- TestWaitForAnswerReturnsAsSoonAsAnswerAppears
+- TestWaitForAnswerTimesOut
+- TestRoundsSoFarCountsQuestionAnswerPairs
 
 ## Imports
 
-github.com/leonpham/golem/internal/blog
+crypto/rand, encoding/hex, time, github.com/leonp92/golem/internal/blog, path/filepath, testing

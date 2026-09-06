@@ -4,11 +4,19 @@ The ticket module defines the lifecycle state for a Golem development ticket. It
 
 ## Functions
 
-- func New(id, description string, trivial bool) *State — constructs a new State with defaults, skipping brainstorm for trivial tickets
-- func (s *State) Save(ticketDir string) error — serialises State to JSON in the given directory
-- func Load(ticketDir string) (*State, error) — deserialises State from JSON in the given directory
+- New
+- Save
+- Load
+- TestNewSetsDefaults
+- TestNewTrivialSkipsBrainstorm
+- TestSaveAndLoadPreservesExpectedLines
+- TestSaveAndLoadRoundTrip
 
 ## Types
 
-- Phase — string enum representing a ticket's current lifecycle phase
-- State — holds all persistent fields for a ticket (ID, description, phase, branch, worktree path, trivial flag, expected lines)
+- Phase
+- State
+
+## Imports
+
+encoding/json, os, path/filepath, testing

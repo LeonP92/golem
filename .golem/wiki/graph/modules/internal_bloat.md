@@ -4,4 +4,11 @@ The bloat package provides a deterministic scope-bloat check for commit diffs. I
 
 ## Functions
 
-- func Check(actualLines, expectedLines int) (exceeded bool, ratio float64) — compares actual diff line count against plan expectation, returning whether scope bloat threshold is exceeded and the computed ratio
+- Check
+- TestCheckWithinExpectedDoesNotFlag
+- TestCheckWildlyOverFlags
+- TestCheckZeroExpectedNeverDivides
+
+## Imports
+
+testing

@@ -4,9 +4,10 @@ The roles module bundles the default Golem agent role definitions (markdown file
 
 ## Functions
 
-- func Unpack(golemDir string) ([]string, error) — writes embedded default role .md files into <golemDir>/roles/, skipping any that already exist; returns paths of newly written files
+- Unpack
+- TestUnpackWritesAllDefaultRoleFiles
+- TestUnpackNeverOverwritesExistingRoleFile
 
-## Types
+## Imports
 
-- Defaults — embedded filesystem (embed.FS) containing defaults/*.md role files
-- RoleNames — ordered list of canonical role name strings
+embed, os, path/filepath, testing

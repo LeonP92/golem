@@ -4,14 +4,17 @@ The observer module implements the single persistent, deterministic process that
 
 ## Functions
 
-- New(logPath string, runner agentrunner.Runner) *Observer — constructs an Observer with an empty in-memory claim map
-- (o *Observer) IsInFlight(role, commitSHA string) bool — reports whether a dispatch for this role+commit is already claimed in the current process lifetime
-- (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) error — claims a signal, checks for prior-run log entries, runs the agent, classifies output, and appends FINDING/BLOCKER to the blog
+- New
+- IsInFlight
+- DispatchForCommit
+- TestDispatchForCommitAppendsFindingFromResult
+- TestDispatchForCommitSkipsAlreadyClaimedSignal
+- TestDispatchForCommitSkipsIfAlreadyLoggedFromPriorRun
 
 ## Types
 
-- Observer — persistent per-ticket coordinator that claims signals and dispatches one-shot agent invocations with duplicate-prevention guarantees
+- Observer
 
 ## Imports
 
-github.com/leonpham/golem/internal/agentrunner, github.com/leonpham/golem/internal/blog
+strings, sync, github.com/leonp92/golem/internal/agentrunner, github.com/leonp92/golem/internal/blog, path/filepath, testing

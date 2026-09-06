@@ -4,13 +4,19 @@ The soul module identifies moments where a human overrode a role's blocker with 
 
 ## Functions
 
-- func ExtractCandidates(entries []blog.Entry) []Candidate — scans blog entries and returns candidates where a human resolved a blocker differently than the role suggested
-- func Promote(soulDir, filename, content string) error — writes a principle file into the soul directory, creating the directory if needed
+- ExtractCandidates
+- Promote
+- TestExtractCandidatesFindsDivergentResolution
+- TestExtractCandidatesIgnoresNonDivergentActivity
+- TestExtractCandidatesIgnoresResolutionMatchingOriginal
+- TestExtractCandidatesIgnoresResolutionWithNoMatchingBlocker
+- TestPromoteWritesFile
+- TestPromoteCreatesSoulDirIfMissing
 
 ## Types
 
-- Candidate — pairs a blog entry (the human resolution) with the extracted suggestion string
+- Candidate
 
 ## Imports
 
-github.com/leonpham/golem/internal/blog
+os, path/filepath, github.com/leonp92/golem/internal/blog, testing
