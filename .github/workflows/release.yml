@@ -15,11 +15,29 @@ jobs:
     strategy:
       matrix:
         include:
-          - goos: linux   goarch: amd64
-          - goos: linux   goarch: arm64
-          - goos: darwin  goarch: amd64
-          - goos: darwin  goarch: arm64
-          - goos: windows goarch: amd64
+          - goos: linux
+            goarch: amd64
+            runner: ubuntu-latest
+            cc: gcc
+          - goos: linux
+            goarch: arm64
+            runner: ubuntu-latest
+            cc: aarch64-linux-gnu-gcc
+            apt: gcc-aarch64-linux-gnu
+          - goos: darwin
+            goarch: amd64
+            runner: macos-13
+            cc: clang
+          - goos: darwin
+            goarch: arm64
+            runner: macos-14
+            cc: clang
+          - goos: windows
+            goarch: amd64
+            runner: windows-latest
+            cc: gcc
+
+    runs-on: ${{ matrix.runner }}
 
     steps:
       - uses: actions/checkout@v4
@@ -28,11 +46,22 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install cross-compiler (Linux arm64 only)
+        if: matrix.apt != ''
+        run: sudo apt-get install -y ${{ matrix.apt }}
+
+      - name: Install mingw (Windows only)
+        if: matrix.goos == 'windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          install: mingw-w64-x86_64-gcc
+
       - name: Build
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: 0
+          CGO_ENABLED: 1
+          CC: ${{ matrix.cc }}
         run: |
           EXT=""
           [ "$GOOS" = "windows" ] && EXT=".exe"

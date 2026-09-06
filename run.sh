@@ -15,7 +15,10 @@ set -a
 set +a
 
 # Validate required vars.
-: "${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env}"
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ]; then
+  echo "Error: set either ANTHROPIC_API_KEY or CLAUDE_HOME in .env" >&2
+  exit 1
+fi
 : "${GOLEM_ADMIN_PASSWORD:?Set GOLEM_ADMIN_PASSWORD in .env}"
 : "${GOLEM_SHEM_API_KEY:?Set GOLEM_SHEM_API_KEY in .env}"
 
@@ -27,6 +30,18 @@ if [ "$GOLEM_SHEM_API_KEY" = "changeme-replace-with-a-long-random-string" ]; the
 fi
 
 export GOLEM_SHEM_API_KEY
+
+# Convert a Windows path (C:/Users/...) to the /c/Users/... format Docker expects.
+if [ -n "$CLAUDE_HOME" ]; then
+  case "$CLAUDE_HOME" in
+    [A-Za-z]:*)
+      drive=$(echo "$CLAUDE_HOME" | cut -c1 | tr 'A-Z' 'a-z')
+      rest=$(echo "$CLAUDE_HOME" | cut -c3- | sed 's|\\|/|g; s|^/||')
+      CLAUDE_HOME="/$drive/$rest"
+      export CLAUDE_HOME
+      ;;
+  esac
+fi
 
 docker compose up -d
 

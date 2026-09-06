@@ -1,6 +1,7 @@
 # syntax=docker/dockerfile:1
 # Multi-stage build producing three binaries: golem, golem-orchestrator, golem-shem.
-# CGO is disabled — the pure-Go SQLite driver (glebarez/sqlite) is used.
+# golem and golem-shem use tree-sitter CGO bindings; all three are built statically
+# with musl-gcc. golem-orchestrator is pure-Go (glebarez/sqlite) and needs no CGO.
 
 FROM golang:1.27-alpine AS builder
 # build-base provides musl-gcc (C toolchain) required for tree-sitter CGO bindings.
@@ -13,11 +14,18 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/golem              ./cmd/golem
+# golem includes graph commands that use tree-sitter (CGO) — build statically.
+RUN CGO_ENABLED=1 \
+    CC=gcc \
+    go build \
+      -tags netgo \
+      -ldflags '-linkmode=external -extldflags=-static' \
+      -o /out/golem \
+      ./cmd/golem
 RUN CGO_ENABLED=0 go build -o /out/golem-orchestrator  ./cmd/orchestrator
 # golem-shem uses tree-sitter (CGO) — build statically with musl-gcc.
 RUN CGO_ENABLED=1 \
-    CC=musl-gcc \
+    CC=gcc \
     go build \
       -tags netgo \
       -ldflags '-linkmode=external -extldflags=-static' \
@@ -49,6 +57,6 @@ RUN npm install -g @anthropic-ai/claude-code
 COPY --from=builder /out/golem      /usr/local/bin/golem
 COPY --from=builder /out/golem-shem /usr/local/bin/golem-shem
 COPY deploy/shem-entrypoint.sh /usr/local/bin/shem-entrypoint.sh
-RUN chmod +x /usr/local/bin/shem-entrypoint.sh
+RUN sed -i 's/\r//' /usr/local/bin/shem-entrypoint.sh && chmod +x /usr/local/bin/shem-entrypoint.sh
 ENTRYPOINT ["shem-entrypoint.sh"]
 CMD ["-config", "/etc/golem/shem.yaml"]
