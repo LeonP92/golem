@@ -3,12 +3,14 @@ package worker
 import (
 	"context"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"github.com/leonp92/golem/internal/workspace"
 )
 
 // Executor is the interface for running a ticket.
@@ -67,8 +69,29 @@ func (w *Worker) Start() {
 
 // HandleMessage processes a WebSocket push message from the orchestrator.
 func (w *Worker) HandleMessage(msg ws.WSMessage) {
-	if msg.Type == "ticket_available" && msg.TicketID != nil {
-		go w.tryClaimAndRun(*msg.TicketID)
+	switch msg.Type {
+	case "ticket_available":
+		if msg.TicketID != nil {
+			go w.tryClaimAndRun(*msg.TicketID)
+		}
+	case "ticket_closed":
+		if msg.TicketID != nil {
+			go w.cleanupTicket(msg.Repo, *msg.TicketID)
+		}
+	}
+}
+
+// cleanupTicket removes the local worktree and branch for a closed ticket.
+func (w *Worker) cleanupTicket(repoRemote, ticketID string) {
+	repoPath := repoLocalPath(w.cfg, repoRemote)
+	if repoPath == "" {
+		log.Printf("worker: cleanup ticket %s: no local path for repo %q", ticketID, repoRemote)
+		return
+	}
+	worktreePath := filepath.Join(repoPath, ".golem", "tickets", ticketID, "worktree")
+	branch := "ticket/" + ticketID
+	if err := workspace.Remove(repoPath, worktreePath, branch); err != nil {
+		log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
 	}
 }
 

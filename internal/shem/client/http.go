@@ -246,6 +246,7 @@ func (c *Client) PostDocumentFile(ticketID string, entryType, fromRole, filePath
 		return 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("X-Shem-Name", c.name)
 	req.Header.Set("Content-Type", "text/plain; charset=utf-8")
 	req.Header.Set("X-Entry-Type", entryType)
 	req.Header.Set("X-From-Role", fromRole)

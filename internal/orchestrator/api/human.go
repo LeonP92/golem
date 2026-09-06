@@ -296,6 +296,11 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string) {
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
+		http.Error(w, "ticket not found", http.StatusNotFound)
+		return
+	}
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'ready-for-review'", id).
 		Update("phase", "closed")
@@ -306,6 +311,13 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 	if result.RowsAffected == 0 {
 		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
 		return
+	}
+	if ticket.AssignedShem != nil {
+		h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
+			Type:     "ticket_closed",
+			TicketID: &id,
+			Repo:     ticket.RepoRemote,
+		})
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
