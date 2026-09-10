@@ -58,11 +58,44 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.createTicket)))
 	mux.Handle("GET /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.listTickets)))
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
+	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))
 	mux.Handle("GET /api/tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.getTicket)))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("PATCH /api/tickets/{id}/phase", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updatePhase)))
 	mux.Handle("PATCH /api/tickets/{id}/checkpoint", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updateCheckpoint)))
+}
+
+// resumableTickets returns tickets assigned to this shem that have a checkpoint
+// and are in an active execution phase — i.e. were mid-run when the shem died.
+func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
+	shem := auth.ShemFromRequest(r)
+	var tickets []db.Ticket
+	h.DB.Where(
+		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ?",
+		shem.ID,
+		[]string{"unassigned", "ready-for-review", "revising", "closed"},
+	).Find(&tickets)
+
+	claims := make([]ClaimResponse, 0, len(tickets))
+	for _, t := range tickets {
+		var entries []db.LogEntry
+		h.DB.Where("ticket_id = ?", t.ID).Order("sequence_num asc").Find(&entries)
+		if entries == nil {
+			entries = []db.LogEntry{}
+		}
+		claims = append(claims, ClaimResponse{
+			TicketID:        t.ID,
+			Branch:          t.Branch,
+			RepoRemote:      t.RepoRemote,
+			Description:     t.Description,
+			CheckpointPhase: t.CheckpointPhase,
+			CheckpointSHA:   t.CheckpointSHA,
+			LogEntries:      entries,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(claims) //nolint:errcheck
 }
 
 func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {

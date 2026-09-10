@@ -158,6 +158,24 @@ func (c *Client) Deregister() error {
 	return nil
 }
 
+// GetResumable returns tickets assigned to this shem that have a checkpoint
+// and were mid-execution when the shem last died.
+func (c *Client) GetResumable() ([]*ClaimResponse, error) {
+	resp, err := c.do("GET", "/api/tickets/resumable", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	var results []*ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // ClaimTicket claims a ticket for this shem.
 func (c *Client) ClaimTicket(id string) (*ClaimResponse, error) {
 	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/claim", id), nil)

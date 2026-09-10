@@ -69,6 +69,14 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			return fmt.Errorf("recovery failed: %w", err)
 		}
 		startPhase = *claim.CheckpointPhase
+		// Checkpoint records the last *completed* phase. If the approval gate for
+		// that phase was already passed (no pending approval), advance to the next
+		// phase. If approval is still pending, stay so the wait loop re-enters.
+		if startPhase == "brainstorm" || startPhase == "plan" {
+			if pending, _ := c.GetPendingApproval(claim.TicketID); pending == nil {
+				startPhase = nextPhaseAfterCheckpoint(startPhase)
+			}
+		}
 	} else {
 		// Fresh orchestrator ticket (no checkpoint). Always start from brainstorm.
 		// If the ticket directory already exists (e.g. after a requeue) reuse the
@@ -323,6 +331,20 @@ func toOrchestratorPhase(localPhase string) string {
 		return "ready-for-review"
 	default:
 		return localPhase
+	}
+}
+
+// nextPhaseAfterCheckpoint returns the phase to execute after a completed
+// checkpoint phase. Brainstorm and plan each have a human approval gate; once
+// that gate is passed the checkpoint is set and the next run should skip ahead.
+func nextPhaseAfterCheckpoint(phase string) string {
+	switch phase {
+	case "brainstorm":
+		return "plan"
+	case "plan":
+		return "implement"
+	default:
+		return phase
 	}
 }
 

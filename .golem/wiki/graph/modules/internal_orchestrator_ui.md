@@ -1,6 +1,6 @@
 # internal/orchestrator/ui
 
-This module provides the HTTP handler layer and HTML template engine for the Golem Orchestrator web dashboard. It embeds all templates in the binary via go:embed, parses them into a page-keyed map at startup, and exposes route handlers for login/logout, the ticket dashboard, shem listing, ticket creation, and ticket detail views. It enforces session authentication via middleware on protected routes, renders server-side HTML using a layout-plus-page-plus-partials template composition model, and provides an SSE-compatible log entry renderer that converts structured log events to HTML fragments for live streaming to the browser.
+This module provides the HTTP handler layer and HTML template engine for the Golem Orchestrator web dashboard. It embeds all templates in the binary via go:embed, parses them into a page-keyed map at startup (layout + page + partials), and exposes route handlers for login/logout, the ticket dashboard, shem listing, ticket creation, and ticket detail views. Protected routes are wrapped with session-authentication middleware, ticket detail separates SPEC/PLAN log entries from the regular log stream and surfaces any pending human-input request, and an SSE-compatible log entry renderer converts structured log events into HTML fragments for live streaming to the browser.
 
 ## Functions
 

@@ -302,14 +302,14 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase = 'ready-for-review'", id).
+		Where("id = ? AND phase != 'closed'", id).
 		Update("phase", "closed")
 	if result.Error != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if result.RowsAffected == 0 {
-		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
+		http.Error(w, "ticket already closed", http.StatusConflict)
 		return
 	}
 	if ticket.AssignedShem != nil {

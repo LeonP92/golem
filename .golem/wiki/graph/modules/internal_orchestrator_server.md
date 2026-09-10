@@ -1,6 +1,6 @@
 # internal/orchestrator/server
 
-The server module is the HTTP wiring layer for the Golem orchestrator. It holds shared dependencies (database, WebSocket hub, SSE broker) in a Server struct and assembles the full request mux by delegating to the api, ui, and ws subpackages. It exists as the single composition root that binds all handler groups — Shem-facing API routes, ticket and log endpoints, human dashboard routes, and a health check — into one http.Handler returned to main.
+The server module is the HTTP wiring layer for the Golem orchestrator. It holds shared dependencies (database, WebSocket hub, SSE broker, secure-cookie flag) in a Server struct and assembles the full request mux by delegating to the api, ui, and ws subpackages. It exists as the single composition root that binds all handler groups — Shem-facing API routes, ticket and log endpoints, human dashboard routes, and a health check — into one http.Handler returned to main.
 
 ## Functions
 

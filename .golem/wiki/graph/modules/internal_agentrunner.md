@@ -1,6 +1,6 @@
 # internal/agentrunner
 
-This module abstracts the execution of one-shot AI agent invocations behind a Runner interface, enabling the orchestration core to dispatch role prompts without coupling to a specific backend. It provides a ClaudeCode adapter that shells out to the `claude` CLI, a Mock adapter for test-time scripting, a BuildPrompt function that wraps role prompts and context data in injection-resistant delimiters, and artifact generators that project neutral role files into Claude Code subagent definitions and slash-command skill files.
+This module abstracts the execution of one-shot AI agent invocations behind a Runner interface, enabling the orchestration core to dispatch role prompts without coupling to a specific backend. It provides a ClaudeCode adapter that shells out to the `claude` CLI, a Mock adapter for test-time scripting, a BuildPrompt function that wraps role prompts and context data in injection-resistant delimiters, and artifact generators that project neutral role files into Claude Code subagent definitions (.claude/agents/*.md), a merged .claude/settings.json permission allow/deny list, and slash-command skill files (new-ticket, tickets).
 
 ## Functions
 
@@ -10,6 +10,9 @@ This module abstracts the execution of one-shot AI agent invocations behind a Ru
 - RunAgent
 - TestGenerateClaudeCodeArtifactsWritesAgentFiles
 - TestGenerateClaudeCodeCommandsWritesNewTicketSkill
+- TestGenerateClaudeCodeArtifactsWritesSettingsWithDenyList
+- TestGenerateClaudeCodeArtifactsMergesExistingSettings
+- TestWorktreeSetupWritesSettingsWithDenyList
 - TestRunAgentInvokesClaudeCLI
 - NewMock
 - ScriptResponse
