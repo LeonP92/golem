@@ -207,7 +207,7 @@ Browser ──► Orchestrator (dashboard, approval gates)
 ./run.sh
 ```
 
-On first run the script creates `.env` from the example and exits — fill in `ANTHROPIC_API_KEY` and `GOLEM_ADMIN_PASSWORD`, then run it again. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
+On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` and one Claude Code auth option (`CLAUDE_HOME`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY`), then run it again. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
 
 Create a ticket from the UI. The shem will pick it up within seconds, run brainstorm, and pause for your approval before proceeding to plan and implementation.
 

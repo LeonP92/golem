@@ -42,8 +42,9 @@ CMD ["/etc/golem/orchestrator.yaml"]
 
 # ── shem runtime ──────────────────────────────────────────────────────────────
 # The shem needs git, the golem CLI, and the Claude Code CLI (claude --print).
-# ANTHROPIC_API_KEY is required at runtime — no interactive login needed when
-# the key is set; claude --print uses it directly.
+# One of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or a mounted CLAUDE_HOME
+# session is required at runtime — no interactive login needed when set;
+# claude --print uses it directly.
 FROM node:22-alpine AS shem
 # Common runtimes and build tools for polyglot ticket support.
 # go is omitted (heavy); add it to a custom image if Go tickets are needed.
