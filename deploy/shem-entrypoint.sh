@@ -8,13 +8,17 @@
 #              The entrypoint bootstraps a minimal ~/.claude.json so
 #              Claude Code skips the interactive first-run wizard.
 #
+#   OAuth token — set CLAUDE_CODE_OAUTH_TOKEN in your .env file (generated
+#              via `claude setup-token` for a Pro/Max subscription).
+#              Same headless bootstrap as API key mode.
+#
 #   Session  — mount your host ~/.claude into the container via CLAUDE_HOME.
 #              Claude Code reuses your existing desktop session.
 #              Set CLAUDE_HOME to your host path in .env, e.g.:
 #                CLAUDE_HOME=/home/you/.claude    (Linux/Mac)
 #                CLAUDE_HOME=C:\Users\you\.claude (Windows)
 #
-# Both modes pass --dangerously-skip-permissions at runtime so Claude Code
+# All modes pass --dangerously-skip-permissions at runtime so Claude Code
 # can run tools unattended without per-call permission prompts.
 set -e
 
@@ -33,14 +37,15 @@ if [ ! -f "$CLAUDE_JSON" ]; then
   fi
 fi
 
-# --- Auth mode: API key (ANTHROPIC_API_KEY set, no session) -------------------
-# If the API key is set and there is still no .claude.json, create a minimal
-# one that tells Claude Code setup is done.  Without this, Claude Code shows
-# an interactive first-run wizard that blocks headless execution.
-if [ -n "$ANTHROPIC_API_KEY" ] && [ ! -f "$CLAUDE_JSON" ]; then
+# --- Auth mode: API key or OAuth token (no session) ---------------------------
+# If either headless auth var is set and there is still no .claude.json,
+# create a minimal one that tells Claude Code setup is done.  Without this,
+# Claude Code shows an interactive first-run wizard that blocks headless
+# execution.
+if { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ ! -f "$CLAUDE_JSON" ]; then
   mkdir -p "$CLAUDE_DIR"
   printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$CLAUDE_JSON"
-  echo "shem: bootstrapped $CLAUDE_JSON for API key auth"
+  echo "shem: bootstrapped $CLAUDE_JSON for headless auth"
 fi
 
 # --- Workspace trust ----------------------------------------------------------
