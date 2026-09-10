@@ -373,7 +373,7 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 
 	var pending *db.HumanInput
 	var hi db.HumanInput
-	if h.DB.Where("ticket_id = ? AND resolved_at IS NULL", rawID).
+	if h.DB.Where("ticket_id = ? AND resolved_at IS NULL AND kind != 'feedback'", rawID).
 		Order("created_at asc").First(&hi).Error == nil {
 		pending = &hi
 	}

@@ -158,6 +158,24 @@ func (c *Client) Deregister() error {
 	return nil
 }
 
+// GetResumable returns tickets assigned to this shem that have a checkpoint
+// and were mid-execution when the shem last died.
+func (c *Client) GetResumable() ([]*ClaimResponse, error) {
+	resp, err := c.do("GET", "/api/tickets/resumable", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	var results []*ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // ClaimTicket claims a ticket for this shem.
 func (c *Client) ClaimTicket(id string) (*ClaimResponse, error) {
 	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/claim", id), nil)
@@ -170,6 +188,31 @@ func (c *Client) ClaimTicket(id string) (*ClaimResponse, error) {
 		return nil, ErrNotAvailable
 	}
 
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var result ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
+// ClaimRevision resumes work on a ticket already assigned to this shem
+// that is in the revising phase (triggered by a ticket_revise push).
+// A 409 (already picked up, or requeued in the meantime) maps to
+// ErrNotAvailable, same log-and-skip semantics as ClaimTicket.
+func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/revise-claim", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, ErrNotAvailable
+	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}

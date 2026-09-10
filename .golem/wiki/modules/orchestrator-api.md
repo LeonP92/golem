@@ -17,6 +17,7 @@
   - `GET /api/tickets/{id}` (session auth) — ticket detail + log entries
   - `GET /api/tickets/available?repo=` (API-key auth) — lists unassigned tickets
   - `POST /api/tickets/{id}/claim` (API-key auth) — atomic claim via `ClaimTicket`
+  - `POST /api/tickets/{id}/revise-claim` (API-key auth) — resumes a ticket already owned by the calling shem in the `revising` phase, via `ReviseClaim`; does not mutate `phase`/`assigned_shem` (already owned) and always returns `checkpoint_phase: "revising"`
   - `PATCH /api/tickets/{id}/phase` (API-key auth) — updates ticket phase (owner only)
   - `PATCH /api/tickets/{id}/checkpoint` (API-key auth) — updates checkpoint phase/SHA (owner only)
 - `RegisterLogRoutes(mux)` wires:
@@ -26,7 +27,7 @@
   - `POST /api/tickets/{id}/human-inputs` (API-key auth) — create a HumanInput; body `{"kind": "approval"|"feedback"|"question_answer"|"blocker_ack", "prompt": "..."}`; returns 201
   - `GET /api/tickets/{id}/human-inputs` (API-key auth) — list inputs; optional `?kind=<kind>` and `?resolved=false` filters; always returns an array
   - `PATCH /api/tickets/{id}/human-inputs/{inputID}` (API-key auth) — resolve an input; body `{"response": "..."}`
-  - `POST /api/tickets/{id}/actions` (session auth) — single dispatcher for all human-initiated actions; body `{"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer", "feedback": "...", "input_id": N, "response": "..."}`
+  - `POST /api/tickets/{id}/actions` (session auth) — single dispatcher for all human-initiated actions; body `{"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer", "feedback": "...", "input_id": N, "response": "..."}`. `request-changes` branches on the ticket's phase: on `brainstorm`/`plan` it resolves the pending `approval` HumanInput as before; on `ready-for-review` (`requestChangesFromReview`) there is no pending approval to resolve — it instead moves `phase` to `revising` and pushes a `ticket_revise` `ws.WSMessage` to the ticket's `assigned_shem` (409 if none assigned) so the owning shem can resume work
 
 `POST /api/tickets`, `GET /api/tickets`, and `GET /api/tickets/{id}` responses wrap `db.Ticket` in a `ticketResponse` that adds a resolved `created_by` username field (via `db.CreatorNames`). `createTicket` sets `CreatedByUserID` from `auth.SessionUser(r)` server-side — a client-supplied value in the request body is ignored.
 

@@ -74,10 +74,44 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.createTicket)))
 	mux.Handle("GET /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.listTickets)))
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
+	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))
 	mux.Handle("GET /api/tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.getTicket)))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
+	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("PATCH /api/tickets/{id}/phase", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updatePhase)))
 	mux.Handle("PATCH /api/tickets/{id}/checkpoint", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updateCheckpoint)))
+}
+
+// resumableTickets returns tickets assigned to this shem that have a checkpoint
+// and are in an active execution phase — i.e. were mid-run when the shem died.
+func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
+	shem := auth.ShemFromRequest(r)
+	var tickets []db.Ticket
+	h.DB.Where(
+		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ?",
+		shem.ID,
+		[]string{"unassigned", "ready-for-review", "revising", "closed"},
+	).Find(&tickets)
+
+	claims := make([]ClaimResponse, 0, len(tickets))
+	for _, t := range tickets {
+		var entries []db.LogEntry
+		h.DB.Where("ticket_id = ?", t.ID).Order("sequence_num asc").Find(&entries)
+		if entries == nil {
+			entries = []db.LogEntry{}
+		}
+		claims = append(claims, ClaimResponse{
+			TicketID:        t.ID,
+			Branch:          t.Branch,
+			RepoRemote:      t.RepoRemote,
+			Description:     t.Description,
+			CheckpointPhase: t.CheckpointPhase,
+			CheckpointSHA:   t.CheckpointSHA,
+			LogEntries:      entries,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(claims) //nolint:errcheck
 }
 
 func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
@@ -181,6 +215,50 @@ func (h *Handlers) claimTicket(w http.ResponseWriter, r *http.Request) {
 		Type:     "ticket_claimed",
 		TicketID: strPtr(resp.TicketID),
 	})
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// ReviseClaim resumes a ticket already assigned to shemID that is in the
+// revising phase. Unlike ClaimTicket it does not change phase or
+// assigned_shem — the ticket is already owned by this shem.
+func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, error) {
+	var ticket db.Ticket
+	result := h.DB.
+		Where("id = ? AND phase = 'revising' AND assigned_shem = ?", ticketID, shemID).
+		First(&ticket)
+	if result.Error != nil {
+		return nil, fmt.Errorf("ticket not available for revision")
+	}
+	var entries []db.LogEntry
+	h.DB.Where("ticket_id = ?", ticketID).Order("sequence_num asc").Find(&entries)
+	if entries == nil {
+		entries = []db.LogEntry{}
+	}
+	revisingPhase := "revising"
+	return &ClaimResponse{
+		TicketID:        ticketID,
+		Branch:          ticket.Branch,
+		RepoRemote:      ticket.RepoRemote,
+		Description:     ticket.Description,
+		CheckpointPhase: &revisingPhase,
+		CheckpointSHA:   ticket.CheckpointSHA,
+		LogEntries:      entries,
+	}, nil
+}
+
+func (h *Handlers) reviseClaim(w http.ResponseWriter, r *http.Request) {
+	id, err := parseIDFromPath(r)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	shem := auth.ShemFromRequest(r)
+	resp, err := h.ReviseClaim(id, shem.ID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }

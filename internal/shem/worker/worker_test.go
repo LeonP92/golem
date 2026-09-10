@@ -78,6 +78,106 @@ func TestWorker_ClaimsOnPush(t *testing.T) {
 	}
 }
 
+func TestWorker_ReviseOnPush(t *testing.T) {
+	revised := make(chan string, 1)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/revise-claim"):
+			parts := strings.Split(r.URL.Path, "/")
+			var id string
+			for i, p := range parts {
+				if p == "tickets" && i+1 < len(parts) {
+					id = parts[i+1]
+					break
+				}
+			}
+			revised <- id
+			revisingPhase := "revising"
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(client.ClaimResponse{ //nolint:errcheck
+				TicketID:        id,
+				Branch:          "ticket/test",
+				RepoRemote:      "r",
+				CheckpointPhase: &revisingPhase,
+			})
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/register"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]uint{"shem_id": 1}) //nolint:errcheck
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Orchestrator: srv.URL,
+		APIKey:       "k",
+		Name:         "n",
+		Repos: []config.RepoConfig{
+			{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"},
+		},
+	}
+	c := client.New(srv.URL, "k", "test-shem")
+	w := worker.New(cfg, c, nil)
+	go w.Start()
+	defer w.Shutdown()
+
+	time.Sleep(50 * time.Millisecond)
+
+	const ticketID = "uuid-revise-test"
+	w.HandleMessage(ws.WSMessage{Type: "ticket_revise", TicketID: strPtr(ticketID), Repo: "r"})
+
+	select {
+	case id := <-revised:
+		if id != ticketID {
+			t.Errorf("revise-claimed ticket %q, want %q", id, ticketID)
+		}
+	case <-time.After(time.Second):
+		t.Error("timeout: no revise-claim made")
+	}
+}
+
+func TestWorker_HandlesRevise409(t *testing.T) {
+	reviseAttempts := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/revise-claim") {
+			reviseAttempts++
+			http.Error(w, "conflict", http.StatusConflict)
+			return
+		}
+		if strings.Contains(r.URL.Path, "/register") {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]uint{"shem_id": 1}) //nolint:errcheck
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	cfg := &config.Config{
+		Orchestrator: srv.URL,
+		APIKey:       "k",
+		Name:         "n",
+		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
+	}
+	c := client.New(srv.URL, "k", "test-shem")
+	w := worker.New(cfg, c, nil)
+	go w.Start()
+	defer w.Shutdown()
+
+	time.Sleep(50 * time.Millisecond)
+
+	w.HandleMessage(ws.WSMessage{Type: "ticket_revise", TicketID: strPtr("uuid-6")})
+
+	time.Sleep(200 * time.Millisecond)
+
+	if reviseAttempts != 1 {
+		t.Errorf("expected 1 revise-claim attempt, got %d", reviseAttempts)
+	}
+}
+
 func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 	claimed := make(chan string, 1)
 

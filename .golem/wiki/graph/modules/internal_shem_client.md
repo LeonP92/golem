@@ -1,6 +1,6 @@
 # internal/shem/client
 
-This module provides the HTTP and WebSocket client layer that a shem (worker node) uses to communicate with the Golem orchestrator server. The HTTP client wraps all REST API calls behind a retry-on-5xx policy with exponential back-off, covering shem registration/deregistration, ticket claiming, phase and checkpoint updates, structured log posting, document file streaming, and human-input polling and acknowledgement. The WebSocket client establishes a push channel to receive real-time orchestrator events, maintains connection liveness via periodic heartbeat pings, and dispatches decoded messages to a caller-supplied handler.
+This module provides the HTTP and WebSocket client layer that a shem (worker node) uses to communicate with the Golem orchestrator server. The HTTP client wraps all REST API calls behind a retry-on-5xx policy with exponential back-off, covering shem registration/deregistration, ticket claiming (including resuming revising-phase tickets via revise-claim), phase and checkpoint updates, structured log posting, document file streaming, and human-input polling and acknowledgement. The WebSocket client establishes a push channel to receive real-time orchestrator events, maintains connection liveness via periodic heartbeat pings, and dispatches decoded messages to a caller-supplied handler.
 
 ## Functions
 
@@ -8,6 +8,7 @@ This module provides the HTTP and WebSocket client layer that a shem (worker nod
 - Register
 - Deregister
 - ClaimTicket
+- ClaimRevision
 - PostPhase
 - PostCheckpoint
 - PostLog
@@ -23,6 +24,8 @@ This module provides the HTTP and WebSocket client layer that a shem (worker nod
 - TestClient_ExhaustsRetries
 - TestClient_Register
 - TestClient_ClaimTicket_409
+- TestClient_ClaimRevision_Success
+- TestClient_ClaimRevision_409
 - TestClient_GetAvailable
 - TestClient_GetAvailable_Empty
 - Connect

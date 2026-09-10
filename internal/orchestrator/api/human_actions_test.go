@@ -6,8 +6,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/gorilla/websocket"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/leonp92/golem/internal/orchestrator/api"
@@ -52,18 +55,53 @@ func makeSessionCookie(t *testing.T, h *api.Handlers, userID uint) *http.Cookie 
 // setupActionTest creates a db, handlers, mux with human routes registered, and returns a session cookie.
 func setupActionTest(t *testing.T) (*api.Handlers, *http.ServeMux, *http.Cookie) {
 	t.Helper()
+	h, mux, _, cookie := setupActionTestWithHub(t)
+	return h, mux, cookie
+}
+
+// setupActionTestWithHub is like setupActionTest but also exposes the Hub, so
+// tests can register a fake shem connection and assert on pushed messages.
+func setupActionTestWithHub(t *testing.T) (*api.Handlers, *http.ServeMux, *ws.Hub, *http.Cookie) {
+	t.Helper()
 	gdb, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	h := api.NewHandlers(gdb, ws.NewHub(), sse.NewBroker())
+	hub := ws.NewHub()
+	h := api.NewHandlers(gdb, hub, sse.NewBroker())
 	mux := http.NewServeMux()
 	h.RegisterHumanRoutes(mux)
 
 	user := db.User{Username: "testadmin", PasswordHash: "x"}
 	gdb.Create(&user)
 	cookie := makeSessionCookie(t, h, user.ID)
-	return h, mux, cookie
+	return h, mux, hub, cookie
+}
+
+// connectFakeShem registers a real WebSocket connection with the hub for shemID,
+// so tests can assert on messages pushed via Hub.Push.
+func connectFakeShem(t *testing.T, hub *ws.Hub, shemID uint) *websocket.Conn {
+	t.Helper()
+	registered := make(chan struct{})
+	upgrader := websocket.Upgrader{CheckOrigin: func(r *http.Request) bool { return true }}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		hub.Register(shemID, conn)
+		close(registered)
+	}))
+	t.Cleanup(srv.Close)
+
+	url := "ws" + strings.TrimPrefix(srv.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { client.Close() })
+	<-registered
+	return client
 }
 
 // TestApproveTicket_TransitionsPhase verifies that POST /api/tickets/{id}/approve
@@ -451,6 +489,180 @@ func TestPendingApproval_ReturnsPending(t *testing.T) {
 	}
 	if len(results) == 0 || results[0].Kind != "approval" {
 		t.Errorf("expected approval result, got %+v", results)
+	}
+}
+
+// TestActionRequestChanges_FromReadyForReview_MovesToRevisingAndPushes verifies
+// that request-changes on a ready-for-review ticket moves it to revising,
+// records feedback, and pushes a ticket_revise message to the assigned shem.
+func TestActionRequestChanges_FromReadyForReview_MovesToRevisingAndPushes(t *testing.T) {
+	h, mux, hub, cookie := setupActionTestWithHub(t)
+
+	shemID := uint(42)
+	ticket := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo",
+		Branch:       "b",
+		Description:  "d",
+		Phase:        "ready-for-review",
+		AssignedShem: &shemID,
+	}
+	h.DB.Create(&ticket)
+
+	conn := connectFakeShem(t, hub, shemID)
+
+	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "please fix the bug"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "revising" {
+		t.Errorf("expected phase=revising, got %q", got.Phase)
+	}
+
+	var fb db.HumanInput
+	if err := h.DB.Where("ticket_id = ? AND kind = 'feedback'", ticket.ID).First(&fb).Error; err != nil {
+		t.Fatalf("feedback HumanInput not created: %v", err)
+	}
+	if fb.Prompt != "please fix the bug" {
+		t.Errorf("expected prompt %q, got %q", "please fix the bug", fb.Prompt)
+	}
+
+	var logs []db.LogEntry
+	h.DB.Where("ticket_id = ? AND entry_type = 'HUMAN_FEEDBACK'", ticket.ID).Find(&logs)
+	if len(logs) != 1 {
+		t.Fatalf("expected 1 HUMAN_FEEDBACK log, got %d", len(logs))
+	}
+
+	conn.SetReadDeadline(time.Now().Add(2 * time.Second)) //nolint:errcheck
+	_, data, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("expected ticket_revise push, got error: %v", err)
+	}
+	var msg ws.WSMessage
+	if err := json.Unmarshal(data, &msg); err != nil {
+		t.Fatalf("unmarshal push: %v", err)
+	}
+	if msg.Type != "ticket_revise" {
+		t.Errorf("expected type=ticket_revise, got %q", msg.Type)
+	}
+	if msg.TicketID == nil || *msg.TicketID != ticket.ID {
+		t.Errorf("expected ticket_id=%s, got %v", ticket.ID, msg.TicketID)
+	}
+}
+
+// TestActionRequestChanges_FromReadyForReview_NoAssignedShem_Conflict verifies
+// 409 when the ticket has no assigned shem to wake up.
+func TestActionRequestChanges_FromReadyForReview_NoAssignedShem_Conflict(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "ready-for-review"}
+	h.DB.Create(&ticket)
+
+	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "fix it"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Errorf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "ready-for-review" {
+		t.Errorf("expected phase unchanged, got %q", got.Phase)
+	}
+}
+
+// TestActionRequestChanges_AlreadyRevising_FallsThroughTo404 verifies that a
+// ticket already moved to revising (e.g. a second request-changes submitted
+// before the first one's UI reloaded) does not re-enter the ready-for-review
+// branch — it falls through to the legacy approval-lookup branch, which 404s
+// since there's no pending approval, and the phase is left unchanged.
+func TestActionRequestChanges_AlreadyRevising_FallsThroughTo404(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+
+	shemID := uint(7)
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "revising", AssignedShem: &shemID}
+	h.DB.Create(&ticket)
+
+	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "fix it"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	// ticket.Phase == "revising" here, so actionRequestChanges falls through to
+	// the brainstorm/plan branch, which 404s because there's no pending approval.
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "revising" {
+		t.Errorf("expected phase unchanged, got %q", got.Phase)
+	}
+}
+
+// TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange verifies the
+// existing brainstorm/plan request-changes behavior is unchanged: it resolves
+// the pending approval, records feedback, and does not touch ticket.Phase.
+func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
+	h.DB.Create(&ticket)
+	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "approve?"}
+	h.DB.Create(&hi)
+
+	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "needs more detail"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "brainstorm" {
+		t.Errorf("expected phase unchanged (brainstorm), got %q", got.Phase)
+	}
+
+	var resolvedHI db.HumanInput
+	h.DB.First(&resolvedHI, hi.ID)
+	if resolvedHI.ResolvedAt == nil {
+		t.Error("expected approval to be resolved")
+	}
+	if resolvedHI.Response == nil || *resolvedHI.Response != "changes_requested" {
+		t.Errorf("expected response='changes_requested', got %v", resolvedHI.Response)
+	}
+
+	var fb db.HumanInput
+	if err := h.DB.Where("ticket_id = ? AND kind = 'feedback'", ticket.ID).First(&fb).Error; err != nil {
+		t.Fatalf("feedback HumanInput not created: %v", err)
+	}
+	if fb.Prompt != "needs more detail" {
+		t.Errorf("expected prompt %q, got %q", "needs more detail", fb.Prompt)
 	}
 }
 

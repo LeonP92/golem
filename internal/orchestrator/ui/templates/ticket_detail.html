@@ -84,6 +84,9 @@
         <span class="iconify" data-icon="heroicons:arrow-path"></span>
         Re-queue
       </button>
+      {{if eq .Ticket.Phase "ready-for-review"}}
+      {{template "request_changes_form" .Ticket.ID}}
+      {{end}}
     </div>
     {{end}}
 

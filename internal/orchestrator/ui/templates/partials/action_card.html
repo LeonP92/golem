@@ -1,3 +1,24 @@
+{{define "request_changes_form"}}
+<details>
+  <summary class="btn btn-outline btn-warning btn-sm gap-1.5 w-full cursor-pointer list-none">
+    <span class="iconify" data-icon="heroicons:pencil-square"></span>
+    Request Changes
+  </summary>
+  <form hx-post="/api/tickets/{{.}}/actions"
+        hx-on::after-request="if(event.detail.successful) window.location.reload()"
+        class="mt-2 flex flex-col gap-2">
+    <input type="hidden" name="action" value="request-changes">
+    <textarea name="feedback" rows="3"
+              class="textarea textarea-bordered textarea-sm w-full"
+              required placeholder="What needs to change?"></textarea>
+    <button type="submit" class="btn btn-warning btn-sm gap-1.5">
+      <span class="iconify" data-icon="heroicons:paper-airplane"></span>
+      Send Feedback
+    </button>
+  </form>
+</details>
+{{end}}
+
 {{define "action_card"}}
 <div class="action-card" id="action-{{.ID}}">
   <div class="flex items-start justify-between mb-2">
@@ -17,24 +38,7 @@
           Approve
         </button>
       </form>
-      <details>
-        <summary class="btn btn-outline btn-warning btn-sm gap-1.5 w-full cursor-pointer list-none">
-          <span class="iconify" data-icon="heroicons:pencil-square"></span>
-          Request Changes
-        </summary>
-        <form hx-post="/api/tickets/{{.TicketID}}/actions"
-              hx-on::after-request="if(event.detail.successful) window.location.reload()"
-              class="mt-2 flex flex-col gap-2">
-          <input type="hidden" name="action" value="request-changes">
-          <textarea name="feedback" rows="3"
-                    class="textarea textarea-bordered textarea-sm w-full"
-                    required placeholder="What needs to change?"></textarea>
-          <button type="submit" class="btn btn-warning btn-sm gap-1.5">
-            <span class="iconify" data-icon="heroicons:paper-airplane"></span>
-            Send Feedback
-          </button>
-        </form>
-      </details>
+      {{template "request_changes_form" .TicketID}}
     </div>
   {{else if eq .Kind "blocker_ack"}}
     <form hx-post="/api/tickets/{{.TicketID}}/actions"

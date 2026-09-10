@@ -15,7 +15,6 @@ repos:
   - path: /repos/test
     remote: local://test
 
-  # Optional: your actual project repo.
-  # Uncomment and set GOLEM_REPO_PATH=/path/to/your/repo on the host.
-  # - path: /repos/myproject
-  #   remote: https://github.com/your-org/your-repo
+  # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.
+  - path: /repos/golem
+    remote: https://github.com/LeonP92/golem

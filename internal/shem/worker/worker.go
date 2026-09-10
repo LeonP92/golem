@@ -53,8 +53,8 @@ func (w *Worker) SetWSClient(wsc *client.WSClient) {
 	w.wsc = wsc
 }
 
-// Start registers with the orchestrator and begins the poll loop.
-// It does not block; call Shutdown to stop.
+// Start registers with the orchestrator, resumes any in-progress tickets from
+// before a restart, then begins the poll loop. It does not block.
 func (w *Worker) Start() {
 	repos := make([]string, len(w.cfg.Repos))
 	for i, r := range w.cfg.Repos {
@@ -64,7 +64,56 @@ func (w *Worker) Start() {
 		log.Printf("worker: register error: %v", err)
 	}
 
+	if resumable, err := w.client.GetResumable(); err != nil {
+		log.Printf("worker: get resumable error: %v", err)
+	} else {
+		for _, claim := range resumable {
+			go w.tryResumeTicket(claim)
+		}
+	}
+
 	go w.pollLoop()
+}
+
+// tryResumeTicket resumes a ticket that was mid-execution when the shem last
+// died. Unlike tryClaimAndRun it skips the claim step — the ticket is already
+// owned by this shem.
+func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
+	w.mu.Lock()
+	if _, ok := w.running[claim.TicketID]; ok {
+		w.mu.Unlock()
+		return
+	}
+	if len(w.running) >= w.maxConcurrent() {
+		w.mu.Unlock()
+		log.Printf("worker: concurrency limit reached, skipping resume of ticket %s", claim.TicketID)
+		return
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	w.running[claim.TicketID] = cancel
+	w.mu.Unlock()
+
+	log.Printf("worker: resuming ticket %s from checkpoint %q", claim.TicketID, *claim.CheckpointPhase)
+
+	if err := w.client.PostPhase(claim.TicketID, *claim.CheckpointPhase); err != nil {
+		log.Printf("worker: resume: failed to reset phase for ticket %s: %v", claim.TicketID, err)
+	}
+
+	defer func() {
+		cancel()
+		w.mu.Lock()
+		delete(w.running, claim.TicketID)
+		w.mu.Unlock()
+	}()
+
+	if w.executor != nil {
+		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			log.Printf("worker: ticket %s resume error: %v", claim.TicketID, err)
+			if phaseErr := w.client.PostPhase(claim.TicketID, "needs-attention"); phaseErr != nil {
+				log.Printf("worker: post phase error: %v", phaseErr)
+			}
+		}
+	}
 }
 
 // HandleMessage processes a WebSocket push message from the orchestrator.
@@ -77,6 +126,10 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 	case "ticket_closed":
 		if msg.TicketID != nil {
 			go w.cleanupTicket(msg.Repo, *msg.TicketID)
+		}
+	case "ticket_revise":
+		if msg.TicketID != nil {
+			go w.tryReviseAndRun(*msg.TicketID)
 		}
 	}
 }
@@ -139,6 +192,56 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
 			log.Printf("worker: ticket %s error: %v", ticketID, err)
+			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
+				log.Printf("worker: post phase error: %v", phaseErr)
+			}
+		}
+	}
+}
+
+// tryReviseAndRun resumes a ticket already owned by this shem that has
+// moved to revising (a human requested changes on ready-for-review).
+// On 409 (ErrNotAvailable — e.g. requeued before this shem reconnected)
+// it returns silently, same as tryClaimAndRun.
+func (w *Worker) tryReviseAndRun(ticketID string) {
+	w.mu.Lock()
+	if _, ok := w.running[ticketID]; ok {
+		w.mu.Unlock()
+		return
+	}
+	if len(w.running) >= w.maxConcurrent() {
+		w.mu.Unlock()
+		return
+	}
+	w.running[ticketID] = func() {}
+	w.mu.Unlock()
+
+	claim, err := w.client.ClaimRevision(ticketID)
+	if err != nil {
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+		if err != client.ErrNotAvailable {
+			log.Printf("worker: revise-claim ticket %s error: %v", ticketID, err)
+		}
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.running[ticketID] = cancel
+	w.mu.Unlock()
+
+	defer func() {
+		cancel()
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+	}()
+
+	if w.executor != nil {
+		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			log.Printf("worker: ticket %s revise error: %v", ticketID, err)
 			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
 			}

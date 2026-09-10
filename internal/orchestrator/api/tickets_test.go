@@ -148,6 +148,101 @@ func TestUpdatePhase(t *testing.T) {
 	}
 }
 
+func TestReviseClaim_Success(t *testing.T) {
+	h, _ := setupTicketTest(t)
+	shem := seedShem(t, h, "revise-shem", "revisekey")
+
+	sha := "abc123"
+	ticket := db.Ticket{
+		RepoRemote:    "https://github.com/org/repo-revise",
+		Branch:        "ticket/revise",
+		Description:   "revise test",
+		Phase:         "revising",
+		AssignedShem:  &shem.ID,
+		CheckpointSHA: &sha,
+	}
+	h.DB.Create(&ticket)
+
+	resp, err := h.ReviseClaim(ticket.ID, shem.ID)
+	if err != nil {
+		t.Fatalf("ReviseClaim: %v", err)
+	}
+	if resp.CheckpointPhase == nil || *resp.CheckpointPhase != "revising" {
+		t.Errorf("expected checkpoint_phase=revising, got %v", resp.CheckpointPhase)
+	}
+	if resp.CheckpointSHA == nil || *resp.CheckpointSHA != sha {
+		t.Errorf("expected checkpoint_sha=%s, got %v", sha, resp.CheckpointSHA)
+	}
+}
+
+func TestReviseClaim_WrongShem_Conflict(t *testing.T) {
+	h, _ := setupTicketTest(t)
+	owner := seedShem(t, h, "owner-shem", "ownerkey")
+	other := seedShem(t, h, "other-shem", "otherkey")
+
+	ticket := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo-revise2",
+		Branch:       "ticket/revise2",
+		Description:  "revise test 2",
+		Phase:        "revising",
+		AssignedShem: &owner.ID,
+	}
+	h.DB.Create(&ticket)
+
+	if _, err := h.ReviseClaim(ticket.ID, other.ID); err == nil {
+		t.Fatal("expected error for wrong shem, got nil")
+	}
+}
+
+func TestReviseClaim_WrongPhase_Conflict(t *testing.T) {
+	h, _ := setupTicketTest(t)
+	shem := seedShem(t, h, "revise-shem-3", "revisekey3")
+
+	ticket := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo-revise3",
+		Branch:       "ticket/revise3",
+		Description:  "revise test 3",
+		Phase:        "ready-for-review",
+		AssignedShem: &shem.ID,
+	}
+	h.DB.Create(&ticket)
+
+	if _, err := h.ReviseClaim(ticket.ID, shem.ID); err == nil {
+		t.Fatal("expected error for wrong phase, got nil")
+	}
+}
+
+func TestReviseClaim_HTTPEndpoint(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	shem := seedShem(t, h, "revise-shem-4", "revisekey4")
+
+	ticket := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo-revise4",
+		Branch:       "ticket/revise4",
+		Description:  "revise test 4",
+		Phase:        "revising",
+		AssignedShem: &shem.ID,
+	}
+	h.DB.Create(&ticket)
+
+	url := fmt.Sprintf("/api/tickets/%s/revise-claim", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, nil)
+	req.Header.Set("Authorization", "Bearer revisekey4")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp api.ClaimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CheckpointPhase == nil || *resp.CheckpointPhase != "revising" {
+		t.Errorf("expected checkpoint_phase=revising, got %v", resp.CheckpointPhase)
+	}
+}
+
 func TestAppendLog(t *testing.T) {
 	h, mux := setupTicketTest(t)
 	seedShem(t, h, "log-shem", "logkey")

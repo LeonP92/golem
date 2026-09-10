@@ -102,6 +102,46 @@ func TestClient_ClaimTicket_409(t *testing.T) {
 	}
 }
 
+func TestClient_ClaimRevision_Success(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/tickets/some-uuid/revise-claim" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		revisingPhase := "revising"
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(client.ClaimResponse{ //nolint:errcheck
+			TicketID:        "some-uuid",
+			CheckpointPhase: &revisingPhase,
+		})
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "test-shem")
+	c.RetryInitial = 10 * time.Millisecond
+	resp, err := c.ClaimRevision("some-uuid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.CheckpointPhase == nil || *resp.CheckpointPhase != "revising" {
+		t.Errorf("expected checkpoint_phase=revising, got %v", resp.CheckpointPhase)
+	}
+}
+
+func TestClient_ClaimRevision_409(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "conflict", http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "test-shem")
+	c.RetryInitial = 10 * time.Millisecond
+	_, err := c.ClaimRevision("some-uuid")
+	if err != client.ErrNotAvailable {
+		t.Errorf("expected ErrNotAvailable, got %v", err)
+	}
+}
+
 func TestClient_GetAvailable(t *testing.T) {
 	const wantID = "abc123-uuid"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

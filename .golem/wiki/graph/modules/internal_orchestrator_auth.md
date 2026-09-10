@@ -1,6 +1,6 @@
 # internal/orchestrator/auth
 
-This module provides two independent HTTP authentication mechanisms for the Golem orchestrator: API key authentication for machine-to-machine shem node requests (Bearer token validated against bcrypt hashes stored in the database), and session-based authentication for human users accessing the web UI (random token stored as SHA-256 hash in the database with a 7-day TTL, delivered via HTTP-only cookie). Both mechanisms inject their authenticated principal into the request context for downstream handlers to retrieve.
+This module provides two independent HTTP authentication mechanisms for the Golem orchestrator: API key authentication for machine-to-machine shem node requests, validating an "X-Shem-Name" header plus a Bearer token against a bcrypt hash stored on the db.Shem record, and session-based authentication for human web UI users, issuing a random 32-byte token whose SHA-256 hash is stored in db.Session with a 7-day TTL and delivered via an HTTP-only "golem_session" cookie. Both mechanisms are implemented as net/http middleware that inject their authenticated principal (a *db.Shem or *db.User) into the request context via unexported context keys, with accessor functions to retrieve the principal in downstream handlers; API key failures return 401 while session failures redirect to /login.
 
 ## Functions
 
@@ -8,6 +8,7 @@ This module provides two independent HTTP authentication mechanisms for the Gole
 - ShemFromRequest
 - TestAPIKeyAuth
 - TestAPIKeyAuth_Unauthorized
+- TestAPIKeyAuth_MissingName
 - CreateSession
 - RequireSession
 - SessionUser

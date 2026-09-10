@@ -15,14 +15,6 @@ import (
 
 // RecoverTicket ensures the local repo is in the correct state for resuming a
 // checkpointed ticket, then reconstructs the ticket's local state files.
-//
-// Steps:
-//  1. Clone repo if not present at cfg.RepoPath (resolved from claim.RepoRemote).
-//  2. git fetch origin
-//  3. git checkout claim.Branch (creating tracking branch if necessary)
-//  4. git reset --hard claim.CheckpointSHA
-//  5. Write .golem/tickets/<id>/state.json and log.jsonl from claim data.
-//
 // Idempotent: safe to call on an already-present worktree.
 func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config.Config) error {
 	if claim.CheckpointPhase == nil || claim.CheckpointSHA == nil {
@@ -38,25 +30,41 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 		return fmt.Errorf("RecoverTicket: clone: %w", err)
 	}
 
-	if err := gitRun(ctx, repoPath, "fetch", "origin"); err != nil {
-		return fmt.Errorf("RecoverTicket: fetch: %w", err)
-	}
-
-	if err := checkoutBranch(ctx, repoPath, claim.Branch); err != nil {
-		return fmt.Errorf("RecoverTicket: checkout: %w", err)
-	}
-
-	if err := gitRun(ctx, repoPath, "reset", "--hard", *claim.CheckpointSHA); err != nil {
-		return fmt.Errorf("RecoverTicket: reset: %w", err)
-	}
-
 	ticketDir := filepath.Join(repoPath, ".golem", "tickets", claim.TicketID)
-	worktreePath := filepath.Join(repoPath, ".golem", "tickets", claim.TicketID, "worktree")
+	worktreePath := filepath.Join(ticketDir, "worktree")
+	worktreeBranch := "ticket/" + claim.TicketID
+
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		// Fetch in case the branch was pushed; ignore errors (no_push mode has no remote branch).
+		_ = gitRun(ctx, repoPath, "fetch", "origin")
+		if err := ensureWorktree(ctx, repoPath, worktreePath, worktreeBranch); err != nil {
+			return fmt.Errorf("RecoverTicket: worktree: %w", err)
+		}
+	}
+
+	if sha := safeDeref(claim.CheckpointSHA); sha != "" {
+		if err := gitRun(ctx, worktreePath, "reset", "--hard", sha); err != nil {
+			return fmt.Errorf("RecoverTicket: reset: %w", err)
+		}
+	}
+
 	if err := ReconstructState(ticketDir, worktreePath, claim); err != nil {
 		return fmt.Errorf("RecoverTicket: reconstruct state: %w", err)
 	}
 
 	return nil
+}
+
+// ensureWorktree adds a git worktree at worktreePath on branch, preferring the
+// local branch (covers no_push mode) and falling back to origin/<branch>.
+func ensureWorktree(ctx context.Context, repoPath, worktreePath, branch string) error {
+	if gitRun(ctx, repoPath, "rev-parse", "--verify", branch) == nil {
+		return gitRun(ctx, repoPath, "worktree", "add", worktreePath, branch)
+	}
+	if gitRun(ctx, repoPath, "rev-parse", "--verify", "origin/"+branch) == nil {
+		return gitRun(ctx, repoPath, "worktree", "add", "--track", "-b", branch, worktreePath, "origin/"+branch)
+	}
+	return fmt.Errorf("branch %q not found locally or on origin", branch)
 }
 
 // stateFile matches the fields required by ticket.Load (base golem's state.go).
@@ -141,15 +149,6 @@ func isSafeRemote(remote string) bool {
 	return false
 }
 
-// checkoutBranch checks out branch, creating a local tracking branch if needed.
-func checkoutBranch(ctx context.Context, repoPath, branch string) error {
-	// First try a plain checkout (branch already exists locally).
-	if err := gitRun(ctx, repoPath, "checkout", branch); err == nil {
-		return nil
-	}
-	// Fall back to creating the branch tracking origin.
-	return gitRun(ctx, repoPath, "checkout", "-b", branch, "origin/"+branch)
-}
 
 // gitRun runs a git sub-command in dir (empty string means no Dir override).
 func gitRun(ctx context.Context, dir string, args ...string) error {
