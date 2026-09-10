@@ -72,10 +72,15 @@ services:
       # session. No ANTHROPIC_API_KEY needed.
       #   Windows: CLAUDE_HOME=C:\Users\you\.claude
       #   Mac/Linux: CLAUDE_HOME=$HOME/.claude
-      # Leave CLAUDE_HOME unset to use a throwaway volume (API key mode only).
+      # Leave CLAUDE_HOME unset to use a throwaway volume (OAuth-token/API-key
+      # modes only).
       - ${CLAUDE_HOME:-shem-claude}:/root/.claude
     environment:
-      # ── Auth mode: API key (option B) ──────────────────────────────────────
+      # ── Auth mode: OAuth token (option B) ───────────────────────────────────
+      # Set CLAUDE_CODE_OAUTH_TOKEN in .env (generated via `claude setup-token`)
+      # and leave CLAUDE_HOME unset. Same headless bootstrap as API-key mode.
+      - CLAUDE_CODE_OAUTH_TOKEN=${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # ── Auth mode: API key (option C) ───────────────────────────────────────
       # Set ANTHROPIC_API_KEY in .env and leave CLAUDE_HOME unset.
       # The entrypoint bootstraps a headless Claude Code config automatically.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
