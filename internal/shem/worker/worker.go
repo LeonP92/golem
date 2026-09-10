@@ -78,6 +78,10 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 		if msg.TicketID != nil {
 			go w.cleanupTicket(msg.Repo, *msg.TicketID)
 		}
+	case "ticket_revise":
+		if msg.TicketID != nil {
+			go w.tryReviseAndRun(*msg.TicketID)
+		}
 	}
 }
 
@@ -139,6 +143,56 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
 			log.Printf("worker: ticket %s error: %v", ticketID, err)
+			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
+				log.Printf("worker: post phase error: %v", phaseErr)
+			}
+		}
+	}
+}
+
+// tryReviseAndRun resumes a ticket already owned by this shem that has
+// moved to revising (a human requested changes on ready-for-review).
+// On 409 (ErrNotAvailable — e.g. requeued before this shem reconnected)
+// it returns silently, same as tryClaimAndRun.
+func (w *Worker) tryReviseAndRun(ticketID string) {
+	w.mu.Lock()
+	if _, ok := w.running[ticketID]; ok {
+		w.mu.Unlock()
+		return
+	}
+	if len(w.running) >= w.maxConcurrent() {
+		w.mu.Unlock()
+		return
+	}
+	w.running[ticketID] = func() {}
+	w.mu.Unlock()
+
+	claim, err := w.client.ClaimRevision(ticketID)
+	if err != nil {
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+		if err != client.ErrNotAvailable {
+			log.Printf("worker: revise-claim ticket %s error: %v", ticketID, err)
+		}
+		return
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.running[ticketID] = cancel
+	w.mu.Unlock()
+
+	defer func() {
+		cancel()
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+	}()
+
+	if w.executor != nil {
+		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			log.Printf("worker: ticket %s revise error: %v", ticketID, err)
 			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
 			}
