@@ -194,6 +194,13 @@ type TicketRow struct {
 	HasPendingApproval bool
 }
 
+// ShemRow is the view-model for a single shem on the shems page.
+type ShemRow struct {
+	Shem          db.Shem
+	ActiveTickets []db.Ticket
+	RepoList      []string
+}
+
 func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 	var tickets []db.Ticket
 	h.DB.Order("created_at desc").Find(&tickets)
@@ -245,8 +252,31 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 	var shems []db.Shem
 	h.DB.Order("name asc").Find(&shems)
+
+	var activeTickets []db.Ticket
+	h.DB.Where("phase NOT IN ('closed','unassigned') AND assigned_shem IS NOT NULL").Find(&activeTickets)
+	ticketsByShem := make(map[uint][]db.Ticket)
+	for _, t := range activeTickets {
+		if t.AssignedShem != nil {
+			ticketsByShem[*t.AssignedShem] = append(ticketsByShem[*t.AssignedShem], t)
+		}
+	}
+
+	rows := make([]ShemRow, len(shems))
+	for i, s := range shems {
+		var repos []string
+		if err := json.Unmarshal([]byte(s.Repos), &repos); err != nil {
+			repos = nil
+		}
+		rows[i] = ShemRow{
+			Shem:          s,
+			ActiveTickets: ticketsByShem[s.ID],
+			RepoList:      repos,
+		}
+	}
+
 	h.render(w, "shems", map[string]any{
-		"Shems": shems,
+		"Shems": rows,
 		"Nav":   "shems",
 	})
 }

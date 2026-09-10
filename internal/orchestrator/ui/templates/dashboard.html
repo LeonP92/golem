@@ -5,8 +5,12 @@
   hx-select="#dashboard-live"
   hx-target="#dashboard-live"
   hx-swap="outerHTML">
+
 <div class="flex items-center justify-between mb-6">
-  <h1 class="text-2xl font-bold">Dashboard</h1>
+  <div>
+    <h1 class="text-2xl font-bold">Dashboard</h1>
+    <p class="text-xs text-base-content/40 mt-0.5" id="dash-updated">Updated just now</p>
+  </div>
   <a href="/tickets/new" class="btn btn-primary btn-sm gap-1.5">
     <span class="iconify" data-icon="heroicons:plus"></span>
     New Ticket
@@ -15,36 +19,50 @@
 
 <div class="card bg-base-100 shadow-sm">
   <div class="card-body p-0">
-    <table class="table table-zebra">
-      <thead>
-        <tr>
-          <th class="w-12">ID</th>
-          <th>Description</th>
-          <th>Repo</th>
-          <th>Phase</th>
-          <th>Shem</th>
-          <th>Created by</th>
-          <th>Age</th>
-          <th class="w-12"></th>
-        </tr>
-      </thead>
-      <tbody>
-        {{range .Tickets}}
-          {{template "ticket_row" .}}
-        {{else}}
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
           <tr>
-            <td colspan="8" class="text-center py-12 text-base-content/50">
-              <div class="flex flex-col items-center gap-2">
-                <span class="iconify text-4xl" data-icon="heroicons:inbox"></span>
-                <p>No tickets yet.</p>
-                <a href="/tickets/new" class="btn btn-primary btn-sm">Create one</a>
-              </div>
-            </td>
+            <th class="w-20">ID</th>
+            <th>Description</th>
+            <th>Phase</th>
+            <th>Shem</th>
+            <th>Age</th>
+            <th class="w-8"></th>
           </tr>
-        {{end}}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {{range .Tickets}}
+            {{template "ticket_row" .}}
+          {{else}}
+            <tr>
+              <td colspan="6" class="text-center py-12 text-base-content/50">
+                <div class="flex flex-col items-center gap-2">
+                  <span class="iconify text-4xl" data-icon="heroicons:inbox"></span>
+                  <p>No tickets yet.</p>
+                  <a href="/tickets/new" class="btn btn-primary btn-sm">Create one</a>
+                </div>
+              </td>
+            </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
   </div>
 </div>
 </div>
+
+<script>
+  (function() {
+    function updateTimestamp() {
+      var el = document.getElementById('dash-updated');
+      if (el) el.textContent = 'Updated just now';
+    }
+    document.addEventListener('htmx:afterSwap', function(e) {
+      if (e.detail.target && e.detail.target.id === 'dashboard-live') {
+        updateTimestamp();
+      }
+    });
+  })();
+</script>
 {{end}}

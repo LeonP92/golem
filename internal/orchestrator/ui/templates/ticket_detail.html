@@ -1,60 +1,37 @@
 {{define "page_content"}}
 <div id="ticket-live">
 
-  <div class="mb-4">
-    <a href="/dashboard" class="btn btn-ghost btn-sm gap-1.5 -ml-2 mb-2">
+  {{/* Header */}}
+  <div class="mb-5">
+    <a href="/dashboard" class="btn btn-ghost btn-sm gap-1.5 -ml-2 mb-3 text-base-content/60">
       <span class="iconify" data-icon="heroicons:arrow-left"></span>
       Dashboard
     </a>
-    <div class="flex items-start justify-between">
-      <div>
-        <h1 class="text-2xl font-bold">Ticket <span class="font-mono text-base">{{slice .Ticket.ID 0 8}}</span></h1>
-        <p class="text-base-content/70 mt-1">{{.Ticket.Description}}</p>
+    <div class="flex items-start justify-between gap-4">
+      <div class="min-w-0">
+        <div class="flex items-center gap-2 flex-wrap">
+          <h1 class="text-xl font-bold font-mono">{{slice .Ticket.ID 0 8}}</h1>
+          <span class="badge badge-md phase-{{.Ticket.Phase}} rounded-md font-medium">{{template "phase_label" .Ticket.Phase}}</span>
+          {{if eq .Ticket.Phase "ready-for-review"}}
+          <a href="{{.Ticket.RepoRemote}}/tree/{{.Ticket.Branch}}" target="_blank"
+             class="btn btn-xs btn-ghost gap-1 text-base-content/60">
+            <span class="iconify" data-icon="heroicons:arrow-top-right-on-square"></span>
+            View Branch
+          </a>
+          {{end}}
+        </div>
+        <p class="text-base-content/70 mt-1 text-sm">{{.Ticket.Description}}</p>
       </div>
-      <span class="badge badge-lg phase-{{.Ticket.Phase}} rounded-md px-3 py-1.5 font-medium whitespace-nowrap self-start">
-        {{.Ticket.Phase}}
-      </span>
     </div>
   </div>
 
   <div class="flex flex-col gap-4">
 
-    {{/* Details — collapsible, closed by default */}}
-    <div class="collapse collapse-arrow bg-base-100 shadow-sm border border-base-300 rounded-box">
-      <input type="checkbox" id="collapse-details" />
-      <div class="collapse-title font-semibold flex items-center gap-2 py-3">
-        <span class="iconify text-base-content/50" data-icon="heroicons:information-circle"></span>
-        Details
-      </div>
-      <div class="collapse-content px-4 pb-4">
-        <dl class="grid gap-x-6 gap-y-1.5 text-sm" style="grid-template-columns:auto 1fr">
-          <dt class="text-base-content/60">Repo</dt>
-          <dd class="font-mono text-xs truncate" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</dd>
-          <dt class="text-base-content/60">Branch</dt>
-          <dd class="font-mono text-xs">
-            {{if eq .Ticket.Phase "ready-for-review"}}
-              <a href="{{.Ticket.RepoRemote}}/tree/{{.Ticket.Branch}}" target="_blank" class="link">{{.Ticket.Branch}}</a>
-            {{else}}
-              {{.Ticket.Branch}}
-            {{end}}
-          </dd>
-          {{if .Ticket.CheckpointPhase}}
-          <dt class="text-base-content/60">Checkpoint</dt>
-          <dd class="font-mono text-xs">{{.Ticket.CheckpointPhase}} @ {{.Ticket.CheckpointSHA}}</dd>
-          {{end}}
-          <dt class="text-base-content/60">Created</dt>
-          <dd class="text-xs">{{.Ticket.CreatedAt.Format "2006-01-02 15:04"}}</dd>
-          <dt class="text-base-content/60">Created by</dt>
-          <dd class="text-xs">{{if .CreatedByName}}{{.CreatedByName}}{{else}}unknown{{end}}</dd>
-        </dl>
-      </div>
-    </div>
-
-    {{/* Action Required */}}
+    {{/* Action Required — shown first when present */}}
     {{if .PendingInput}}
-    <div class="card bg-warning/10 border border-warning shadow-sm">
+    <div class="card border-l-4 border-warning bg-warning/10 shadow-sm">
       <div class="card-body p-4">
-        <h2 class="font-semibold text-sm text-warning flex items-center gap-1.5">
+        <h2 class="font-semibold text-sm text-warning flex items-center gap-1.5 mb-2">
           <span class="iconify" data-icon="heroicons:exclamation-triangle"></span>
           Action Required
         </h2>
@@ -72,62 +49,93 @@
         hx-confirm="Close this ticket? This marks the work as done."
         hx-on::after-request="if(event.detail.successful) window.location.reload()">
         <span class="iconify" data-icon="heroicons:check-circle"></span>
-        Close
+        Mark Complete
       </button>
-      <button class="btn btn-sm btn-outline btn-warning gap-1.5"
+      <button class="btn btn-sm btn-ghost gap-1.5"
         hx-post="/api/tickets/{{.Ticket.ID}}/actions"
         hx-vals='{"action":"requeue"}'
-        hx-confirm="Re-queue this ticket? The shem will re-claim and restart it."
+        hx-confirm="Re-queue this ticket? The shem will pick it up again from its current state."
         hx-on::after-request="if(event.detail.successful) window.location.reload()">
         <span class="iconify" data-icon="heroicons:arrow-path"></span>
         Re-queue
       </button>
-      {{if eq .Ticket.Phase "ready-for-review"}}
-      {{template "request_changes_form" .Ticket.ID}}
-      {{end}}
     </div>
     {{end}}
 
+    {{/* Details — collapsible, closed by default */}}
+    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box">
+      <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
+        <span class="iconify text-base-content/40" data-icon="heroicons:information-circle"></span>
+        Details
+        <span class="iconify ml-auto text-base-content/30 group-open:rotate-180 transition-transform" data-icon="heroicons:chevron-down"></span>
+      </summary>
+      <div class="px-4 pb-4">
+        <dl class="grid gap-x-6 gap-y-1.5 text-sm" style="grid-template-columns:auto 1fr">
+          <dt class="text-base-content/50">Repo</dt>
+          <dd class="font-mono text-xs truncate" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</dd>
+          <dt class="text-base-content/50">Branch</dt>
+          <dd class="font-mono text-xs">{{.Ticket.Branch}}</dd>
+          {{if .Ticket.CheckpointPhase}}
+          <dt class="text-base-content/50">Checkpoint</dt>
+          <dd class="font-mono text-xs">{{.Ticket.CheckpointPhase}} @ {{.Ticket.CheckpointSHA}}</dd>
+          {{end}}
+          <dt class="text-base-content/50">Created</dt>
+          <dd class="text-xs">{{.Ticket.CreatedAt.Format "2006-01-02 15:04"}}</dd>
+          <dt class="text-base-content/50">Created by</dt>
+          <dd class="text-xs">{{if .CreatedByName}}{{.CreatedByName}}{{else}}unknown{{end}}</dd>
+        </dl>
+      </div>
+    </details>
+
     {{/* Spec document */}}
     {{if .Spec}}
-    <div class="collapse collapse-arrow bg-base-100 shadow-sm border border-base-300 rounded-box">
-      <input type="checkbox" id="collapse-spec" checked />
-      <div class="collapse-title font-semibold flex items-center gap-2 py-3">
+    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" open>
+      <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-primary" data-icon="heroicons:document-text"></span>
         Spec
-        <span class="text-xs font-normal text-base-content/50 ml-auto">{{.Spec.CreatedAt.Format "15:04"}}</span>
+        <span class="text-xs font-normal text-base-content/40 ml-2">{{.Spec.CreatedAt.Format "15:04"}}</span>
+        <span class="iconify ml-auto text-base-content/30 group-open:rotate-180 transition-transform" data-icon="heroicons:chevron-down"></span>
+      </summary>
+      <div class="px-4 pb-4">
+        <div class="md-content rounded bg-base-200 p-3 text-sm overflow-auto">{{.Spec.Message}}</div>
       </div>
-      <div class="collapse-content px-4 pb-4">
-        <div class="md-content max-h-96 overflow-auto rounded bg-base-200 p-3 text-sm">{{.Spec.Message}}</div>
-      </div>
-    </div>
+    </details>
     {{end}}
 
     {{/* Implementation Plan */}}
     {{if .Plan}}
-    <div class="collapse collapse-arrow bg-base-100 shadow-sm border border-base-300 rounded-box">
-      <input type="checkbox" id="collapse-plan" checked />
-      <div class="collapse-title font-semibold flex items-center gap-2 py-3">
+    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" open>
+      <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-secondary" data-icon="heroicons:list-bullet"></span>
         Implementation Plan
-        <span class="text-xs font-normal text-base-content/50 ml-auto">{{.Plan.CreatedAt.Format "15:04"}}</span>
+        <span class="text-xs font-normal text-base-content/40 ml-2">{{.Plan.CreatedAt.Format "15:04"}}</span>
+        <span class="iconify ml-auto text-base-content/30 group-open:rotate-180 transition-transform" data-icon="heroicons:chevron-down"></span>
+      </summary>
+      <div class="px-4 pb-4 overflow-x-auto">
+        <div class="md-content rounded bg-base-200 p-3 text-sm overflow-y-auto">{{.Plan.Message}}</div>
       </div>
-      <div class="collapse-content px-4 pb-4" style="overflow-x:auto">
-        <div class="md-content max-h-96 overflow-y-auto rounded bg-base-200 p-3 text-sm">{{.Plan.Message}}</div>
-      </div>
-    </div>
+    </details>
     {{end}}
 
     {{/* Activity log */}}
     <div class="card bg-base-100 shadow-sm">
       <div class="card-body p-4">
-        <h2 class="font-semibold text-sm text-base-content/60 uppercase tracking-wide mb-3">Log</h2>
-        <div id="log-feed" class="log-feed max-h-[600px] overflow-y-auto"
+        <h2 class="font-semibold text-sm text-base-content/50 uppercase tracking-wide mb-3">Activity Log</h2>
+        <div id="log-feed"
+          class="log-feed max-h-[600px] overflow-y-auto"
+          aria-live="polite"
+          aria-atomic="false"
           hx-preserve
           hx-ext="sse"
           sse-connect="/sse/tickets/{{.Ticket.ID}}/log"
           sse-swap="message"
           hx-swap="beforeend">
+          {{if not .LogEntries}}
+          <div id="log-empty" class="text-base-content/40 text-sm py-4 text-center">
+            <span class="iconify text-2xl animate-pulse" data-icon="heroicons:signal"></span>
+            <p class="mt-1">Waiting for activity…</p>
+          </div>
+          {{end}}
           {{range .LogEntries}}
             {{template "log_entry" .}}
           {{end}}
@@ -137,4 +145,29 @@
 
   </div>
 </div>
+
+<script>
+(function() {
+  var logFeed = document.getElementById('log-feed');
+  if (!logFeed) return;
+
+  // Scroll to bottom initially
+  logFeed.scrollTop = logFeed.scrollHeight;
+
+  // Track if user has scrolled up manually
+  var userScrolledUp = false;
+  logFeed.addEventListener('scroll', function() {
+    userScrolledUp = logFeed.scrollTop + logFeed.clientHeight < logFeed.scrollHeight - 60;
+  });
+
+  // Auto-scroll on new SSE entries
+  document.addEventListener('htmx:sseMessage', function() {
+    var empty = document.getElementById('log-empty');
+    if (empty) empty.remove();
+    if (!userScrolledUp) {
+      setTimeout(function() { logFeed.scrollTop = logFeed.scrollHeight; }, 10);
+    }
+  });
+})();
+</script>
 {{end}}

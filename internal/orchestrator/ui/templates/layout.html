@@ -1,5 +1,6 @@
+{{define "phase_label"}}{{if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
 {{define "layout"}}<!DOCTYPE html>
-<html lang="en" data-theme="light">
+<html lang="en" data-theme="nord">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -18,16 +19,16 @@
     .entry-ANSWER { color: #16a34a; }
     .entry-HUMAN_FEEDBACK { color: #6b7280; font-style: italic; }
     .entry-INFO { color: #374151; }
-    .phase-unassigned { background-color: #e5e7eb; color: #374151; }
+    .phase-unassigned { background-color: #e5e7eb; color: #6b7280; }
     .phase-claimed { background-color: #dbeafe; color: #1d4ed8; }
-    .phase-brainstorm { background-color: #dbeafe; color: #1d4ed8; }
-    .phase-plan { background-color: #ede9fe; color: #6d28d9; }
+    .phase-brainstorm { background-color: #ede9fe; color: #6d28d9; }
+    .phase-plan { background-color: #f3e8ff; color: #7e22ce; }
     .phase-implement { background-color: #d1fae5; color: #065f46; }
     .phase-review { background-color: #fef3c7; color: #92400e; }
-    .phase-ready-for-review { background-color: #fef3c7; color: #92400e; }
-    .phase-revising { background-color: #fef3c7; color: #92400e; }
+    .phase-ready-for-review { background-color: #ccfbf1; color: #0f766e; }
+    .phase-revising { background-color: #ffedd5; color: #c2410c; }
     .phase-needs-attention { background-color: #fee2e2; color: #991b1b; }
-    .phase-closed { background-color: #f3f4f6; color: #6b7280; }
+    .phase-closed { background-color: #f3f4f6; color: #9ca3af; }
 
     /* Rendered markdown styles for .md-content elements */
     .md-content h1,.md-content h2,.md-content h3,.md-content h4 { font-weight: 700; margin: 0.75em 0 0.25em; line-height: 1.3; }
@@ -57,7 +58,7 @@
 </head>
 <body class="min-h-screen bg-base-200">
   {{if .Nav}}
-  <nav class="navbar bg-neutral text-neutral-content px-6 shadow-md sticky top-0 z-50">
+  <nav class="navbar bg-neutral text-neutral-content px-6 shadow-md sticky top-0 z-50" aria-label="Main navigation">
     <div class="flex-1 gap-2">
       <a href="/dashboard" class="text-lg font-bold tracking-tight flex items-center gap-1.5 mr-4">
         <span class="iconify text-xl" data-icon="heroicons:cpu-chip"></span>

@@ -1,9 +1,8 @@
 {{define "shem_row"}}
 <tr>
-  <td class="text-sm text-base-content/50">{{.ID}}</td>
-  <td class="font-medium">{{.Name}}</td>
+  <td class="font-medium">{{.Shem.Name}}</td>
   <td>
-    {{if eq .Status "online"}}
+    {{if eq .Shem.Status "online"}}
       <span class="badge badge-success badge-sm gap-1">
         <span class="iconify text-xs" data-icon="heroicons:signal"></span>
         online
@@ -16,11 +15,32 @@
     {{end}}
   </td>
   <td>
-    {{if .CurrentTicket}}<a href="/tickets/{{.CurrentTicket}}" class="link link-hover">#{{.CurrentTicket}}</a>{{else}}&mdash;{{end}}
+    {{if .ActiveTickets}}
+      <div class="flex flex-col gap-1">
+        {{range .ActiveTickets}}
+          <a href="/tickets/{{.ID}}" class="link link-hover text-sm font-mono">
+            #{{slice .ID 0 8}}
+            <span class="text-xs text-base-content/50 font-sans ml-1">{{.Phase}}</span>
+          </a>
+        {{end}}
+      </div>
+    {{else}}
+      <span class="text-base-content/40">&mdash;</span>
+    {{end}}
   </td>
   <td class="text-sm text-base-content/60">
-    {{if .LastHeartbeat}}{{.LastHeartbeat.Format "2006-01-02 15:04:05"}}{{else}}&mdash;{{end}}
+    {{if .Shem.LastHeartbeat}}{{.Shem.LastHeartbeat.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}
   </td>
-  <td class="text-xs font-mono text-base-content/50 max-w-xs truncate">{{.Repos}}</td>
+  <td>
+    {{if .RepoList}}
+      <div class="flex flex-col gap-0.5">
+        {{range .RepoList}}
+          <span class="text-xs font-mono text-base-content/50 truncate max-w-xs" title="{{.}}">{{.}}</span>
+        {{end}}
+      </div>
+    {{else}}
+      <span class="text-base-content/40">&mdash;</span>
+    {{end}}
+  </td>
 </tr>
 {{end}}
