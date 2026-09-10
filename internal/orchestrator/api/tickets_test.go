@@ -9,8 +9,10 @@ import (
 	"testing"
 
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 
 	"github.com/leonp92/golem/internal/orchestrator/api"
+	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
@@ -30,6 +32,20 @@ func setupTicketTest(t *testing.T) (*api.Handlers, *http.ServeMux) {
 	h.RegisterLogRoutes(mux)
 	h.RegisterHumanRoutes(mux)
 	return h, mux
+}
+
+// seedSessionUser creates a db.User and an authenticated session cookie for it.
+func seedSessionUser(t *testing.T, gdb *gorm.DB, username string) (db.User, *http.Cookie) {
+	t.Helper()
+	user := db.User{Username: username, PasswordHash: "x"}
+	if err := gdb.Create(&user).Error; err != nil {
+		t.Fatalf("create user: %v", err)
+	}
+	w := httptest.NewRecorder()
+	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	return user, w.Result().Cookies()[0]
 }
 
 // seedShem creates a Shem with a known API key and returns the key.
@@ -166,5 +182,131 @@ func TestAppendLog(t *testing.T) {
 	}
 	if resp["sequence_num"] != 1 {
 		t.Errorf("expected sequence_num=1, got %d", resp["sequence_num"])
+	}
+}
+
+func TestCreateTicket_SetsCreatedByFromSession(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	user, cookie := seedSessionUser(t, h.DB, "leon")
+
+	body, _ := json.Marshal(map[string]string{
+		"repo_remote": "https://github.com/org/repo5",
+		"branch":      "ticket/created-by",
+		"description": "created by test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		CreatedByUserID *uint  `json:"created_by_user_id"`
+		CreatedBy       string `json:"created_by"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CreatedByUserID == nil || *resp.CreatedByUserID != user.ID {
+		t.Errorf("expected created_by_user_id=%d, got %v", user.ID, resp.CreatedByUserID)
+	}
+	if resp.CreatedBy != "leon" {
+		t.Errorf("expected created_by=leon, got %q", resp.CreatedBy)
+	}
+}
+
+func TestCreateTicket_IgnoresClientSuppliedCreatedByUserID(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	user, cookie := seedSessionUser(t, h.DB, "leon")
+
+	body, _ := json.Marshal(map[string]any{
+		"repo_remote":        "https://github.com/org/repo6",
+		"branch":             "ticket/spoof",
+		"description":        "spoof test",
+		"created_by_user_id": user.ID + 999,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		CreatedByUserID *uint `json:"created_by_user_id"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.CreatedByUserID == nil || *resp.CreatedByUserID != user.ID {
+		t.Errorf("expected created_by_user_id to be the session user %d, got %v", user.ID, resp.CreatedByUserID)
+	}
+}
+
+func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	user, cookie := seedSessionUser(t, h.DB, "leon")
+
+	owned := db.Ticket{
+		RepoRemote:      "https://github.com/org/repo7",
+		Branch:          "ticket/owned",
+		Description:     "owned ticket",
+		Phase:           "unassigned",
+		CreatedByUserID: &user.ID,
+	}
+	h.DB.Create(&owned)
+	legacy := db.Ticket{
+		RepoRemote:  "https://github.com/org/repo8",
+		Branch:      "ticket/legacy",
+		Description: "legacy ticket",
+		Phase:       "unassigned",
+	}
+	h.DB.Create(&legacy)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tickets", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var list []struct {
+		ID        string `json:"id"`
+		CreatedBy string `json:"created_by"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := make(map[string]string, len(list))
+	for _, t := range list {
+		byID[t.ID] = t.CreatedBy
+	}
+	if byID[owned.ID] != "leon" {
+		t.Errorf("expected owned ticket created_by=leon, got %q", byID[owned.ID])
+	}
+	if byID[legacy.ID] != "" {
+		t.Errorf("expected legacy ticket created_by empty, got %q", byID[legacy.ID])
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/tickets/"+owned.ID, nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var single struct {
+		Ticket struct {
+			CreatedBy string `json:"created_by"`
+		} `json:"ticket"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &single); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if single.Ticket.CreatedBy != "leon" {
+		t.Errorf("expected created_by=leon, got %q", single.Ticket.CreatedBy)
 	}
 }

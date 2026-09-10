@@ -189,6 +189,7 @@ func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
 type TicketRow struct {
 	Ticket             db.Ticket
 	ShemName           string
+	CreatedByName      string
 	Age                string
 	HasPendingApproval bool
 }
@@ -212,15 +213,22 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		pendingApprovalSet[ai.TicketID] = true
 	}
 
+	creatorNames := db.CreatorNames(h.DB, tickets)
+
 	rows := make([]TicketRow, len(tickets))
 	for i, t := range tickets {
 		name := ""
 		if t.AssignedShem != nil {
 			name = shemNames[*t.AssignedShem]
 		}
+		createdBy := ""
+		if t.CreatedByUserID != nil {
+			createdBy = creatorNames[*t.CreatedByUserID]
+		}
 		rows[i] = TicketRow{
 			Ticket:             t,
 			ShemName:           name,
+			CreatedByName:      createdBy,
 			Age:                humanAge(t.CreatedAt),
 			HasPendingApproval: pendingApprovalSet[t.ID],
 		}
@@ -300,11 +308,15 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	user := auth.SessionUser(r)
 	ticket := db.Ticket{
 		RepoRemote:  urlnorm.Normalize(form.RepoRemote),
 		Branch:      form.BaseBranch,
 		Description: form.Description,
 		Phase:       "unassigned",
+	}
+	if user != nil {
+		ticket.CreatedByUserID = &user.ID
 	}
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		h.render(w, "ticket_new", map[string]any{
@@ -331,6 +343,11 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	if err := h.DB.First(&ticket, "id = ?", rawID).Error; err != nil {
 		http.Error(w, "ticket not found", http.StatusNotFound)
 		return
+	}
+	createdBy := ""
+	if ticket.CreatedByUserID != nil {
+		names := db.CreatorNames(h.DB, []db.Ticket{ticket})
+		createdBy = names[*ticket.CreatedByUserID]
 	}
 
 	var allEntries []db.LogEntry
@@ -362,11 +379,12 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.render(w, "ticket_detail", map[string]any{
-		"Ticket":       ticket,
-		"LogEntries":   logEntries,
-		"PendingInput": pending,
-		"Spec":         spec,
-		"Plan":         plan,
+		"Ticket":        ticket,
+		"CreatedByName": createdBy,
+		"LogEntries":    logEntries,
+		"PendingInput":  pending,
+		"Spec":          spec,
+		"Plan":          plan,
 	})
 }
 

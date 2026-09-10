@@ -41,6 +41,7 @@ type Ticket struct {
 	Description     string    `gorm:"not null" json:"description"`
 	Phase           string    `gorm:"not null;default:'unassigned'" json:"phase"`
 	AssignedShem    *uint     `gorm:"index" json:"assigned_shem"`
+	CreatedByUserID *uint     `gorm:"index" json:"created_by_user_id"`
 	CheckpointPhase *string   `json:"checkpoint_phase"`
 	CheckpointSHA   *string   `json:"checkpoint_sha"`
 	CreatedAt       time.Time `json:"created_at"`
@@ -53,6 +54,32 @@ func (t *Ticket) BeforeCreate(tx *gorm.DB) error {
 		t.ID = uuid.New().String()
 	}
 	return nil
+}
+
+// CreatorNames resolves CreatedByUserID -> username for a set of tickets in
+// a single query. Tickets with a nil CreatedByUserID are simply absent from
+// the returned map.
+func CreatorNames(gdb *gorm.DB, tickets []Ticket) map[uint]string {
+	idSet := make(map[uint]struct{})
+	for _, t := range tickets {
+		if t.CreatedByUserID != nil {
+			idSet[*t.CreatedByUserID] = struct{}{}
+		}
+	}
+	if len(idSet) == 0 {
+		return map[uint]string{}
+	}
+	ids := make([]uint, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	var users []User
+	gdb.Where("id IN ?", ids).Find(&users)
+	names := make(map[uint]string, len(users))
+	for _, u := range users {
+		names[u.ID] = u.Username
+	}
+	return names
 }
 
 // LogEntry represents a single log message from a Shem for a ticket.

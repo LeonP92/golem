@@ -44,6 +44,8 @@
           {{end}}
           <dt class="text-base-content/60">Created</dt>
           <dd class="text-xs">{{.Ticket.CreatedAt.Format "2006-01-02 15:04"}}</dd>
+          <dt class="text-base-content/60">Created by</dt>
+          <dd class="text-xs">{{if .CreatedByName}}{{.CreatedByName}}{{else}}unknown{{end}}</dd>
         </dl>
       </div>
     </div>

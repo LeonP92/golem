@@ -8,6 +8,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ui"
 )
@@ -113,6 +114,43 @@ func TestDashboard_RequiresSession(t *testing.T) {
 	}
 	if w.Header().Get("Location") != "/login" {
 		t.Errorf("expected /login redirect, got %q", w.Header().Get("Location"))
+	}
+}
+
+func TestTicketNewSubmit_SetsCreatedByFromSession(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	user := db.User{Username: "leon", PasswordHash: "x"}
+	gdb.Create(&user)
+	w := httptest.NewRecorder()
+	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	cookie := w.Result().Cookies()[0]
+
+	h := ui.NewHandlers(gdb, nil)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&description=test+ticket")
+	req := httptest.NewRequest("POST", "/tickets/new", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("expected redirect (302), got %d: %s", w.Code, w.Body.String())
+	}
+
+	var ticket db.Ticket
+	if err := gdb.First(&ticket).Error; err != nil {
+		t.Fatalf("expected a created ticket: %v", err)
+	}
+	if ticket.CreatedByUserID == nil || *ticket.CreatedByUserID != user.ID {
+		t.Errorf("expected CreatedByUserID=%d, got %v", user.ID, ticket.CreatedByUserID)
 	}
 }
 
