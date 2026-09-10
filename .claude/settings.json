@@ -1,9 +1,48 @@
 {
   "permissions": {
     "allow": [
-      "Bash(*)",
-      "Write(**)",
-      "Edit(**)"
+      "Bash(git *)",
+      "Bash(golem *)",
+      "Bash(./golem *)",
+      "Bash(./golem.exe *)",
+      "Bash(go *)",
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(pip *)",
+      "Bash(pip3 *)",
+      "Bash(npm *)",
+      "Bash(npx *)",
+      "Bash(node *)",
+      "Bash(cargo *)",
+      "Bash(rustc *)",
+      "Bash(mvn *)",
+      "Bash(gradle *)",
+      "Bash(make *)",
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(echo *)",
+      "Bash(mkdir *)",
+      "Bash(cp *)",
+      "Bash(mv *)",
+      "Bash(rm *)",
+      "Bash(touch *)",
+      "Bash(chmod *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(sed *)",
+      "Bash(awk *)",
+      "PowerShell(git *)",
+      "PowerShell(go *)",
+      "PowerShell(.\\golem*)",
+      "Edit(**)",
+      "Write(**)"
+    ],
+    "deny": [
+      "Bash(git push origin main)",
+      "Bash(git push --force *)",
+      "Bash(curl *)",
+      "Bash(wget *)",
+      "Bash(sudo *)"
     ]
   }
 }

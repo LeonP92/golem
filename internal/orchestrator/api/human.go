@@ -336,6 +336,16 @@ func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, 
 }
 
 func (h *Handlers) actionRequestChanges(w http.ResponseWriter, r *http.Request, id string, feedback string) {
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
+		http.Error(w, "ticket not found", http.StatusNotFound)
+		return
+	}
+	if ticket.Phase == "ready-for-review" {
+		h.requestChangesFromReview(w, r, ticket, feedback)
+		return
+	}
+
 	var hi db.HumanInput
 	if err := h.DB.
 		Where("ticket_id = ? AND kind = 'approval' AND resolved_at IS NULL", id).
@@ -368,6 +378,50 @@ func (h *Handlers) actionRequestChanges(w http.ResponseWriter, r *http.Request, 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// requestChangesFromReview handles request-changes submitted while a ticket
+// is in ready-for-review: it moves the ticket to revising and wakes the
+// assigned shem, instead of resolving a (nonexistent) pending approval.
+func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Request, ticket db.Ticket, feedback string) {
+	if ticket.AssignedShem == nil {
+		http.Error(w, "ticket has no assigned shem; use requeue instead", http.StatusConflict)
+		return
+	}
+	result := h.DB.Model(&db.Ticket{}).
+		Where("id = ? AND phase = 'ready-for-review'", ticket.ID).
+		Update("phase", "revising")
+	if result.Error != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if result.RowsAffected == 0 {
+		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
+		return
+	}
+
+	fb := db.HumanInput{
+		TicketID:  ticket.ID,
+		Kind:      "feedback",
+		Prompt:    feedback,
+		CreatedAt: time.Now(),
+	}
+	if err := h.DB.Create(&fb).Error; err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.appendLog(ticket.ID, "HUMAN_FEEDBACK", "human", "developer", feedback); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
+		Type:     "ticket_revise",
+		TicketID: strPtr(ticket.ID),
+		Repo:     ticket.RepoRemote,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
