@@ -5,7 +5,6 @@ package ui
 import (
 	"bytes"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -46,6 +45,24 @@ func MakeLogEntryRenderer(tmpls map[string]*template.Template) func(sse.LogEntry
 	}
 }
 
+var tmplFuncs = template.FuncMap{
+	"firstLine": func(s string) string {
+		for i, c := range s {
+			if c == '\n' {
+				return s[:i]
+			}
+		}
+		return s
+	},
+	"truncate": func(n int, s string) string {
+		runes := []rune(s)
+		if len(runes) <= n {
+			return s
+		}
+		return string(runes[:n]) + "…"
+	},
+}
+
 func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 	partialEntries, err := fs.ReadDir("templates/partials")
 	if err != nil {
@@ -72,7 +89,7 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 		files := make([]string, 0, 2+len(partials))
 		files = append(files, layoutFile, pageFile)
 		files = append(files, partials...)
-		t, err := template.New("").ParseFS(fs, files...)
+		t, err := template.New("").Funcs(tmplFuncs).ParseFS(fs, files...)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", name, err)
 		}
@@ -194,6 +211,12 @@ type TicketRow struct {
 	HasPendingApproval bool
 }
 
+type ShemRow struct {
+	Shem          db.Shem
+	ActiveTickets []db.Ticket
+	RepoList      []string
+}
+
 func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 	var tickets []db.Ticket
 	h.DB.Order("created_at desc").Find(&tickets)
@@ -245,8 +268,25 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 	var shems []db.Shem
 	h.DB.Order("name asc").Find(&shems)
+
+	var activeTickets []db.Ticket
+	h.DB.Where("phase NOT IN ('closed','unassigned') AND assigned_shem IS NOT NULL").Find(&activeTickets)
+	ticketsByShem := make(map[uint][]db.Ticket)
+	for _, t := range activeTickets {
+		ticketsByShem[*t.AssignedShem] = append(ticketsByShem[*t.AssignedShem], t)
+	}
+
+	rows := make([]ShemRow, len(shems))
+	for i, s := range shems {
+		rows[i] = ShemRow{
+			Shem:          s,
+			ActiveTickets: ticketsByShem[s.ID],
+			RepoList:      s.RepoList(),
+		}
+	}
+
 	h.render(w, "shems", map[string]any{
-		"Shems": shems,
+		"Shems": rows,
 		"Nav":   "shems",
 	})
 }
@@ -266,11 +306,7 @@ func (h *Handlers) shemsRepos() []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, s := range shems {
-		var repos []string
-		if err := json.Unmarshal([]byte(s.Repos), &repos); err != nil {
-			continue
-		}
-		for _, r := range repos {
+		for _, r := range s.RepoList() {
 			if _, ok := seen[r]; !ok {
 				seen[r] = struct{}{}
 				out = append(out, r)

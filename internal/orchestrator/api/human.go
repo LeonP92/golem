@@ -258,6 +258,13 @@ func (h *Handlers) actionApprove(w http.ResponseWriter, r *http.Request, id stri
 }
 
 func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id string, feedback string) {
+	// Read before clearing so we can notify the currently-assigned shem.
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
+		http.Error(w, "ticket not found", http.StatusNotFound)
+		return
+	}
+
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND phase NOT IN ('unassigned', 'closed')", id).
 		Updates(map[string]any{
@@ -284,14 +291,21 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 		}
 	}
 
-	var ticket db.Ticket
-	if h.DB.First(&ticket, "id = ?", id).Error == nil {
-		h.Hub.Broadcast(ticket.RepoRemote, ws.WSMessage{
-			Type:     "ticket_available",
+	// Tell the currently-running shem to stop (context cancel, no worktree cleanup).
+	if ticket.AssignedShem != nil {
+		h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
+			Type:     "ticket_requeued",
 			TicketID: strPtr(id),
 			Repo:     ticket.RepoRemote,
 		})
 	}
+
+	// Broadcast availability to all shems watching this repo.
+	h.Hub.Broadcast(ticket.RepoRemote, ws.WSMessage{
+		Type:     "ticket_available",
+		TicketID: strPtr(id),
+		Repo:     ticket.RepoRemote,
+	})
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -312,6 +326,8 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "ticket already closed", http.StatusConflict)
 		return
 	}
+	h.DB.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{})
+
 	if ticket.AssignedShem != nil {
 		h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
 			Type:     "ticket_closed",

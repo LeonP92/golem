@@ -23,6 +23,19 @@ type GolemExecutor struct {
 	repoMu sync.Map // keyed by repoPath, value *sync.Mutex
 }
 
+// postStatus sends a STATUS log entry to the orchestrator and prints locally.
+// Errors posting to the orchestrator are logged and ignored — best-effort.
+func postStatus(c *client.Client, ticketID, msg string) {
+	log.Printf("executor [%s]: %s", ticketID[:8], msg)
+	if _, err := c.PostLog(ticketID, client.LogPayload{
+		EntryType: "STATUS",
+		FromRole:  "shem",
+		Message:   msg,
+	}); err != nil {
+		log.Printf("executor [%s]: postStatus error: %v", ticketID[:8], err)
+	}
+}
+
 func (e *GolemExecutor) repoMutex(repoPath string) *sync.Mutex {
 	v, _ := e.repoMu.LoadOrStore(repoPath, &sync.Mutex{})
 	return v.(*sync.Mutex)
@@ -65,6 +78,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	// Determine starting phase and ensure the ticket exists locally.
 	startPhase := "brainstorm"
 	if claim.CheckpointPhase != nil {
+		postStatus(c, ticketID, "Resuming from checkpoint: "+*claim.CheckpointPhase)
 		if err := RecoverTicket(ctx, claim, cfg); err != nil {
 			return fmt.Errorf("recovery failed: %w", err)
 		}
@@ -75,12 +89,16 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		if startPhase == "brainstorm" || startPhase == "plan" {
 			if pending, _ := c.GetPendingApproval(claim.TicketID); pending == nil {
 				startPhase = nextPhaseAfterCheckpoint(startPhase)
+				postStatus(c, ticketID, "Checkpoint approved — advancing to "+startPhase)
+			} else {
+				postStatus(c, ticketID, "Approval still pending — waiting for human")
 			}
 		}
 	} else {
 		// Fresh orchestrator ticket (no checkpoint). Always start from brainstorm.
 		// If the ticket directory already exists (e.g. after a requeue) reuse the
 		// existing worktree instead of trying to create it again.
+		postStatus(c, ticketID, "Initializing repository…")
 		if _, statErr := os.Stat(ticketDir); os.IsNotExist(statErr) {
 			if err := runGolemTicketNew(ctx, repoPath, ticketID, claim.Description); err != nil {
 				return fmt.Errorf("golem ticket new: %w", err)
@@ -116,25 +134,28 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				pending, _ := c.GetPendingApproval(claim.TicketID)
 				if pending == nil {
 					feedback := consumeFeedback(ctx, c, claim.TicketID)
+					postStatus(c, ticketID, "Starting agent (claude) — brainstorm phase")
 					prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
 					if err := runClaudePhase(ctx, repoPath, prompt); err != nil {
 						return err
 					}
+					postStatus(c, ticketID, "Brainstorm complete — spec ready for review")
 					PostCheckpointWithRetry(c, claim.TicketID, "brainstorm", "", 5) //nolint:errcheck
 					postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
 					if err := c.PostApprovalRequest(claim.TicketID, "Brainstorm complete. Review the spec and approve to continue to planning."); err != nil {
 						log.Printf("executor: post approval request: %v", err)
 					}
 				}
-				log.Printf("executor: ticket %s waiting for brainstorm approval", claim.TicketID)
+				postStatus(c, ticketID, "Waiting for spec approval…")
 				if err := waitForApproval(ctx, c, claim.TicketID); err != nil {
 					return fmt.Errorf("brainstorm approval: %w", err)
 				}
 				// If the human requested changes, loop and re-run with their feedback.
 				if fb, _ := c.GetPendingFeedback(claim.TicketID); fb != nil {
-					log.Printf("executor: ticket %s brainstorm changes requested, re-running", claim.TicketID)
+					postStatus(c, ticketID, "Spec changes requested — re-running brainstorm")
 					continue
 				}
+				postStatus(c, ticketID, "Spec approved — advancing to planning")
 				break
 			}
 			if err := runGolemAdvance(ctx, repoPath, ticketID, "plan"); err != nil {
@@ -154,24 +175,27 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				pending, _ := c.GetPendingApproval(claim.TicketID)
 				if pending == nil {
 					feedback := consumeFeedback(ctx, c, claim.TicketID)
+					postStatus(c, ticketID, "Starting agent (claude) — planning phase")
 					prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
 					if err := runClaudePhase(ctx, repoPath, prompt); err != nil {
 						return err
 					}
+					postStatus(c, ticketID, "Plan complete — ready for review")
 					PostCheckpointWithRetry(c, claim.TicketID, "plan", "", 5) //nolint:errcheck
 					postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
 					if err := c.PostApprovalRequest(claim.TicketID, "Plan complete. Review the plan and approve to begin implementation."); err != nil {
 						log.Printf("executor: post approval request: %v", err)
 					}
 				}
-				log.Printf("executor: ticket %s waiting for plan approval", claim.TicketID)
+				postStatus(c, ticketID, "Waiting for plan approval…")
 				if err := waitForApproval(ctx, c, claim.TicketID); err != nil {
 					return fmt.Errorf("plan approval: %w", err)
 				}
 				if fb, _ := c.GetPendingFeedback(claim.TicketID); fb != nil {
-					log.Printf("executor: ticket %s plan changes requested, re-running", claim.TicketID)
+					postStatus(c, ticketID, "Plan changes requested — re-running planning")
 					continue
 				}
+				postStatus(c, ticketID, "Plan approved — starting implementation")
 				break
 			}
 			if err := runGolemAdvance(ctx, repoPath, ticketID, "implement"); err != nil {
@@ -187,9 +211,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			phase = "implement"
 
 		case "implement":
+			postStatus(c, ticketID, "Starting agent (claude) — implementation phase")
 			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Description)); err != nil {
 				return err
 			}
+			postStatus(c, ticketID, "Implementation complete — ready for review")
 			finalPhase, sha, _ := readState(ticketDir)
 			if finalPhase == "" {
 				finalPhase = "implement"
@@ -209,9 +235,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			postStatus(c, ticketID, "Starting agent (claude) — revision phase")
 			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback)); err != nil {
 				return err
 			}
+			postStatus(c, ticketID, "Revision complete — ready for review")
 			finalPhase, sha, _ := readState(ticketDir)
 			if finalPhase == "" {
 				finalPhase = "ready-for-review"

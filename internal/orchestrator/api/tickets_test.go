@@ -74,6 +74,7 @@ func TestAvailableTickets(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/api/tickets/available?repo=https://github.com/org/repo", nil)
 	req.Header.Set("Authorization", "Bearer testkey")
+	req.Header.Set("X-Shem-Name", "shem-a")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -104,6 +105,7 @@ func TestClaimTicket_HTTPEndpoint(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/claim", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, nil)
 	req.Header.Set("Authorization", "Bearer claimkey")
+	req.Header.Set("X-Shem-Name", "claimer")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -139,6 +141,7 @@ func TestUpdatePhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/phase", ticket.ID)
 	req := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer phasekey")
+	req.Header.Set("X-Shem-Name", "phase-shem")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -228,6 +231,7 @@ func TestReviseClaim_HTTPEndpoint(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/revise-claim", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, nil)
 	req.Header.Set("Authorization", "Bearer revisekey4")
+	req.Header.Set("X-Shem-Name", "revise-shem-4")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -263,6 +267,7 @@ func TestAppendLog(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/log", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer logkey")
+	req.Header.Set("X-Shem-Name", "log-shem")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)

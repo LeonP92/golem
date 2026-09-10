@@ -60,18 +60,46 @@ func (w *Worker) Start() {
 	for i, r := range w.cfg.Repos {
 		repos[i] = r.NormalizedRemote
 	}
+
+	log.Printf("worker: registering with orchestrator (repos: %v)", repos)
 	if _, err := w.client.Register(w.cfg.Name, repos); err != nil {
 		log.Printf("worker: register error: %v", err)
 	}
 
-	if resumable, err := w.client.GetResumable(); err != nil {
-		log.Printf("worker: get resumable error: %v", err)
+	// Log all assigned tickets so the operator knows the full picture on startup.
+	assigned, assignedErr := w.client.GetAssigned()
+	resumable, resumableErr := w.client.GetResumable()
+
+	if assignedErr != nil {
+		log.Printf("worker: get assigned error: %v", assignedErr)
+	}
+	if resumableErr != nil {
+		log.Printf("worker: get resumable error: %v", resumableErr)
+	}
+
+	if len(assigned) == 0 {
+		log.Printf("worker: no assigned tickets, waiting for work")
 	} else {
-		for _, claim := range resumable {
-			go w.tryResumeTicket(claim)
+		// Build a set of resumable IDs so we can label each ticket correctly.
+		resumableIDs := make(map[string]bool, len(resumable))
+		for _, r := range resumable {
+			resumableIDs[r.TicketID] = true
+		}
+		log.Printf("worker: %d assigned ticket(s) on startup:", len(assigned))
+		for _, t := range assigned {
+			if resumableIDs[t.TicketID] {
+				log.Printf("worker:   %s — phase: %s — will resume", t.TicketID, t.Phase)
+			} else {
+				log.Printf("worker:   %s — phase: %s — waiting (no action needed)", t.TicketID, t.Phase)
+			}
 		}
 	}
 
+	for _, claim := range resumable {
+		go w.tryResumeTicket(claim)
+	}
+
+	log.Printf("worker: poll loop started")
 	go w.pollLoop()
 }
 
@@ -108,6 +136,9 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("worker: ticket %s resume error: %v", claim.TicketID, err)
 			if phaseErr := w.client.PostPhase(claim.TicketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
@@ -123,8 +154,23 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 		if msg.TicketID != nil {
 			go w.tryClaimAndRun(*msg.TicketID)
 		}
+	case "ticket_requeued":
+		if msg.TicketID != nil {
+			log.Printf("worker: ticket %s requeued — stopping", *msg.TicketID)
+			w.mu.Lock()
+			if cancel, ok := w.running[*msg.TicketID]; ok {
+				cancel()
+			}
+			w.mu.Unlock()
+		}
 	case "ticket_closed":
 		if msg.TicketID != nil {
+			log.Printf("worker: ticket %s closed — cleaning up", *msg.TicketID)
+			w.mu.Lock()
+			if cancel, ok := w.running[*msg.TicketID]; ok {
+				cancel()
+			}
+			w.mu.Unlock()
 			go w.cleanupTicket(msg.Repo, *msg.TicketID)
 		}
 	case "ticket_revise":
@@ -145,6 +191,8 @@ func (w *Worker) cleanupTicket(repoRemote, ticketID string) {
 	branch := "ticket/" + ticketID
 	if err := workspace.Remove(repoPath, worktreePath, branch); err != nil {
 		log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
+	} else {
+		log.Printf("worker: ticket %s cleaned up (worktree and branch removed)", ticketID)
 	}
 }
 
@@ -177,6 +225,8 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 		return
 	}
 
+	log.Printf("worker: claimed ticket %s (%s)", ticketID, claim.RepoRemote)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	w.mu.Lock()
 	w.running[ticketID] = cancel
@@ -191,10 +241,16 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			if ctx.Err() != nil {
+				log.Printf("worker: ticket %s stopped (context cancelled)", ticketID)
+				return
+			}
 			log.Printf("worker: ticket %s error: %v", ticketID, err)
 			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
 			}
+		} else {
+			log.Printf("worker: ticket %s finished", ticketID)
 		}
 	}
 }
@@ -227,6 +283,8 @@ func (w *Worker) tryReviseAndRun(ticketID string) {
 		return
 	}
 
+	log.Printf("worker: claimed revision for ticket %s (%s)", ticketID, claim.RepoRemote)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	w.mu.Lock()
 	w.running[ticketID] = cancel
@@ -241,10 +299,16 @@ func (w *Worker) tryReviseAndRun(ticketID string) {
 
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			if ctx.Err() != nil {
+				log.Printf("worker: ticket %s stopped (context cancelled)", ticketID)
+				return
+			}
 			log.Printf("worker: ticket %s revise error: %v", ticketID, err)
 			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
 			}
+		} else {
+			log.Printf("worker: ticket %s revision finished", ticketID)
 		}
 	}
 }

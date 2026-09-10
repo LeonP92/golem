@@ -1,6 +1,7 @@
 package db
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -46,6 +47,12 @@ type Ticket struct {
 	CheckpointSHA   *string   `json:"checkpoint_sha"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+func (s Shem) RepoList() []string {
+	var repos []string
+	json.Unmarshal([]byte(s.Repos), &repos) //nolint:errcheck
+	return repos
 }
 
 // BeforeCreate generates a UUID for the ticket ID if not already set.
