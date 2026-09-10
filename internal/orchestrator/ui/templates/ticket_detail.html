@@ -19,7 +19,7 @@
           </a>
           {{end}}
         </div>
-        <p class="text-base-content/70 mt-1 text-sm">{{.Ticket.Description}}</p>
+        <p class="text-base-content/70 mt-1 text-sm" title="{{.Ticket.Description}}">{{truncate 120 (firstLine .Ticket.Description)}}</p>
       </div>
     </div>
   </div>
@@ -57,6 +57,28 @@
         Re-queue
       </button>
     </div>
+
+    {{if eq .Ticket.Phase "ready-for-review"}}
+    <div class="card bg-base-100 shadow-sm border border-base-300">
+      <div class="card-body p-4">
+        <h2 class="font-semibold text-sm text-base-content/70 mb-2 flex items-center gap-1.5">
+          <span class="iconify" data-icon="heroicons:chat-bubble-left-ellipsis"></span>
+          Request Changes
+        </h2>
+        <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+          <input type="hidden" name="action" value="request-changes">
+          <textarea name="feedback" rows="4"
+            class="textarea textarea-bordered w-full text-sm"
+            placeholder="Describe what needs to change…" required></textarea>
+          <button type="submit" class="btn btn-sm btn-warning mt-2 gap-1.5">
+            <span class="iconify" data-icon="heroicons:arrow-uturn-left"></span>
+            Send to Shem
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
     {{end}}
 
     <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box">
@@ -84,7 +106,7 @@
     </details>
 
     {{if .Spec}}
-    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" open>
+    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" {{if and (eq .Ticket.Phase "brainstorm") (and .PendingInput (eq .PendingInput.Kind "approval"))}}open{{end}}>
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-primary" data-icon="heroicons:document-text"></span>
         Spec
@@ -98,7 +120,7 @@
     {{end}}
 
     {{if .Plan}}
-    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" open>
+    <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" {{if and (eq .Ticket.Phase "plan") (and .PendingInput (eq .PendingInput.Kind "approval"))}}open{{end}}>
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-secondary" data-icon="heroicons:list-bullet"></span>
         Implementation Plan

@@ -1,6 +1,12 @@
 {{define "phase_label"}}{{if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
 {{define "layout"}}<!DOCTYPE html>
-<html lang="en" data-theme="nord">
+<html lang="en" data-theme="nord" id="html-root">
+<script>
+  (function() {
+    var t = localStorage.getItem('golem-theme');
+    if (t) document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -19,6 +25,7 @@
     .entry-ANSWER { color: #16a34a; }
     .entry-HUMAN_FEEDBACK { color: #6b7280; font-style: italic; }
     .entry-INFO { color: #374151; }
+    .entry-STATUS { color: #0369a1; font-style: italic; }
     .phase-unassigned { background-color: #e5e7eb; color: #6b7280; }
     .phase-claimed { background-color: #dbeafe; color: #1d4ed8; }
     .phase-brainstorm { background-color: #ede9fe; color: #6d28d9; }
@@ -81,6 +88,9 @@
         <span class="iconify" data-icon="heroicons:plus"></span>
         New Ticket
       </a>
+      <button id="theme-toggle" class="btn btn-ghost btn-sm btn-square text-neutral-content" title="Toggle theme" aria-label="Toggle dark/light mode">
+        <span class="iconify text-lg" data-icon="heroicons:moon" id="theme-icon"></span>
+      </button>
       <a href="/logout" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
         <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
         Logout
@@ -104,6 +114,24 @@
     document.addEventListener('htmx:sseMessage', () => {
       setTimeout(() => renderMarkdown(document.getElementById('log-feed')), 0);
     });
+
+    // Theme toggle
+    (function() {
+      var root = document.getElementById('html-root');
+      var btn = document.getElementById('theme-toggle');
+      var icon = document.getElementById('theme-icon');
+      var dark = root.getAttribute('data-theme') === 'dark';
+      function apply(isDark) {
+        root.setAttribute('data-theme', isDark ? 'dark' : 'nord');
+        icon.setAttribute('data-icon', isDark ? 'heroicons:sun' : 'heroicons:moon');
+        localStorage.setItem('golem-theme', isDark ? 'dark' : 'nord');
+      }
+      apply(dark);
+      btn.addEventListener('click', function() {
+        dark = !dark;
+        apply(dark);
+      });
+    })();
 
     // Preserve collapse open/closed state across #ticket-live polls.
     let _collapseStates = {};

@@ -45,6 +45,24 @@ func MakeLogEntryRenderer(tmpls map[string]*template.Template) func(sse.LogEntry
 	}
 }
 
+var tmplFuncs = template.FuncMap{
+	"firstLine": func(s string) string {
+		for i, c := range s {
+			if c == '\n' {
+				return s[:i]
+			}
+		}
+		return s
+	},
+	"truncate": func(n int, s string) string {
+		runes := []rune(s)
+		if len(runes) <= n {
+			return s
+		}
+		return string(runes[:n]) + "…"
+	},
+}
+
 func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 	partialEntries, err := fs.ReadDir("templates/partials")
 	if err != nil {
@@ -71,7 +89,7 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 		files := make([]string, 0, 2+len(partials))
 		files = append(files, layoutFile, pageFile)
 		files = append(files, partials...)
-		t, err := template.New("").ParseFS(fs, files...)
+		t, err := template.New("").Funcs(tmplFuncs).ParseFS(fs, files...)
 		if err != nil {
 			return nil, fmt.Errorf("parse %s: %w", name, err)
 		}

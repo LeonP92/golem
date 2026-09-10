@@ -1,8 +1,17 @@
 {{define "ticket_row"}}
 <tr class="{{if .HasPendingApproval}}bg-warning/10{{end}}">
-  <td class="font-mono text-xs text-base-content/50">{{slice .Ticket.ID 0 8}}</td>
+  <td class="font-mono text-xs text-base-content/50 w-24">
+    <div class="flex items-center gap-1">
+      {{if .HasPendingApproval}}
+      <span class="iconify text-warning shrink-0" data-icon="heroicons:exclamation-triangle"
+            title="Needs your input" aria-label="Needs your input"></span>
+      {{end}}
+      {{slice .Ticket.ID 0 8}}
+    </div>
+  </td>
   <td class="max-w-sm">
-    <a href="/tickets/{{.Ticket.ID}}" class="link link-hover font-medium">{{.Ticket.Description}}</a>
+    <a href="/tickets/{{.Ticket.ID}}" class="link link-hover font-medium truncate block"
+       title="{{.Ticket.Description}}">{{truncate 80 (firstLine .Ticket.Description)}}</a>
     <div class="text-xs text-base-content/40 font-mono truncate mt-0.5" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</div>
   </td>
   <td>
@@ -11,10 +20,6 @@
   <td class="text-sm text-base-content/60">{{if .ShemName}}{{.ShemName}}{{else}}&mdash;{{end}}</td>
   <td class="text-sm text-base-content/50 whitespace-nowrap">{{.Age}}</td>
   <td class="text-right">
-    {{if .HasPendingApproval}}
-    <span class="iconify text-warning text-base mr-1" data-icon="heroicons:exclamation-triangle"
-          title="Needs your input" aria-label="Needs your input"></span>
-    {{end}}
     <a href="/tickets/{{.Ticket.ID}}" class="btn btn-ghost btn-xs" title="Open ticket">
       <span class="iconify" data-icon="heroicons:arrow-top-right-on-square"></span>
     </a>
