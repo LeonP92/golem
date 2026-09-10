@@ -15,8 +15,8 @@ set -a
 set +a
 
 # Validate required vars.
-if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ]; then
-  echo "Error: set either ANTHROPIC_API_KEY or CLAUDE_HOME in .env" >&2
+if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+  echo "Error: set one of CLAUDE_HOME, CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_API_KEY in .env" >&2
   exit 1
 fi
 : "${GOLEM_ADMIN_PASSWORD:?Set GOLEM_ADMIN_PASSWORD in .env}"
