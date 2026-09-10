@@ -181,6 +181,31 @@ func (c *Client) ClaimTicket(id string) (*ClaimResponse, error) {
 	return &result, nil
 }
 
+// ClaimRevision resumes work on a ticket already assigned to this shem
+// that is in the revising phase (triggered by a ticket_revise push).
+// A 409 (already picked up, or requeued in the meantime) maps to
+// ErrNotAvailable, same log-and-skip semantics as ClaimTicket.
+func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/revise-claim", id), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusConflict {
+		return nil, ErrNotAvailable
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+
+	var result ClaimResponse
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
+}
+
 // PostPhase updates the phase of a ticket.
 // Returns ErrNotOwner if the orchestrator rejects the update because this shem
 // no longer owns the ticket (409 Conflict — e.g. after a requeue).
