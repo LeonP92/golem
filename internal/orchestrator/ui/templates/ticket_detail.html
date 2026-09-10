@@ -1,7 +1,6 @@
 {{define "page_content"}}
 <div id="ticket-live">
 
-  {{/* Header */}}
   <div class="mb-5">
     <a href="/dashboard" class="btn btn-ghost btn-sm gap-1.5 -ml-2 mb-3 text-base-content/60">
       <span class="iconify" data-icon="heroicons:arrow-left"></span>
@@ -27,7 +26,6 @@
 
   <div class="flex flex-col gap-4">
 
-    {{/* Action Required — shown first when present */}}
     {{if .PendingInput}}
     <div class="card border-l-4 border-warning bg-warning/10 shadow-sm">
       <div class="card-body p-4">
@@ -40,7 +38,6 @@
     </div>
     {{end}}
 
-    {{/* Actions */}}
     {{if and (ne .Ticket.Phase "unassigned") (ne .Ticket.Phase "closed")}}
     <div class="flex gap-2">
       <button class="btn btn-sm btn-success gap-1.5"
@@ -62,7 +59,6 @@
     </div>
     {{end}}
 
-    {{/* Details — collapsible, closed by default */}}
     <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box">
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-base-content/40" data-icon="heroicons:information-circle"></span>
@@ -87,7 +83,6 @@
       </div>
     </details>
 
-    {{/* Spec document */}}
     {{if .Spec}}
     <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" open>
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
@@ -102,7 +97,6 @@
     </details>
     {{end}}
 
-    {{/* Implementation Plan */}}
     {{if .Plan}}
     <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box" open>
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
@@ -117,7 +111,6 @@
     </details>
     {{end}}
 
-    {{/* Activity log */}}
     <div class="card bg-base-100 shadow-sm">
       <div class="card-body p-4">
         <h2 class="font-semibold text-sm text-base-content/50 uppercase tracking-wide mb-3">Activity Log</h2>
@@ -151,20 +144,21 @@
   var logFeed = document.getElementById('log-feed');
   if (!logFeed) return;
 
-  // Scroll to bottom initially
   logFeed.scrollTop = logFeed.scrollHeight;
 
-  // Track if user has scrolled up manually
   var userScrolledUp = false;
   logFeed.addEventListener('scroll', function() {
     userScrolledUp = logFeed.scrollTop + logFeed.clientHeight < logFeed.scrollHeight - 60;
   });
 
-  // Auto-scroll on new SSE entries
+  var logEmptyRemoved = false;
   document.addEventListener('htmx:sseMessage', function() {
-    var empty = document.getElementById('log-empty');
-    if (empty) empty.remove();
+    if (!logEmptyRemoved) {
+      var empty = document.getElementById('log-empty');
+      if (empty) { empty.remove(); logEmptyRemoved = true; }
+    }
     if (!userScrolledUp) {
+      // defer one tick so the appended node is in the DOM before measuring
       setTimeout(function() { logFeed.scrollTop = logFeed.scrollHeight; }, 10);
     }
   });

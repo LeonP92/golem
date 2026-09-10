@@ -5,7 +5,6 @@ package ui
 import (
 	"bytes"
 	"embed"
-	"encoding/json"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -194,7 +193,6 @@ type TicketRow struct {
 	HasPendingApproval bool
 }
 
-// ShemRow is the view-model for a single shem on the shems page.
 type ShemRow struct {
 	Shem          db.Shem
 	ActiveTickets []db.Ticket
@@ -257,21 +255,15 @@ func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 	h.DB.Where("phase NOT IN ('closed','unassigned') AND assigned_shem IS NOT NULL").Find(&activeTickets)
 	ticketsByShem := make(map[uint][]db.Ticket)
 	for _, t := range activeTickets {
-		if t.AssignedShem != nil {
-			ticketsByShem[*t.AssignedShem] = append(ticketsByShem[*t.AssignedShem], t)
-		}
+		ticketsByShem[*t.AssignedShem] = append(ticketsByShem[*t.AssignedShem], t)
 	}
 
 	rows := make([]ShemRow, len(shems))
 	for i, s := range shems {
-		var repos []string
-		if err := json.Unmarshal([]byte(s.Repos), &repos); err != nil {
-			repos = nil
-		}
 		rows[i] = ShemRow{
 			Shem:          s,
 			ActiveTickets: ticketsByShem[s.ID],
-			RepoList:      repos,
+			RepoList:      s.RepoList(),
 		}
 	}
 
@@ -296,11 +288,7 @@ func (h *Handlers) shemsRepos() []string {
 	seen := make(map[string]struct{})
 	var out []string
 	for _, s := range shems {
-		var repos []string
-		if err := json.Unmarshal([]byte(s.Repos), &repos); err != nil {
-			continue
-		}
-		for _, r := range repos {
+		for _, r := range s.RepoList() {
 			if _, ok := seen[r]; !ok {
 				seen[r] = struct{}{}
 				out = append(out, r)

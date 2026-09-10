@@ -54,13 +54,10 @@
 
 <script>
   (function() {
-    function updateTimestamp() {
-      var el = document.getElementById('dash-updated');
-      if (el) el.textContent = 'Updated just now';
-    }
     document.addEventListener('htmx:afterSwap', function(e) {
       if (e.detail.target && e.detail.target.id === 'dashboard-live') {
-        updateTimestamp();
+        var el = document.getElementById('dash-updated');
+        if (el) el.textContent = 'Updated just now';
       }
     });
   })();
