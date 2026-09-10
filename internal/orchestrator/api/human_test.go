@@ -75,6 +75,7 @@ func TestPendingHumanInput_ReturnsOldest(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs?resolved=false", ticket.ID)
 	req := httptest.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set("Authorization", "Bearer humankey1")
+	req.Header.Set("X-Shem-Name", "shem-human-1")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -112,6 +113,7 @@ func TestAckHumanInput(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPatch, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer humankey2")
+	req.Header.Set("X-Shem-Name", "shem-human-2")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

@@ -370,11 +370,11 @@ func TestCloseTicket_TransitionsToClosed(t *testing.T) {
 	}
 }
 
-// TestCloseTicket_WrongPhase verifies 409 when not in ready-for-review.
+// TestCloseTicket_WrongPhase verifies 409 when ticket is already closed.
 func TestCloseTicket_WrongPhase(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "implement"}
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "closed"}
 	h.DB.Create(&ticket)
 
 	body, _ := json.Marshal(map[string]string{"action": "close"})
@@ -429,6 +429,7 @@ func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Shem-Name", "test-shem")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -456,6 +457,7 @@ func TestRequestApproval_EmptyPrompt(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/some-uuid-here/human-inputs", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Shem-Name", "test-shem")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -477,6 +479,7 @@ func TestPendingApproval_ReturnsPending(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs?kind=approval&resolved=false", ticket.ID)
 	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Shem-Name", "test-shem")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -676,6 +679,7 @@ func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs?kind=approval&resolved=false", ticket.ID)
 	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("X-Shem-Name", "test-shem")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

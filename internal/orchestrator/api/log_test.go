@@ -33,6 +33,7 @@ func TestPostLog_AssignsSequenceNum(t *testing.T) {
 	})
 	req := httptest.NewRequest("POST", fmt.Sprintf("/api/tickets/%s/log", ticket.ID), bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer k")
+	req.Header.Set("X-Shem-Name", "s")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -49,6 +50,7 @@ func TestPostLog_AssignsSequenceNum(t *testing.T) {
 	// Second entry gets seq 2
 	req2 := httptest.NewRequest("POST", fmt.Sprintf("/api/tickets/%s/log", ticket.ID), bytes.NewReader(body))
 	req2.Header.Set("Authorization", "Bearer k")
+	req2.Header.Set("X-Shem-Name", "s")
 	req2.Header.Set("Content-Type", "application/json")
 	w2 := httptest.NewRecorder()
 	mux.ServeHTTP(w2, req2)
@@ -76,6 +78,7 @@ func TestPostLog_CreatesHumanInput_WhenToRoleHuman(t *testing.T) {
 	})
 	req := httptest.NewRequest("POST", fmt.Sprintf("/api/tickets/%s/log", ticket.ID), bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer k")
+	req.Header.Set("X-Shem-Name", "s")
 	req.Header.Set("Content-Type", "application/json")
 	mux.ServeHTTP(httptest.NewRecorder(), req)
 

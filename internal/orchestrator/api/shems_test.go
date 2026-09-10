@@ -30,6 +30,7 @@ func TestRegisterShem(t *testing.T) {
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/shems/register", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer key1")
+	req.Header.Set("X-Shem-Name", "node-a")
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -107,6 +108,7 @@ func TestDeregisterShem(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodDelete, "/api/shems/me", nil)
 	req.Header.Set("Authorization", "Bearer key2")
+	req.Header.Set("X-Shem-Name", "node-b")
 	w := httptest.NewRecorder()
 
 	mux := http.NewServeMux()
