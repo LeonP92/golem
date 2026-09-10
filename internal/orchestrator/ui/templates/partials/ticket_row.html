@@ -10,6 +10,7 @@
     <span class="badge badge-sm phase-{{.Ticket.Phase}} rounded font-medium">{{.Ticket.Phase}}</span>
   </td>
   <td class="text-sm text-base-content/60">{{if .ShemName}}{{.ShemName}}{{else}}&mdash;{{end}}</td>
+  <td class="text-sm text-base-content/60">{{if .CreatedByName}}{{.CreatedByName}}{{else}}unknown{{end}}</td>
   <td class="text-sm text-base-content/50">{{.Age}}</td>
   <td class="text-right">
     {{if .HasPendingApproval}}

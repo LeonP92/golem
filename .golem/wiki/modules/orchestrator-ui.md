@@ -15,7 +15,7 @@ Provides all browser-facing HTTP routes for the orchestrator:
 ## Key types
 
 - `Handlers` — holds `*gorm.DB` and per-page `map[string]*template.Template`
-- `TicketRow` — view-model for dashboard ticket rows (Ticket + ShemName + Age string)
+- `TicketRow` — view-model for dashboard ticket rows (Ticket + ShemName + CreatedByName + Age string)
 - `ticketForm` — holds the new-ticket form fields for re-render on validation error
 
 ## Construction
@@ -40,6 +40,8 @@ h := ui.NewHandlers(gdb, nil)
 - `templates/partials/action_card.html` — `{{define "action_card"}}` renders approve/answer/ack form via `hx-post`
 - `templates/partials/ticket_row.html` — `{{define "ticket_row"}}` for dashboard table rows
 - `templates/partials/shem_row.html` — `{{define "shem_row"}}` for shem table rows
+
+`ticketNewSubmit` sets `Ticket.CreatedByUserID` from `auth.SessionUser(r)`. The dashboard table and ticket detail view both render a "Created by" column/field (via `db.CreatorNames`), showing "unknown" for legacy tickets with no recorded creator.
 
 ## Integration
 

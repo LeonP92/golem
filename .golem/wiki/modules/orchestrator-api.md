@@ -28,6 +28,8 @@
   - `PATCH /api/tickets/{id}/human-inputs/{inputID}` (API-key auth) — resolve an input; body `{"response": "..."}`
   - `POST /api/tickets/{id}/actions` (session auth) — single dispatcher for all human-initiated actions; body `{"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer", "feedback": "...", "input_id": N, "response": "..."}`
 
+`POST /api/tickets`, `GET /api/tickets`, and `GET /api/tickets/{id}` responses wrap `db.Ticket` in a `ticketResponse` that adds a resolved `created_by` username field (via `db.CreatorNames`). `createTicket` sets `CreatedByUserID` from `auth.SessionUser(r)` server-side — a client-supplied value in the request body is ignored.
+
 ## Why it exists
 
 Provides the full REST surface that shem workers and the UI consume. Atomic claim prevents two shems from grabbing the same ticket under concurrent requests. Log append uses upsert semantics for SPEC/PLAN so re-runs replace the prior doc rather than accumulating duplicates. Human-input rows decouple blocking questions from normal log flow; the `request-changes` action closes the approval input and injects a `feedback` input that the shem picks up on its next iteration.

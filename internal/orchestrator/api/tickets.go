@@ -12,6 +12,22 @@ import (
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
 
+// ticketResponse wraps a db.Ticket with a resolved creator username for
+// JSON responses, so clients don't need a second lookup to render
+// "created by X".
+type ticketResponse struct {
+	db.Ticket
+	CreatedBy string `json:"created_by"`
+}
+
+func toTicketResponse(t db.Ticket, names map[uint]string) ticketResponse {
+	created := ""
+	if t.CreatedByUserID != nil {
+		created = names[*t.CreatedByUserID]
+	}
+	return ticketResponse{Ticket: t, CreatedBy: created}
+}
+
 // ClaimResponse is returned by a successful ticket claim.
 type ClaimResponse struct {
 	TicketID        string        `json:"ticket_id"`
@@ -78,26 +94,36 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "repo_remote, branch, and description are required", http.StatusBadRequest)
 		return
 	}
+	user := auth.SessionUser(r)
 	ticket := db.Ticket{
 		RepoRemote:  urlnorm.Normalize(body.RepoRemote),
 		Branch:      body.Branch,
 		Description: body.Description,
 		Phase:       "unassigned",
 	}
+	if user != nil {
+		ticket.CreatedByUserID = &user.ID
+	}
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	names := db.CreatorNames(h.DB, []db.Ticket{ticket})
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(ticket) //nolint:errcheck
+	json.NewEncoder(w).Encode(toTicketResponse(ticket, names)) //nolint:errcheck
 }
 
 func (h *Handlers) listTickets(w http.ResponseWriter, r *http.Request) {
 	var tickets []db.Ticket
 	h.DB.Order("created_at desc").Find(&tickets)
+	names := db.CreatorNames(h.DB, tickets)
+	resp := make([]ticketResponse, len(tickets))
+	for i, t := range tickets {
+		resp[i] = toTicketResponse(t, names)
+	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(tickets) //nolint:errcheck
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
 
 func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
@@ -111,6 +137,7 @@ func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
+	names := db.CreatorNames(h.DB, []db.Ticket{ticket})
 	var entries []db.LogEntry
 	h.DB.Where("ticket_id = ?", id).Order("sequence_num asc").Find(&entries)
 	if entries == nil {
@@ -118,7 +145,7 @@ func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{ //nolint:errcheck
-		"ticket":      ticket,
+		"ticket":      toTicketResponse(ticket, names),
 		"log_entries": entries,
 	})
 }
