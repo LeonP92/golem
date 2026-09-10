@@ -199,6 +199,28 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			}
 			return nil
 
+		case "revising":
+			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback)); err != nil {
+				return err
+			}
+			finalPhase, sha, _ := readState(ticketDir)
+			if finalPhase == "" {
+				finalPhase = "ready-for-review"
+			}
+			orchPhase := toOrchestratorPhase(finalPhase)
+			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
+				if errors.Is(phErr, client.ErrNotOwner) {
+					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
+					return nil
+				}
+				log.Printf("executor: post phase error: %v", phErr)
+			}
+			if sha != "" {
+				PostCheckpointWithRetry(c, claim.TicketID, finalPhase, sha, 5) //nolint:errcheck
+			}
+			return nil
+
 		default:
 			log.Printf("executor: unknown start phase %q, falling through to implement", phase)
 			phase = "implement"
@@ -404,6 +426,42 @@ A human will review the work in the orchestrator UI and close the ticket.`,
 		ticketID, description,
 		ticketID, ticketID, ticketID, ticketID,
 		ticketID, ticketID, ticketID, ticketID, ticketID)
+}
+
+// buildRevisePrompt returns the prompt for a revise session: the ticket
+// was already implemented and reviewed once; this addresses human
+// feedback given on that review in the same worktree/branch, then
+// re-runs the review gate. Unlike buildImplementPrompt it forbids
+// golem ticket close (the ticket returns to ready-for-review, not closed)
+// and does not restate the plan — feedback is scoped to fixes, not a
+// re-implementation.
+func buildRevisePrompt(ticketID, description, feedback string) string {
+	return fmt.Sprintf(`You are a Golem developer addressing review feedback.
+This ticket was already implemented and reviewed once. A human reviewed
+the work and requested changes. Address ALL of the feedback below in the
+existing worktree, on the existing branch — do NOT start over.
+
+Ticket ID: %s
+Description: %s
+Worktree: .golem/tickets/%s/worktree/  (checked out on branch ticket/%s)
+
+Human feedback on the review:
+%s
+
+Instructions:
+1. Read .golem/roles/developer.md and follow the developer identity precisely.
+2. Address every point in the feedback above. Commit at each logical unit
+   (use git -C .golem/tickets/%s/worktree or cd into it).
+3. After each commit: golem ticket check-bloat
+4. Run golem observer dispatch calls per .golem/roles/developer.md
+5. Check .golem/tickets/%s/log.jsonl for unresolved BLOCKERs before continuing.
+6. When the feedback is fully addressed: golem ticket review --ticket %s
+
+STOP after the review. Do NOT run golem ticket close.
+A human will review the new changes in the orchestrator UI.`,
+		ticketID, description, ticketID, ticketID,
+		feedback,
+		ticketID, ticketID, ticketID)
 }
 
 // ensureRepoReady verifies the repo has a .golem setup and a code graph.
