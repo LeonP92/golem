@@ -75,11 +75,31 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.listTickets)))
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
 	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))
+	mux.Handle("GET /api/tickets/assigned", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.assignedTickets)))
 	mux.Handle("GET /api/tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.getTicket)))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("PATCH /api/tickets/{id}/phase", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updatePhase)))
 	mux.Handle("PATCH /api/tickets/{id}/checkpoint", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updateCheckpoint)))
+}
+
+// assignedTickets returns a summary of all tickets currently assigned to this shem.
+func (h *Handlers) assignedTickets(w http.ResponseWriter, r *http.Request) {
+	shem := auth.ShemFromRequest(r)
+	var tickets []db.Ticket
+	h.DB.Where("assigned_shem = ? AND phase NOT IN ?", shem.ID, []string{"unassigned", "closed"}).
+		Select("id, phase, repo_remote").Find(&tickets)
+	type summary struct {
+		TicketID   string `json:"ticket_id"`
+		Phase      string `json:"phase"`
+		RepoRemote string `json:"repo_remote"`
+	}
+	out := make([]summary, len(tickets))
+	for i, t := range tickets {
+		out[i] = summary{TicketID: t.ID, Phase: t.Phase, RepoRemote: t.RepoRemote}
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out) //nolint:errcheck
 }
 
 // resumableTickets returns tickets assigned to this shem that have a checkpoint

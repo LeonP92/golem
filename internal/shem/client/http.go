@@ -158,6 +158,30 @@ func (c *Client) Deregister() error {
 	return nil
 }
 
+// AssignedTicket is a lightweight summary of a ticket assigned to this shem.
+type AssignedTicket struct {
+	TicketID   string `json:"ticket_id"`
+	Phase      string `json:"phase"`
+	RepoRemote string `json:"repo_remote"`
+}
+
+// GetAssigned returns all tickets currently assigned to this shem (any active phase).
+func (c *Client) GetAssigned() ([]AssignedTicket, error) {
+	resp, err := c.do("GET", "/api/tickets/assigned", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	var results []AssignedTicket
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
 // GetResumable returns tickets assigned to this shem that have a checkpoint
 // and were mid-execution when the shem last died.
 func (c *Client) GetResumable() ([]*ClaimResponse, error) {
