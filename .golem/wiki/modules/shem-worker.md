@@ -8,6 +8,7 @@
 
 - `running map[uint]context.CancelFunc` tracks active tickets by ID; a per-ticket cancel is stored there after claim, replacing an idle placeholder that prevents duplicate-claim races.
 - `tryClaimAndRun(ticketID)` — deduplicates by ticket ID, enforces `cfg.MaxConcurrent`, claims, then runs the executor in a goroutine.
+- `HandleMessage` also reacts to WS `ticket_revise` pushes (sent when a human requests changes on a `ready-for-review` ticket) by calling `tryReviseAndRun(ticketID)` — same dedupe/slot/cleanup structure as `tryClaimAndRun`, but calls `POST /api/tickets/{id}/revise-claim` (`client.ClaimRevision`) instead of `/claim`, since the ticket is already owned by this shem rather than unassigned. A 409 (requeued before reconnect) is a silent no-op.
 
 Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to 10 minutes for the map to drain, then calls `Deregister`.
 
@@ -16,7 +17,8 @@ Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to
 2. Starting a `tailLog` goroutine that polls `.golem/tickets/<id>/log.jsonl` every 500 ms and POSTs new JSON-lines to `/api/tickets/{id}/log`.
 3. When `CheckpointPhase != nil`, calling `RecoverTicket` to restore local worktree state before resuming.
 4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
-5. After the CLI returns, reading `.golem/tickets/<id>/state.json` and posting a final checkpoint via `PostCheckpointWithRetry`.
+5. A `"revising"` phase case (reached only via `ReviseClaim`'s `CheckpointPhase: "revising"` sentinel, not a local ticket phase): consumes the pending `feedback` HumanInput, runs `buildRevisePrompt` in the existing worktree/branch (no plan restatement, no `golem ticket close`), then re-reads local state and posts the resulting phase (`ready-for-review` or `needs-attention`) back — same checkpoint/post-phase pattern as the `implement` case.
+6. After the CLI returns, reading `.golem/tickets/<id>/state.json` and posting a final checkpoint via `PostCheckpointWithRetry`.
 
 The `tailDone` channel ensures the tail goroutine fully exits (flushing its last drain pass) before `RunTicket` returns, preventing file-handle leaks on Windows.
 
@@ -30,7 +32,7 @@ The `tailDone` channel ensures the tail goroutine fully exits (flushing its last
 
 ## Why it exists
 
-Decouples ticket execution from the orchestrator so multiple Shem processes can run on different machines, each claiming tickets for repos they have checked out. The `running` map (replacing the prior `active bool`) enables true parallel ticket execution within a single Shem process. The feedback loop lets humans request changes to a spec or plan and have Claude revise it without manual requeue.
+Decouples ticket execution from the orchestrator so multiple Shem processes can run on different machines, each claiming tickets for repos they have checked out. The `running` map (replacing the prior `active bool`) enables true parallel ticket execution within a single Shem process. The feedback loop lets humans request changes to a spec, plan, or (via the `revising` phase) an already-reviewed implementation, and have Claude revise it in place without a full requeue.
 
 ## Dependencies
 
