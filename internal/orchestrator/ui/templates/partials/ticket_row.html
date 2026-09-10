@@ -20,17 +20,6 @@
     <a href="/tickets/{{.Ticket.ID}}" class="btn btn-ghost btn-xs">
       <span class="iconify" data-icon="heroicons:arrow-top-right-on-square"></span>
     </a>
-    {{if ne .Ticket.Phase "closed"}}
-    <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
-          hx-vals='{"action":"close"}'
-          hx-confirm="Close ticket {{slice .Ticket.ID 0 8}}? This will cancel any in-progress work."
-          hx-on::after-request="if(event.detail.successful) window.location.reload()"
-          class="inline">
-      <button type="submit" class="btn btn-ghost btn-xs text-error" title="Close ticket">
-        <span class="iconify" data-icon="heroicons:x-mark"></span>
-      </button>
-    </form>
-    {{end}}
   </td>
 </tr>
 {{end}}

@@ -312,6 +312,8 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "ticket already closed", http.StatusConflict)
 		return
 	}
+	h.DB.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{})
+
 	if ticket.AssignedShem != nil {
 		h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
 			Type:     "ticket_closed",

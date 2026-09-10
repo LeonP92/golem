@@ -108,6 +108,9 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("worker: ticket %s resume error: %v", claim.TicketID, err)
 			if phaseErr := w.client.PostPhase(claim.TicketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
@@ -125,6 +128,11 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 		}
 	case "ticket_closed":
 		if msg.TicketID != nil {
+			w.mu.Lock()
+			if cancel, ok := w.running[*msg.TicketID]; ok {
+				cancel()
+			}
+			w.mu.Unlock()
 			go w.cleanupTicket(msg.Repo, *msg.TicketID)
 		}
 	case "ticket_revise":
@@ -191,6 +199,9 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("worker: ticket %s error: %v", ticketID, err)
 			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
@@ -241,6 +252,9 @@ func (w *Worker) tryReviseAndRun(ticketID string) {
 
 	if w.executor != nil {
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, claim); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			log.Printf("worker: ticket %s revise error: %v", ticketID, err)
 			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
 				log.Printf("worker: post phase error: %v", phaseErr)
