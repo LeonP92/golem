@@ -10,10 +10,12 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
+	"github.com/leonp92/golem/internal/slug"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
@@ -60,6 +62,22 @@ var tmplFuncs = template.FuncMap{
 			return s
 		}
 		return string(runes[:n]) + "…"
+	},
+	"displayTitle": func(title, description string) string {
+		if title != "" {
+			return title
+		}
+		runes := []rune(description)
+		for i, c := range runes {
+			if c == '\n' {
+				runes = runes[:i]
+				break
+			}
+		}
+		if len(runes) > 80 {
+			return string(runes[:80]) + "…"
+		}
+		return string(runes)
 	},
 }
 
@@ -296,6 +314,7 @@ func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 type ticketForm struct {
 	RepoRemote  string
 	BaseBranch  string
+	Title       string
 	Description string
 }
 
@@ -333,9 +352,10 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 	form := ticketForm{
 		RepoRemote:  r.FormValue("repo_remote"),
 		BaseBranch:  r.FormValue("base_branch"),
+		Title:       r.FormValue("title"),
 		Description: r.FormValue("description"),
 	}
-	if form.RepoRemote == "" || form.BaseBranch == "" || form.Description == "" {
+	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
 		h.render(w, "ticket_new", map[string]any{
 			"Form":           form,
 			"Error":          "All fields are required.",
@@ -345,9 +365,13 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	user := auth.SessionUser(r)
+	id := uuid.NewString()
 	ticket := db.Ticket{
+		ID:          id,
 		RepoRemote:  urlnorm.Normalize(form.RepoRemote),
-		Branch:      form.BaseBranch,
+		BaseBranch:  form.BaseBranch,
+		Title:       form.Title,
+		Branch:      slug.Branch(form.Title, id),
 		Description: form.Description,
 		Phase:       "unassigned",
 	}

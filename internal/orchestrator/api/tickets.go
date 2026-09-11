@@ -6,10 +6,12 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
+	"github.com/leonp92/golem/internal/slug"
 )
 
 // ticketResponse wraps a db.Ticket with a resolved creator username for
@@ -32,6 +34,7 @@ func toTicketResponse(t db.Ticket, names map[uint]string) ticketResponse {
 type ClaimResponse struct {
 	TicketID        string        `json:"ticket_id"`
 	Branch          string        `json:"branch"`
+	Title           string        `json:"title"`
 	RepoRemote      string        `json:"repo_remote"`
 	Description     string        `json:"description"`
 	CheckpointPhase *string       `json:"checkpoint_phase"`
@@ -61,6 +64,7 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	return &ClaimResponse{
 		TicketID:        ticketID,
 		Branch:          ticket.Branch,
+		Title:           ticket.Title,
 		RepoRemote:      ticket.RepoRemote,
 		Description:     ticket.Description,
 		CheckpointPhase: ticket.CheckpointPhase,
@@ -123,6 +127,7 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 		claims = append(claims, ClaimResponse{
 			TicketID:        t.ID,
 			Branch:          t.Branch,
+			Title:           t.Title,
 			RepoRemote:      t.RepoRemote,
 			Description:     t.Description,
 			CheckpointPhase: t.CheckpointPhase,
@@ -138,20 +143,25 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		RepoRemote  string `json:"repo_remote"`
 		Branch      string `json:"branch"`
+		Title       string `json:"title"`
 		Description string `json:"description"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	if body.RepoRemote == "" || body.Branch == "" || body.Description == "" {
-		http.Error(w, "repo_remote, branch, and description are required", http.StatusBadRequest)
+	if body.RepoRemote == "" || body.Branch == "" || body.Title == "" || body.Description == "" {
+		http.Error(w, "repo_remote, branch, title, and description are required", http.StatusBadRequest)
 		return
 	}
 	user := auth.SessionUser(r)
+	id := uuid.NewString()
 	ticket := db.Ticket{
+		ID:          id,
 		RepoRemote:  urlnorm.Normalize(body.RepoRemote),
-		Branch:      body.Branch,
+		BaseBranch:  body.Branch,
+		Title:       body.Title,
+		Branch:      slug.Branch(body.Title, id),
 		Description: body.Description,
 		Phase:       "unassigned",
 	}
