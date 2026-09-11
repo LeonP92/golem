@@ -32,7 +32,7 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 
 	ticketDir := filepath.Join(repoPath, ".golem", "tickets", claim.TicketID)
 	worktreePath := filepath.Join(ticketDir, "worktree")
-	worktreeBranch := "ticket/" + claim.TicketID
+	worktreeBranch := claim.Branch
 
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		// Fetch in case the branch was pushed; ignore errors (no_push mode has no remote branch).

@@ -16,7 +16,8 @@ func setUpRealWorktreeTicket(t *testing.T) (repo, ticketID string) {
 	repo = initRepoForCLI(t)
 	ticketID = "t1"
 	s := ticket.New(ticketID, "", false)
-	worktreePath, branch, err := workspace.Create(repo, ticketID, "HEAD")
+	branch := "ticket/" + ticketID
+	worktreePath, err := workspace.Create(repo, ticketID, branch, "HEAD")
 	if err != nil {
 		t.Fatalf("workspace.Create: %v", err)
 	}

@@ -31,12 +31,10 @@ func initTestRepo(t *testing.T) string {
 func TestCreateAndRemoveWorktree(t *testing.T) {
 	repo := initTestRepo(t)
 
-	worktreePath, branch, err := Create(repo, "t1", "HEAD")
+	branch := "ticket/human-friendly-name-t1"
+	worktreePath, err := Create(repo, "t1", branch, "HEAD")
 	if err != nil {
 		t.Fatalf("Create: %v", err)
-	}
-	if branch != "ticket/t1" {
-		t.Errorf("branch = %q, want ticket/t1", branch)
 	}
 	if _, err := os.Stat(worktreePath); err != nil {
 		t.Fatalf("worktree path does not exist: %v", err)

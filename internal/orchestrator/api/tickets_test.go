@@ -291,7 +291,8 @@ func TestCreateTicket_SetsCreatedByFromSession(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]string{
 		"repo_remote": "https://github.com/org/repo5",
-		"branch":      "ticket/created-by",
+		"branch":      "main",
+		"title":       "Created By Test",
 		"description": "created by test",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
@@ -323,7 +324,8 @@ func TestCreateTicket_IgnoresClientSuppliedCreatedByUserID(t *testing.T) {
 
 	body, _ := json.Marshal(map[string]any{
 		"repo_remote":        "https://github.com/org/repo6",
-		"branch":             "ticket/spoof",
+		"branch":             "main",
+		"title":              "Spoof Test",
 		"description":        "spoof test",
 		"created_by_user_id": user.ID + 999,
 	})
@@ -408,5 +410,55 @@ func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 	}
 	if single.Ticket.CreatedBy != "leon" {
 		t.Errorf("expected created_by=leon, got %q", single.Ticket.CreatedBy)
+	}
+}
+
+func TestCreateTicket_RequiresTitle(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	_, cookie := seedSessionUser(t, h.DB, "leon")
+
+	body, _ := json.Marshal(map[string]string{
+		"repo_remote": "https://github.com/org/repo7",
+		"branch":      "main",
+		"description": "missing title",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestCreateTicket_ComputesBranchFromTitle(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	_, cookie := seedSessionUser(t, h.DB, "leon")
+
+	body, _ := json.Marshal(map[string]string{
+		"repo_remote": "https://github.com/org/repo8",
+		"branch":      "main",
+		"title":       "Human Friendly Branch Names",
+		"description": "branch computation test",
+	})
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		ID     string `json:"id"`
+		Branch string `json:"branch"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := "ticket/human-friendly-branch-names-" + resp.ID[:8]
+	if resp.Branch != want {
+		t.Errorf("expected branch=%q, got %q", want, resp.Branch)
 	}
 }

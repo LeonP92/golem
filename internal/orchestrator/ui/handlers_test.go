@@ -134,7 +134,7 @@ func TestTicketNewSubmit_SetsCreatedByFromSession(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&description=test+ticket")
+	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&title=Test+Ticket&description=test+ticket")
 	req := httptest.NewRequest("POST", "/tickets/new", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.AddCookie(cookie)
@@ -151,6 +151,48 @@ func TestTicketNewSubmit_SetsCreatedByFromSession(t *testing.T) {
 	}
 	if ticket.CreatedByUserID == nil || *ticket.CreatedByUserID != user.ID {
 		t.Errorf("expected CreatedByUserID=%d, got %v", user.ID, ticket.CreatedByUserID)
+	}
+}
+
+func TestTicketNewSubmit_MissingTitleRerendersForm(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	user := db.User{Username: "leon", PasswordHash: "x"}
+	gdb.Create(&user)
+	w := httptest.NewRecorder()
+	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	cookie := w.Result().Cookies()[0]
+
+	tmpls, err := ui.LoadTemplates()
+	if err != nil {
+		t.Fatalf("LoadTemplates: %v", err)
+	}
+	h := ui.NewHandlersWithMap(gdb, tmpls, false)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&description=test+ticket")
+	req := httptest.NewRequest("POST", "/tickets/new", body)
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 (form re-render), got %d: %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "All fields are required.") {
+		t.Errorf("expected validation error message in response body")
+	}
+
+	var count int64
+	gdb.Model(&db.Ticket{}).Count(&count)
+	if count != 0 {
+		t.Errorf("expected no ticket created, got %d", count)
 	}
 }
 
