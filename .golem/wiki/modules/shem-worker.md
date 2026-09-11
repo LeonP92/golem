@@ -12,6 +12,8 @@
 
 Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to 10 minutes for the map to drain, then calls `Deregister`.
 
+`cleanupTicket` (invoked on `ticket_closed`) reads the ticket's local `state.json` (via `ticket.Load`) to get the real working branch before calling `workspace.Remove`, instead of re-deriving `"ticket/" + ticketID` — branches are now `ticket/<slug>-<id8>`, so the old re-derivation would target a nonexistent ref and leak the branch.
+
 **GolemExecutor** (`executor.go`) runs a claimed ticket by:
 1. Resolving the local repo path from `config.Repos` by normalized remote URL.
 2. Starting a `tailLog` goroutine that polls `.golem/tickets/<id>/log.jsonl` every 500 ms and POSTs new JSON-lines to `/api/tickets/{id}/log`.
