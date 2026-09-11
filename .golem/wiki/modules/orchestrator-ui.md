@@ -10,7 +10,7 @@ Provides all browser-facing HTTP routes for the orchestrator:
 - **Dashboard** (`/dashboard`) — table of all tickets with phase badges and age, plus an "Action Required" panel listing all unresolved `HumanInput` rows across all tickets
 - **Shems** (`/shems`) — table of registered Shem workers with online/offline status, last heartbeat, current ticket
 - **Ticket new** (`GET /tickets/new`, `POST /tickets/new`) — form to create a ticket (repo remote URL, branch, description)
-- **Ticket detail** (`/tickets/{id}`) — full view with metadata, action card for pending human input, log feed with HTMX SSE live-tail
+- **Ticket detail** (`/tickets/{id}`) — full view with metadata, action card for pending human input, log feed with HTMX SSE live-tail. The close/complete action button's label/color/icon is conditional on `.Ticket.Phase`: `ready-for-review` shows green "Mark Complete"; any other non-terminal phase shows red "Close" — the `action:"close"` payload sent to the server is identical either way.
 
 ## Key types
 
