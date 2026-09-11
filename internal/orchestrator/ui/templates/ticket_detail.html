@@ -40,6 +40,7 @@
 
     {{if and (ne .Ticket.Phase "unassigned") (ne .Ticket.Phase "closed")}}
     <div class="flex gap-2">
+      {{if eq .Ticket.Phase "ready-for-review"}}
       <button class="btn btn-sm btn-success gap-1.5"
         hx-post="/api/tickets/{{.Ticket.ID}}/actions"
         hx-vals='{"action":"close"}'
@@ -48,6 +49,16 @@
         <span class="iconify" data-icon="heroicons:check-circle"></span>
         Mark Complete
       </button>
+      {{else}}
+      <button class="btn btn-sm btn-error gap-1.5"
+        hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+        hx-vals='{"action":"close"}'
+        hx-confirm="Close this ticket? This marks the work as done."
+        hx-on::after-request="if(event.detail.successful) window.location.reload()">
+        <span class="iconify" data-icon="heroicons:x-circle"></span>
+        Close
+      </button>
+      {{end}}
       <button class="btn btn-sm btn-ghost gap-1.5"
         hx-post="/api/tickets/{{.Ticket.ID}}/actions"
         hx-vals='{"action":"requeue"}'
