@@ -31,6 +31,8 @@
 
 `POST /api/tickets`, `GET /api/tickets`, and `GET /api/tickets/{id}` responses wrap `db.Ticket` in a `ticketResponse` that adds a resolved `created_by` username field (via `db.CreatorNames`). `createTicket` sets `CreatedByUserID` from `auth.SessionUser(r)` server-side — a client-supplied value in the request body is ignored.
 
+`createTicket` requires a `title` field (in addition to `repo_remote`, `branch`, `description`). It generates the ticket UUID up front so it can compute `Branch: slug.Branch(title, id)` before the single insert; the request's `branch` field is stored as `BaseBranch` (the branch the ticket forks from), not the working branch. `ClaimResponse` (returned by claim/resume/revise-claim) carries the computed `Title` and `Branch` through to the shem worker, so branch naming is computed once server-side rather than re-derived by each caller.
+
 ## Why it exists
 
 Provides the full REST surface that shem workers and the UI consume. Atomic claim prevents two shems from grabbing the same ticket under concurrent requests. Log append uses upsert semantics for SPEC/PLAN so re-runs replace the prior doc rather than accumulating duplicates. Human-input rows decouple blocking questions from normal log flow; the `request-changes` action closes the approval input and injects a `feedback` input that the shem picks up on its next iteration.

@@ -12,18 +12,20 @@
 
 Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to 10 minutes for the map to drain, then calls `Deregister`.
 
+`cleanupTicket` (invoked on `ticket_closed`) reads the ticket's local `state.json` (via `ticket.Load`) to get the real working branch before calling `workspace.Remove`, instead of re-deriving `"ticket/" + ticketID` — branches are now `ticket/<slug>-<id8>`, so the old re-derivation would target a nonexistent ref and leak the branch.
+
 **GolemExecutor** (`executor.go`) runs a claimed ticket by:
 1. Resolving the local repo path from `config.Repos` by normalized remote URL.
 2. Starting a `tailLog` goroutine that polls `.golem/tickets/<id>/log.jsonl` every 500 ms and POSTs new JSON-lines to `/api/tickets/{id}/log`.
 3. When `CheckpointPhase != nil`, calling `RecoverTicket` to restore local worktree state before resuming.
-4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
+4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. `golem ticket new` is invoked with `--branch claim.Branch` so the worktree is created on the server-computed slug branch instead of `golem ticket new`'s own `ticket/<id>` default. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
 5. A `"revising"` phase case (reached only via `ReviseClaim`'s `CheckpointPhase: "revising"` sentinel, not a local ticket phase): consumes the pending `feedback` HumanInput, runs `buildRevisePrompt` in the existing worktree/branch (no plan restatement, no `golem ticket close`), then re-reads local state and posts the resulting phase (`ready-for-review` or `needs-attention`) back — same checkpoint/post-phase pattern as the `implement` case.
 6. After the CLI returns, reading `.golem/tickets/<id>/state.json` and posting a final checkpoint via `PostCheckpointWithRetry`.
 
 The `tailDone` channel ensures the tail goroutine fully exits (flushing its last drain pass) before `RunTicket` returns, preventing file-handle leaks on Windows.
 
 **Recovery** (`recover.go`) restores a checkpointed ticket's local worktree after a node failure:
-- `RecoverTicket(ctx, claim, cfg)` — clones repo if absent, fetches, checks out branch, resets to checkpoint SHA, then calls `ReconstructState`.
+- `RecoverTicket(ctx, claim, cfg)` — clones repo if absent, fetches, checks out `claim.Branch` (the server-computed slug branch carried through the claim, not re-derived from the ticket ID), resets to checkpoint SHA, then calls `ReconstructState`.
 - `ReconstructState(ticketDir, claim)` — writes `state.json` (phase/branch/sha) and `log.jsonl` from the `ClaimResponse`. Idempotent.
 - `CloneIfMissing(ctx, repoPath, remote)` — runs `git clone` only if `repoPath` does not exist.
 

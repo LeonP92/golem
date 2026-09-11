@@ -38,6 +38,8 @@ type Shem struct {
 type Ticket struct {
 	ID              string    `gorm:"primaryKey" json:"id"`
 	RepoRemote      string    `gorm:"not null;index" json:"repo_remote"`
+	Title           string    `gorm:"not null;default:''" json:"title"`
+	BaseBranch      string    `gorm:"not null;default:'main'" json:"base_branch"`
 	Branch          string    `gorm:"not null" json:"branch"`
 	Description     string    `gorm:"not null" json:"description"`
 	Phase           string    `gorm:"not null;default:'unassigned'" json:"phase"`

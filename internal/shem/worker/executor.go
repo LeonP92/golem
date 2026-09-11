@@ -100,7 +100,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		// existing worktree instead of trying to create it again.
 		postStatus(c, ticketID, "Initializing repository…")
 		if _, statErr := os.Stat(ticketDir); os.IsNotExist(statErr) {
-			if err := runGolemTicketNew(ctx, repoPath, ticketID, claim.Description); err != nil {
+			if err := runGolemTicketNew(ctx, repoPath, ticketID, claim.Branch, claim.Description); err != nil {
 				return fmt.Errorf("golem ticket new: %w", err)
 			}
 		}
@@ -266,8 +266,8 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 // runGolemTicketNew creates the local ticket scaffold (worktree + branch) without
 // invoking Claude. Claude's role starts at brainstorm, after the scaffold exists.
-func runGolemTicketNew(ctx context.Context, repoPath, ticketID, description string) error {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "new", "--ticket-id", ticketID, description)
+func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
+	cmd := exec.CommandContext(ctx, "golem", "ticket", "new", "--ticket-id", ticketID, "--branch", branch, description)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {

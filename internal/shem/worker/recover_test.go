@@ -1,13 +1,16 @@
 package worker_test
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/shem/client"
+	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/shem/worker"
 )
 
@@ -110,5 +113,62 @@ func TestReconstructState_EmptyLogs(t *testing.T) {
 	}
 	if strings.TrimSpace(string(logData)) != "" {
 		t.Errorf("expected empty log.jsonl, got: %q", logData)
+	}
+}
+
+// TestRecoverTicket_UsesClaimBranch verifies that RecoverTicket creates the
+// worktree on claim.Branch (the server-computed slug branch), not a
+// re-derived "ticket/<id>" name.
+func TestRecoverTicket_UsesClaimBranch(t *testing.T) {
+	ctx := context.Background()
+	repoPath := t.TempDir()
+	run := func(args ...string) {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repoPath
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	run("init", "-q")
+	run("config", "user.email", "test@example.com")
+	run("config", "user.name", "test")
+	if err := os.WriteFile(filepath.Join(repoPath, "README.md"), []byte("hi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run("add", "README.md")
+	run("commit", "-q", "-m", "initial")
+	run("branch", "ticket/human-friendly-name-abcd1234")
+	headSHA, err := exec.Command("git", "-C", repoPath, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("rev-parse HEAD: %v", err)
+	}
+	sha := strings.TrimSpace(string(headSHA))
+
+	phase := "implement"
+	claim := &client.ClaimResponse{
+		TicketID:        "ticket-uuid-branch",
+		Branch:          "ticket/human-friendly-name-abcd1234",
+		RepoRemote:      "local/repo",
+		CheckpointPhase: &phase,
+		CheckpointSHA:   &sha,
+	}
+	cfg := &config.Config{
+		Repos: []config.RepoConfig{
+			{Path: repoPath, NormalizedRemote: "local/repo"},
+		},
+	}
+
+	if err := worker.RecoverTicket(ctx, claim, cfg); err != nil {
+		t.Fatalf("RecoverTicket: %v", err)
+	}
+
+	worktreePath := filepath.Join(repoPath, ".golem", "tickets", claim.TicketID, "worktree")
+	branchCmd := exec.Command("git", "-C", worktreePath, "rev-parse", "--abbrev-ref", "HEAD")
+	out, err := branchCmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse --abbrev-ref HEAD: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != claim.Branch {
+		t.Errorf("worktree branch = %q, want %q", got, claim.Branch)
 	}
 }

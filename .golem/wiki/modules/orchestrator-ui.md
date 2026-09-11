@@ -43,6 +43,8 @@ h := ui.NewHandlers(gdb, nil)
 
 `ticketNewSubmit` sets `Ticket.CreatedByUserID` from `auth.SessionUser(r)`. The dashboard table and ticket detail view both render a "Created by" column/field (via `db.CreatorNames`), showing "unknown" for legacy tickets with no recorded creator.
 
+The ticket-new form requires a `Title` field (used server-side to compute the branch name via `internal/slug`). Since older tickets have `Title == ""` (no backfill), all render sites use the `displayTitle` template func (falls back to a truncated first line of `Description` when `Title` is empty) instead of showing `Title` raw, so pre-existing tickets keep a sensible heading.
+
 ## Integration
 
 `server.Routes()` calls `ui.LoadTemplates()` and registers `uiHandlers.RegisterRoutes(mux)` alongside the API routes.

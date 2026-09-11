@@ -19,7 +19,11 @@
           </a>
           {{end}}
         </div>
-        <p class="text-base-content/70 mt-1 text-sm" title="{{.Ticket.Description}}">{{truncate 120 (firstLine .Ticket.Description)}}</p>
+        <p class="text-base-content/70 mt-1 text-sm font-medium"
+           title="{{.Ticket.Title}}">{{displayTitle .Ticket.Title .Ticket.Description}}</p>
+        {{if .Ticket.Title}}
+        <p class="text-base-content/50 mt-0.5 text-xs" title="{{.Ticket.Description}}">{{truncate 120 (firstLine .Ticket.Description)}}</p>
+        {{end}}
       </div>
     </div>
   </div>

@@ -76,6 +76,16 @@
 
       <div class="form-control">
         <label class="label">
+          <span class="label-text font-medium">Title</span>
+          <span class="label-text-alt text-base-content/50">Used for the branch name</span>
+        </label>
+        <input type="text" name="title" value="{{.Form.Title}}"
+               class="input input-bordered" required maxlength="80"
+               placeholder="human-friendly-branch-names">
+      </div>
+
+      <div class="form-control">
+        <label class="label">
           <span class="label-text font-medium">Description</span>
           <span class="label-text-alt text-base-content/50">What should the agent build?</span>
         </label>

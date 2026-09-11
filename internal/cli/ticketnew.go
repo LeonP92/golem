@@ -19,6 +19,7 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("id", "", "ticket id (required)")
 	ticketID := fs.String("ticket-id", "", "ticket id assigned by orchestrator (alternative to --id)")
+	branch := fs.String("branch", "", "working branch name (optional; defaults to ticket/<id> for standalone use)")
 	trivial := fs.Bool("trivial", false, "skip brainstorm, go straight to plan with developer+reviewer only")
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -45,8 +46,12 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	workingBranch := *branch
+	if workingBranch == "" {
+		workingBranch = "ticket/" + *id
+	}
 	s := ticket.New(*id, description, *trivial)
-	worktreePath, branch, err := workspace.Create(*repo, *id, "HEAD")
+	worktreePath, err := workspace.Create(*repo, *id, workingBranch, "HEAD")
 	if err != nil {
 		fmt.Fprintf(stderr, "creating worktree: %v\n", err)
 		return 1
@@ -55,7 +60,7 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "worktree setup: %v\n", err)
 		return 1
 	}
-	s.Branch = branch
+	s.Branch = workingBranch
 	s.WorktreePath = worktreePath
 
 	ticketDir := filepath.Join(*repo, ".golem", "tickets", *id)
@@ -75,6 +80,6 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	fmt.Fprintf(stdout, "created ticket %s on branch %s\n", *id, branch)
+	fmt.Fprintf(stdout, "created ticket %s on branch %s\n", *id, workingBranch)
 	return 0
 }

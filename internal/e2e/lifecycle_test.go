@@ -36,7 +36,8 @@ func TestFullTicketLifecycleWithMockBackend(t *testing.T) {
 	repo := initFixtureRepo(t)
 
 	s := ticket.New("e2e-1", "", false)
-	worktreePath, branch, err := workspace.Create(repo, "e2e-1", "HEAD")
+	branch := "ticket/e2e-1"
+	worktreePath, err := workspace.Create(repo, "e2e-1", branch, "HEAD")
 	if err != nil {
 		t.Fatalf("workspace.Create: %v", err)
 	}

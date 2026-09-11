@@ -10,6 +10,7 @@ import (
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"github.com/leonp92/golem/internal/ticket"
 	"github.com/leonp92/golem/internal/workspace"
 )
 
@@ -187,8 +188,12 @@ func (w *Worker) cleanupTicket(repoRemote, ticketID string) {
 		log.Printf("worker: cleanup ticket %s: no local path for repo %q", ticketID, repoRemote)
 		return
 	}
-	worktreePath := filepath.Join(repoPath, ".golem", "tickets", ticketID, "worktree")
+	ticketDir := filepath.Join(repoPath, ".golem", "tickets", ticketID)
+	worktreePath := filepath.Join(ticketDir, "worktree")
 	branch := "ticket/" + ticketID
+	if s, err := ticket.Load(ticketDir); err == nil && s.Branch != "" {
+		branch = s.Branch
+	}
 	if err := workspace.Remove(repoPath, worktreePath, branch); err != nil {
 		log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
 	} else {

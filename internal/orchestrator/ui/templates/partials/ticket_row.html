@@ -11,7 +11,7 @@
   </td>
   <td class="max-w-sm">
     <a href="/tickets/{{.Ticket.ID}}" class="link link-hover font-medium truncate block"
-       title="{{.Ticket.Description}}">{{truncate 80 (firstLine .Ticket.Description)}}</a>
+       title="{{.Ticket.Title}}">{{truncate 80 (displayTitle .Ticket.Title .Ticket.Description)}}</a>
     <div class="text-xs text-base-content/40 font-mono truncate mt-0.5" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</div>
   </td>
   <td>

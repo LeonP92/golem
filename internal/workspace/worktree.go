@@ -7,16 +7,15 @@ import (
 	"path/filepath"
 )
 
-func Create(repoRoot, ticketID, branchBaseSHA string) (worktreePath, branch string, err error) {
-	branch = "ticket/" + ticketID
+func Create(repoRoot, ticketID, branch, branchBaseSHA string) (worktreePath string, err error) {
 	worktreePath = filepath.Join(repoRoot, ".golem", "tickets", ticketID, "worktree")
 
 	cmd := exec.Command("git", "worktree", "add", "-b", branch, worktreePath, branchBaseSHA)
 	cmd.Dir = repoRoot
 	if out, err := cmd.CombinedOutput(); err != nil {
-		return "", "", fmt.Errorf("git worktree add: %w\n%s", err, out)
+		return "", fmt.Errorf("git worktree add: %w\n%s", err, out)
 	}
-	return worktreePath, branch, nil
+	return worktreePath, nil
 }
 
 func Remove(repoRoot, worktreePath, branch string) error {
