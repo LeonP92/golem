@@ -306,3 +306,6 @@ deploy/
 
 Golem built Golem. The reviewer approved.
 
+## License
+
+MIT — see [LICENSE](LICENSE).
