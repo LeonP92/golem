@@ -23,6 +23,13 @@ type Handlers struct {
 	// BaseURL is the orchestrator's externally reachable base URL, used to
 	// build ticket links in GitHub comments. Empty renders a relative link.
 	BaseURL string
+	// Sync triggers an immediate manual GitHub ingest pass. It is nil
+	// whenever GitHub sync is not running (no repos enabled, or the token is
+	// missing) — the default install. Handlers must check for nil before
+	// calling it and respond 503, never let it reach a nil-pointer panic.
+	Sync SyncTrigger
+	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
+	ManualSyncCooldown time.Duration
 }
 
 // NewHandlers creates a Handlers with the given dependencies.

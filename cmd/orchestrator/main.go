@@ -182,6 +182,16 @@ func main() {
 
 	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
 	srv := server.New(gdb, hub, broker, secureCookie, cfg.BaseURL)
+	srv.ManualSyncCooldown = cfg.GitHub.ManualSyncCooldownDuration()
+	// Only assign Sync when the worker was actually started. ghWorker is a
+	// *ghsync.Worker; assigning a nil *ghsync.Worker to the api.SyncTrigger
+	// interface field would produce a non-nil interface holding a nil
+	// pointer, so h.Sync == nil in the handler would be false and the first
+	// call into it would panic instead of returning 503. Guarding here keeps
+	// the interface itself nil whenever sync isn't running.
+	if ghWorker != nil {
+		srv.Sync = ghWorker
+	}
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	if secureCookie {
 		log.Printf("listening on %s (TLS)", addr)

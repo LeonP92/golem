@@ -3,6 +3,7 @@ package server
 import (
 	"log"
 	"net/http"
+	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
@@ -18,6 +19,15 @@ type Server struct {
 	Broker       *sse.Broker
 	SecureCookie bool
 	BaseURL      string
+	// Sync triggers an immediate manual GitHub ingest pass. Left nil when
+	// GitHub sync is not running (no repos enabled, or the token is
+	// missing) — the default install; api.Handlers responds 503 in that
+	// case rather than panicking. Set from cmd/orchestrator/main.go only
+	// when the worker was actually started, so a nil *ghsync.Worker is
+	// never boxed into this interface (see main.go for why that matters).
+	Sync api.SyncTrigger
+	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
+	ManualSyncCooldown time.Duration
 }
 
 // New creates a Server with the given dependencies. baseURL is the
@@ -40,11 +50,14 @@ func (s *Server) Routes() http.Handler {
 	// API routes (Shem-facing and session-protected JSON endpoints).
 	h := api.NewHandlers(s.DB, s.Hub, s.Broker)
 	h.BaseURL = s.BaseURL
+	h.Sync = s.Sync
+	h.ManualSyncCooldown = s.ManualSyncCooldown
 	h.LogEntryHTML = ui.MakeLogEntryRenderer(tmpls)
 	h.RegisterShemRoutes(mux)
 	h.RegisterTicketRoutes(mux)
 	h.RegisterLogRoutes(mux)
 	h.RegisterHumanRoutes(mux)
+	h.RegisterGitHubRoutes(mux)
 
 	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls, s.SecureCookie)
 	uiHandlers.RegisterRoutes(mux)
