@@ -33,7 +33,7 @@
             {{end}}
           </span>
         </p>
-        <div class="md-content mt-2 text-sm bg-base-200 rounded p-3 max-h-64 overflow-y-auto">{{.Ticket.Description}}</div>
+        <pre class="description mt-2 text-sm font-sans whitespace-pre-wrap bg-base-200 rounded p-3 max-h-64 overflow-y-auto">{{.Ticket.Description}}</pre>
         {{else}}
         <p class="text-base-content/70 mt-1 text-sm font-medium"
            title="{{.Ticket.Title}}">{{displayTitle .Ticket.Title .Ticket.Description}}</p>

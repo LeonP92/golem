@@ -198,6 +198,8 @@ func TestGitHubSettingsSubmit(t *testing.T) {
 		formBody    string
 		wantEnabled bool
 		wantLabel   string
+		wantOwner   string
+		wantName    string
 	}{
 		{
 			name:        "creates a new row when none exists",
@@ -205,6 +207,8 @@ func TestGitHubSettingsSubmit(t *testing.T) {
 			formBody:    "repo_remote=https://github.com/org/new&enabled=on&label=custom",
 			wantEnabled: true,
 			wantLabel:   "custom",
+			wantOwner:   "org",
+			wantName:    "new",
 		},
 		{
 			name: "disables an existing row when the checkbox is absent",
@@ -272,6 +276,12 @@ func TestGitHubSettingsSubmit(t *testing.T) {
 			if repo.Label != tc.wantLabel {
 				t.Errorf("Label = %q, want %q", repo.Label, tc.wantLabel)
 			}
+			if tc.wantOwner != "" && repo.Owner != tc.wantOwner {
+				t.Errorf("Owner = %q, want %q", repo.Owner, tc.wantOwner)
+			}
+			if tc.wantName != "" && repo.Name != tc.wantName {
+				t.Errorf("Name = %q, want %q", repo.Name, tc.wantName)
+			}
 		})
 	}
 }
@@ -320,6 +330,87 @@ func TestTicketDetailShowsIssueLinkAndReadOnlyTitle(t *testing.T) {
 	}
 	if !strings.Contains(body, "synced from GitHub") {
 		t.Error("read-only provenance note missing — an editable title would silently revert on the next ingest")
+	}
+}
+
+// TestTicketDetailDescriptionIsEscapedPlainText guards against stored XSS via
+// .Ticket.Description. Description is populated from a GitHub issue body —
+// content anyone who can open or label an issue in a synced repo controls.
+// layout.html's shared renderMarkdown() helper re-parses every .md-content
+// element's textContent with marked.js (no sanitizer: marked dropped its
+// `sanitize` option years ago) and assigns the result to innerHTML. That
+// combination — decode via textContent, re-parse raw HTML, assign via
+// innerHTML — executes any markup the field contains, regardless of the Go
+// template layer's escaping. Description must be rendered as escaped plain
+// text and must never carry the md-content class.
+func TestTicketDetailDescriptionIsEscapedPlainText(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	n := 9
+	const payload = `<img src=x onerror=alert(1)>`
+	ticket := db.Ticket{ID: "gh-issue-004", RepoRemote: "https://github.com/org/repo",
+		Title: "XSS check", Branch: "ticket/x-t4", Description: payload,
+		Phase: "implement", IssueNumber: &n,
+		IssueURL: "https://github.com/org/repo/issues/9"}
+	if err := gdb.Create(&ticket).Error; err != nil {
+		t.Fatalf("seed ticket: %v", err)
+	}
+
+	user := db.User{Username: "leon", PasswordHash: "x"}
+	gdb.Create(&user)
+	w := httptest.NewRecorder()
+	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	cookie := w.Result().Cookies()[0]
+
+	tmpls, err := ui.LoadTemplates()
+	if err != nil {
+		t.Fatalf("LoadTemplates: %v", err)
+	}
+	h := ui.NewHandlersWithMap(gdb, tmpls, false)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-004", nil)
+	req.AddCookie(cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	if strings.Contains(body, payload) {
+		t.Fatal("Description was rendered as raw HTML — stored XSS")
+	}
+	escaped := "&lt;img src=x onerror=alert(1)&gt;"
+	payloadIdx := strings.Index(body, escaped)
+	if payloadIdx == -1 {
+		t.Fatal("expected Description to appear HTML-escaped")
+	}
+
+	// The escaped payload must not sit inside an element carrying the
+	// md-content class — that class is what triggers the client-side
+	// marked.js/innerHTML re-parse that would undo this escaping. Description
+	// is the sole text node of its wrapping element, so the payload appears
+	// immediately after that element's opening tag; walk back to it.
+	tagStart := strings.LastIndex(body[:payloadIdx], "<")
+	if tagStart == -1 {
+		t.Fatal("could not locate the element wrapping Description")
+	}
+	tagEndRel := strings.Index(body[tagStart:], ">")
+	if tagEndRel == -1 {
+		t.Fatal("could not locate the end of the element wrapping Description")
+	}
+	openTag := body[tagStart : tagStart+tagEndRel+1]
+	if strings.Contains(openTag, "md-content") {
+		t.Errorf("Description's element must not carry md-content (got %q) — "+
+			"it would be re-parsed as HTML via marked.js/innerHTML, undoing "+
+			"the escaping asserted above and executing the payload", openTag)
 	}
 }
 
