@@ -4851,3 +4851,124 @@ and frame them as data so an embedded instruction is not read as a directive.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+## Task 18: Sanitize the markdown render sink with DOMPurify
+
+> Implements Amendment 3. Closes the laundered path that Task 10's fix left open.
+
+**Files:**
+- Modify: `internal/orchestrator/ui/templates/layout.html`
+- Test: `internal/orchestrator/ui/github_test.go`
+
+**Interfaces:**
+- Consumes: nothing from earlier tasks.
+- Produces: a sanitized `renderMarkdown`; no Go API change.
+
+**Context.** The sink is `layout.html`'s `renderMarkdown`, which does
+`el.innerHTML = marked.parse(el.textContent)` for every `.md-content` element.
+Three fields route through it today: `ticket_detail.html:149` (`.Spec.Message`),
+`ticket_detail.html:163` (`.Plan.Message`), and `partials/log_entry.html:6`
+(`.Message`). `marked@14` is loaded from `cdn.jsdelivr.net` at `layout.html:18`
+and does no sanitizing.
+
+- [ ] **Step 1: Write the failing test**
+
+Add to `internal/orchestrator/ui/github_test.go`. This is a template-source
+regression guard — the browser behaviour itself is not reachable from Go tests,
+so the test pins the source invariants instead, which is what would actually
+regress.
+
+```go
+// TestMarkdownSinkIsSanitized guards the client-side markdown pipeline.
+// renderMarkdown reads el.textContent — which DECODES html/template's escaping
+// — and assigns the result of marked.parse to innerHTML. marked does not
+// sanitize. Without DOMPurify, any field routed through .md-content is an XSS
+// sink, including .Spec.Message and .Plan.Message, which derive from a GitHub
+// issue body by way of an LLM prompt.
+func TestMarkdownSinkIsSanitized(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("templates", "layout.html"))
+	if err != nil {
+		t.Fatalf("read layout.html: %v", err)
+	}
+	body := string(src)
+
+	if !strings.Contains(body, "dompurify") && !strings.Contains(body, "purify.min.js") {
+		t.Error("layout.html does not load DOMPurify")
+	}
+	if strings.Contains(body, "innerHTML = marked.parse(") {
+		t.Error("unsanitized marked.parse output is assigned to innerHTML")
+	}
+	if !strings.Contains(body, "DOMPurify.sanitize(") {
+		t.Error("renderMarkdown does not call DOMPurify.sanitize")
+	}
+	// Fail closed: the code must handle DOMPurify being absent.
+	if !strings.Contains(body, "typeof DOMPurify") {
+		t.Error("renderMarkdown does not guard against DOMPurify being unavailable")
+	}
+}
+```
+
+- [ ] **Step 2: Run it to confirm it fails**
+
+Run: `go test ./internal/orchestrator/ui/ -run TestMarkdownSinkIsSanitized -v`
+Expected: FAIL on the DOMPurify-not-loaded and sanitize-not-called assertions.
+
+- [ ] **Step 3: Load DOMPurify**
+
+In `layout.html`, beside the existing `marked` tag at line 18 and before the
+inline script that defines `renderMarkdown`:
+
+```html
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+```
+
+Pin the major version in the same style as `marked@14`, and use the same CDN
+host already trusted for marked.
+
+- [ ] **Step 4: Sanitize, and fail closed**
+
+Replace `renderMarkdown`'s body:
+
+```js
+    function renderMarkdown(root) {
+      // marked does no sanitizing, and el.textContent decodes the server's
+      // html/template escaping, so the sanitizer is the only thing between
+      // untrusted document content and the DOM. If DOMPurify failed to load,
+      // degrade to plain text rather than injecting unsanitized HTML.
+      var safe = typeof DOMPurify !== 'undefined' && DOMPurify.sanitize;
+      (root || document).querySelectorAll('.md-content').forEach(el => {
+        if (el.dataset.rendered) return;
+        var source = el.textContent;
+        if (safe) {
+          el.innerHTML = DOMPurify.sanitize(marked.parse(source));
+        } else {
+          el.textContent = source;
+        }
+        el.dataset.rendered = '1';
+      });
+    }
+```
+
+Leave the three event listeners below it unchanged.
+
+- [ ] **Step 5: Run it green**
+
+Run: `go test ./internal/orchestrator/ui/ -race -v`
+Expected: PASS, including `TestLoadTemplates` and every pre-existing test.
+
+- [ ] **Step 6: Full gate and commit**
+
+```bash
+make check
+git add internal/orchestrator/ui/ docs/superpowers/
+git commit -m "fix(ui): sanitize markdown output before assigning innerHTML
+
+marked does not sanitize and textContent decodes the server's escaping, so
+every .md-content field was an XSS sink. Spec and plan documents derive from
+GitHub issue bodies by way of an LLM prompt, so untrusted content reaches it.
+Falls back to plain text if DOMPurify is unavailable.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```

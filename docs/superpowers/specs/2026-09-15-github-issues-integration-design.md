@@ -563,3 +563,73 @@ These replace the corresponding original criteria:
   shem claims it and the existing lifecycle is unchanged.
 - No agent prompt is ever constructed from a ticket still in
   `pending-approval`.
+
+---
+
+# Amendment 3 — Sanitize the markdown render sink
+
+**Date:** 2026-09-15
+**Status:** Approved. Supersedes the "Out of scope, recommended separately"
+note on DOMPurify in Amendment 1.
+
+## The sink
+
+`internal/orchestrator/ui/templates/layout.html` renders markdown client-side:
+
+```js
+el.innerHTML = marked.parse(el.textContent);
+```
+
+for every element carrying `md-content`. `marked@14` performs no sanitization —
+it removed its own `sanitize` option years ago — and no sanitizer wraps it. The
+`el.textContent` read also **decodes** Go's `html/template` escaping back to raw
+text, so server-side escaping provides no protection for anything routed here.
+
+Three fields currently render through it: `.Spec.Message` and `.Plan.Message`
+(`ticket_detail.html`), and `.Message` (`partials/log_entry.html`).
+
+## Why it matters now
+
+Amendment 1 established that a GitHub issue body reaches `ticket.Description`,
+and from there is interpolated into the prompts that produce `spec.md` and
+`plan.md`. Those documents are posted back and rendered as `.Spec.Message` and
+`.Plan.Message`. So untrusted external content reaches this sink **laundered
+through an LLM**, and the design invariant the sink relied on — that only
+trusted content reaches `md-content` — is now false by construction.
+
+Removing `.Ticket.Description` from the sink (done previously) closed the direct
+edge. It does not close the laundered one, and every field added to
+`md-content` in future inherits the same exposure.
+
+## The change
+
+- Load DOMPurify from the CDN already used for `marked`, pinned to a major
+  version in the same style.
+- Sanitize `marked.parse`'s output before assigning it to `innerHTML`.
+- **Fail closed.** If DOMPurify is unavailable — CDN blocked, script load
+  failure, offline deployment — `renderMarkdown` must fall back to rendering the
+  element's text as plain text, NOT to assigning unsanitized HTML. A missing
+  sanitizer must degrade the display, never the safety.
+
+## Not changed
+
+`.Ticket.Description` stays plain text and out of `md-content`. It is the most
+directly untrusted field in the system, a safe rendering already exists for it,
+and defence in depth argues against making a single client-side sanitizer the
+only thing standing between a stranger's issue body and the DOM. Restoring
+markdown rendering for it is a deliberate future choice, not a consequence of
+this amendment.
+
+## Still out of scope
+
+A `Content-Security-Policy` header. The orchestrator sets none, behind six
+third-party CDN script tags. That is a deployment-wide decision beyond this
+feature.
+
+## Acceptance criteria
+
+- `layout.html` loads DOMPurify at a pinned major version, before
+  `renderMarkdown` can run.
+- No assignment of unsanitized `marked.parse` output to `innerHTML` exists
+  anywhere in the templates.
+- With DOMPurify absent, `renderMarkdown` renders text and injects no HTML.
