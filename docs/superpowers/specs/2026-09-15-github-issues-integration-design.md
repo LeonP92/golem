@@ -633,3 +633,81 @@ feature.
 - No assignment of unsanitized `marked.parse` output to `innerHTML` exists
   anywhere in the templates.
 - With DOMPurify absent, `renderMarkdown` renders text and injects no HTML.
+
+---
+
+# Amendment 4 — Content-Security-Policy header
+
+**Date:** 2026-09-15
+**Status:** Approved. Supersedes the "still out of scope" note in Amendment 3.
+
+The orchestrator sets no CSP, behind six third-party CDN script tags. CSP is the
+layer that contains an XSS regardless of which sanitizer is or is not loaded —
+it would have blunted the Amendment 3 sink even with DOMPurify absent.
+
+## What the policy must permit
+
+Enumerated from the templates rather than assumed:
+
+| Need | Source |
+|---|---|
+| daisyUI stylesheet | `cdn.jsdelivr.net` |
+| Tailwind Play CDN, marked, DOMPurify | `cdn.tailwindcss.com`, `cdn.jsdelivr.net` |
+| htmx + SSE extension | `unpkg.com` |
+| Iconify | `code.iconify.design` (script) and its icon API (fetch) |
+| 6 inline `<script>` blocks | layout, ticket_detail, github_settings, ticket_new, dashboard |
+| 9 `hx-on::after-request` attributes | htmx evaluates these itself |
+| 1 native `onchange="this.form.submit()"` | `github_settings.html:33` |
+| Runtime `<style>` injection | Tailwind Play CDN generates CSS in the browser |
+
+## Design
+
+**Inline scripts are allowed by hash, not nonce.** None of the six inline
+`<script>` blocks contains a template action, so rendered content is byte-equal
+to template source. Hashes are computed at startup from the template sources,
+which makes the policy self-maintaining — editing a script updates its hash
+automatically — and avoids threading a per-request nonce through eight `render`
+call sites and every page's data shape.
+
+**The native `onchange` handler must be removed**, replaced by a listener in
+that page's existing inline script block. A single native inline handler forces
+`script-src 'unsafe-inline'`, which would re-permit exactly the injected
+`<img onerror=…>` vector this header exists to block, defeating the whole
+policy.
+
+**`'unsafe-eval'` is required and accepted.** Tailwind's Play CDN compiles CSS
+at runtime, and htmx evaluates `hx-on` attribute bodies. Removing the need would
+mean building Tailwind ahead of time and rewriting nine `hx-on` attributes —
+both real refactors beyond this feature. `'unsafe-eval'` permits `eval` and
+`new Function`; it does **not** re-permit inline `<script>` blocks or inline
+event-handler attributes, so the protection that matters here is retained.
+
+**`style-src` keeps `'unsafe-inline'`**, because Tailwind injects styles at
+runtime. Style-only injection is a markedly lower-severity class than script
+execution.
+
+## Configuration
+
+`csp.mode` takes `enforce` (default), `report-only`, or `off`.
+
+Enforce is the default because a policy that protects nothing by default is not
+protection. `report-only` emits `Content-Security-Policy-Report-Only` so an
+operator can verify a deployment before enforcing, and `off` is an escape hatch
+if an environment breaks.
+
+## Known limitation
+
+Go tests can assert the header is present, well-formed, and that its hashes
+match the actual inline scripts. They cannot prove the dashboard still
+functions under it — that needs a browser. A deployment should be checked
+once with the browser console open, which `report-only` exists to make safe.
+
+## Acceptance criteria
+
+- Every HTML response carries a CSP header in `enforce` mode by default.
+- `script-src` contains a `'sha256-…'` for each inline script and no
+  `'unsafe-inline'`.
+- No native inline event-handler attribute remains in any template.
+- `report-only` switches the header name; `off` omits it entirely.
+- A test computes the hashes from template sources and fails if the policy and
+  the templates disagree.

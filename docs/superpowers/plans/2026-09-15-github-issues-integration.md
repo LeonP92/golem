@@ -4972,3 +4972,152 @@ Falls back to plain text if DOMPurify is unavailable.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 ```
+
+---
+
+## Task 19: Content-Security-Policy header
+
+> Implements Amendment 4.
+
+**Files:**
+- Create: `internal/orchestrator/server/csp.go`, `internal/orchestrator/server/csp_test.go`
+- Modify: `internal/orchestrator/server/server.go`, `internal/orchestrator/config/config.go`, `internal/orchestrator/ui/templates/github_settings.html`, `deploy/orchestrator.yaml`
+
+**Interfaces:**
+- Consumes: `ui.LoadTemplates` / the template source directory.
+- Produces: `config.CSPConfig{Mode string}`; `server.CSPMiddleware(policy string, mode string) func(http.Handler) http.Handler`; `server.BuildPolicy(scriptHashes []string) string`; `server.InlineScriptHashes(dir string) ([]string, error)`.
+
+- [ ] **Step 1: Remove the native inline event handler**
+
+`github_settings.html:33` has `onchange="this.form.submit()"` on the enable checkbox. A single native inline handler forces `script-src 'unsafe-inline'`, which re-permits injected `onerror=` handlers and defeats the policy.
+
+Remove the attribute, give the checkbox a stable hook (e.g. `data-autosubmit`), and add a listener in that file's existing inline `<script>` block:
+
+```js
+document.querySelectorAll('[data-autosubmit]').forEach(function (el) {
+  el.addEventListener('change', function () { el.form.submit(); });
+});
+```
+
+Then confirm no native handlers remain anywhere:
+
+```bash
+grep -rnoE '\son(change|click|load|error|submit|input)=' internal/orchestrator/ui/templates/
+```
+
+Expected: no output. (`hx-on::after-request` is htmx's own attribute, not a native handler — it stays, and is covered by `'unsafe-eval'`.)
+
+- [ ] **Step 2: Write the failing test**
+
+Create `internal/orchestrator/server/csp_test.go`. The load-bearing test is the one that keeps policy and templates in sync:
+
+```go
+// TestPolicyCoversEveryInlineScript fails if an inline script is added, edited,
+// or removed without the policy following. Inline scripts are allowed by hash,
+// so a stale policy silently breaks the page.
+func TestPolicyCoversEveryInlineScript(t *testing.T) {
+	hashes, err := server.InlineScriptHashes(filepath.Join("..", "ui", "templates"))
+	if err != nil {
+		t.Fatalf("InlineScriptHashes: %v", err)
+	}
+	if len(hashes) == 0 {
+		t.Fatal("found no inline scripts; the scanner is broken, which would " +
+			"silently produce a policy that blocks every inline script")
+	}
+	policy := server.BuildPolicy(hashes)
+	for _, h := range hashes {
+		if !strings.Contains(policy, h) {
+			t.Errorf("policy omits %s", h)
+		}
+	}
+	if strings.Contains(policy, "'unsafe-inline'") &&
+		strings.Contains(policy, "script-src") {
+		// style-src may carry unsafe-inline; script-src must not.
+		scriptSrc := policy[strings.Index(policy, "script-src"):]
+		if end := strings.Index(scriptSrc, ";"); end != -1 {
+			scriptSrc = scriptSrc[:end]
+		}
+		if strings.Contains(scriptSrc, "'unsafe-inline'") {
+			t.Error("script-src contains 'unsafe-inline', which re-permits " +
+				"injected event handlers and defeats the policy")
+		}
+	}
+}
+```
+
+Add table-driven tests for the three modes: `enforce` sets `Content-Security-Policy`; `report-only` sets `Content-Security-Policy-Report-Only` and not the enforcing name; `off` sets neither.
+
+- [ ] **Step 3: Run it to confirm it fails**
+
+Run: `go test ./internal/orchestrator/server/ -v`
+Expected: FAIL — the package has no `csp.go`.
+
+- [ ] **Step 4: Implement**
+
+Create `internal/orchestrator/server/csp.go` with:
+
+- `InlineScriptHashes(dir string) ([]string, error)` — walk `*.html` under `dir` (including `partials/`), extract each `<script>` block that has NO `src` attribute, sha256 its exact body (the bytes between `>` and `</script>`, unmodified), and return `'sha256-<base64>'` strings sorted for stability. Return an error rather than an empty slice if the directory cannot be read — an empty policy would block every inline script.
+- `BuildPolicy(scriptHashes []string) string` — assemble the directives below.
+- `CSPMiddleware(policy, mode string) func(http.Handler) http.Handler` — set the header per mode, then call the next handler.
+
+The policy:
+
+```
+default-src 'self';
+script-src 'self' 'unsafe-eval' <hashes> https://cdn.tailwindcss.com https://unpkg.com https://cdn.jsdelivr.net https://code.iconify.design;
+style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net;
+img-src 'self' data:;
+font-src 'self' data:;
+connect-src 'self' https://api.iconify.design https://api.simplesvg.com https://api.unisvg.com;
+base-uri 'self';
+form-action 'self';
+frame-ancestors 'none';
+object-src 'none'
+```
+
+`connect-src` must include Iconify's icon API hosts — the script is loaded from `code.iconify.design` but fetches icon data from `api.iconify.design` with documented fallbacks. Omitting them renders every icon blank.
+
+- [ ] **Step 5: Wire it up**
+
+In `config.go` add `CSPConfig{Mode string `yaml:"mode"`}` on `Config` as `CSP`, defaulting `Mode` to `"enforce"` in `Load` when empty. Accept only `enforce`, `report-only`, `off`; on any other value log a warning and fall back to `enforce`.
+
+In `server.go`'s `Routes()`, compute the hashes once and wrap the returned mux:
+
+```go
+	return CSPMiddleware(BuildPolicy(hashes), s.CSPMode)(mux)
+```
+
+Add `CSPMode string` to `Server` and thread it from `main.go`. If `InlineScriptHashes` fails at startup, log the error loudly and fall back to `off` rather than shipping a policy that blocks the UI.
+
+- [ ] **Step 6: Document it**
+
+Append to `deploy/orchestrator.yaml`:
+
+```yaml
+# Content-Security-Policy. "enforce" (default), "report-only", or "off".
+# Verify a new deployment once with the browser console open; "report-only"
+# logs violations without blocking so you can check safely first.
+csp:
+  mode: enforce
+```
+
+- [ ] **Step 7: Run tests and the full gate**
+
+```bash
+go test ./internal/orchestrator/... -race -count=2
+make check
+```
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add internal/orchestrator/ deploy/ docs/superpowers/
+git commit -m "feat(server): add a Content-Security-Policy header
+
+Inline scripts are allowed by hash computed from template sources, so the
+policy stays in sync as they change. Removes the one native inline event
+handler, which would otherwise have forced script-src 'unsafe-inline' and
+defeated the policy.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
