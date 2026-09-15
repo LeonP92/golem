@@ -36,6 +36,17 @@ func TestFakeBehaviour(t *testing.T) {
 	if i, _ := f.GetIssue(ctx, "o", "r", 7); !i.HasLabel("golem:plan") {
 		t.Error("AddLabel did not stick")
 	}
+
+	// AddLabel must be idempotent: adding a label the issue already carries
+	// does not duplicate it. The real client is naturally idempotent here
+	// (GitHub's add-labels endpoint is a set union); the fake must match.
+	if err := f.AddLabel(ctx, "o", "r", 7, "golem:plan"); err != nil {
+		t.Fatalf("AddLabel (repeat): %v", err)
+	}
+	if i, _ := f.GetIssue(ctx, "o", "r", 7); len(i.Labels) != 2 {
+		t.Errorf("AddLabel (repeat): got %d labels %v, want 2 (golem, golem:plan)", len(i.Labels), i.Labels)
+	}
+
 	if err := f.RemoveLabel(ctx, "o", "r", 7, "golem:plan"); err != nil {
 		t.Fatalf("RemoveLabel: %v", err)
 	}
@@ -43,13 +54,81 @@ func TestFakeBehaviour(t *testing.T) {
 		t.Error("RemoveLabel did not stick")
 	}
 
+	// FailNext returns the injected error exactly once and then clears,
+	// regardless of which method consumes it — record() is a single shared
+	// helper, but verify the contract holds for more than one call site.
 	boom := errors.New("boom")
+
 	f.FailNext = boom
 	if err := f.CreateComment(ctx, "o", "r", 7, "x"); !errors.Is(err, boom) {
-		t.Errorf("FailNext: got %v, want boom", err)
+		t.Errorf("FailNext via CreateComment: got %v, want boom", err)
 	}
 	if err := f.CreateComment(ctx, "o", "r", 7, "x"); err != nil {
-		t.Errorf("FailNext should be consumed, got %v", err)
+		t.Errorf("FailNext should be consumed after CreateComment, got %v", err)
+	}
+
+	f.FailNext = boom
+	if err := f.AddLabel(ctx, "o", "r", 7, "another"); !errors.Is(err, boom) {
+		t.Errorf("FailNext via AddLabel: got %v, want boom", err)
+	}
+	if err := f.AddLabel(ctx, "o", "r", 7, "another"); err != nil {
+		t.Errorf("FailNext should be consumed after AddLabel, got %v", err)
+	}
+
+	f.FailNext = boom
+	if err := f.SetIssueState(ctx, "o", "r", 7, "closed"); !errors.Is(err, boom) {
+		t.Errorf("FailNext via SetIssueState: got %v, want boom", err)
+	}
+	if err := f.SetIssueState(ctx, "o", "r", 7, "closed"); err != nil {
+		t.Errorf("FailNext should be consumed after SetIssueState, got %v", err)
+	}
+}
+
+// TestFakeListIssuesSinceCutoff verifies ListIssuesSince's since filter,
+// including the exact boundary. This matters beyond this package: Task 5's
+// sync cursor advances since to max(updated_at) minus a one-minute overlap
+// and re-polls, relying on an issue updated at exactly that cutoff still
+// coming back — since the fake's filter (i.UpdatedAt.Before(since)) is
+// strict, "equal to since" must be included, not excluded.
+func TestFakeListIssuesSinceCutoff(t *testing.T) {
+	ctx := context.Background()
+	f := github.NewFake()
+	since := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+
+	f.AddIssue(github.Issue{Number: 1, Title: "old", State: "open",
+		UpdatedAt: since.Add(-time.Hour)})
+	f.AddIssue(github.Issue{Number: 2, Title: "new", State: "open",
+		UpdatedAt: since.Add(time.Hour)})
+
+	page, err := f.ListIssuesSince(ctx, "o", "r", "", since, "")
+	if err != nil {
+		t.Fatalf("ListIssuesSince: %v", err)
+	}
+	if len(page.Issues) != 1 || page.Issues[0].Number != 2 {
+		t.Fatalf("got %+v, want only issue 2 (newer than since)", page.Issues)
+	}
+
+	// Now add an issue updated at exactly the cutoff and confirm it is
+	// included, not excluded.
+	f.AddIssue(github.Issue{Number: 3, Title: "boundary", State: "open",
+		UpdatedAt: since})
+
+	page, err = f.ListIssuesSince(ctx, "o", "r", "", since, "")
+	if err != nil {
+		t.Fatalf("ListIssuesSince: %v", err)
+	}
+	got := map[int]bool{}
+	for _, i := range page.Issues {
+		got[i.Number] = true
+	}
+	if got[1] {
+		t.Error("issue 1 (older than since) was included, want excluded")
+	}
+	if !got[2] {
+		t.Error("issue 2 (newer than since) was excluded, want included")
+	}
+	if !got[3] {
+		t.Error("issue 3 (updated_at == since) was excluded, want included: Before is strict")
 	}
 }
 
