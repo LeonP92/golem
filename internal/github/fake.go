@@ -102,6 +102,11 @@ func (f *Fake) GetIssue(_ context.Context, _, _ string, number int) (Issue, erro
 	if !ok {
 		return Issue{}, fmt.Errorf("issue %d not found", number)
 	}
+	// Defensive copy: without it this returns the live Issues[number] entry's
+	// Labels slice header, so a caller mutating the returned Issue's Labels
+	// races with any concurrent method call that also touches this issue —
+	// the exact defect IssueByNumber (below) was added to avoid.
+	i.Labels = append([]string(nil), i.Labels...)
 	return i, nil
 }
 

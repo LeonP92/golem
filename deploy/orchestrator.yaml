@@ -3,10 +3,11 @@ db_path: /data/orchestrator.db
 
 # The orchestrator's externally reachable base URL. Used to build links back
 # to tickets — for example the "Golem wrote a spec for this issue" milestone
-# comments ghsync posts to GitHub. Leaving this empty produces working syncs
-# but broken links (a bare "/tickets/<id>" with no host), so set it to the
-# real address before enabling GitHub sync in production.
-base_url: "https://golem.example.com"
+# comments ghsync posts to GitHub. Leaving this unset (the default is empty)
+# produces working syncs but broken links (a bare "/tickets/<id>" with no
+# host) and a startup warning once GitHub sync is enabled — uncomment and set
+# it to the real address before enabling GitHub sync in production.
+# base_url: "https://golem.example.com"
 
 # tls:
 #   cert: /etc/golem/tls/cert.pem

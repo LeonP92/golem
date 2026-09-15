@@ -2,6 +2,7 @@ package db
 
 import (
 	"fmt"
+	"log"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -52,14 +53,11 @@ func Open(dsn string) (*gorm.DB, error) {
 	}
 	// Enable WAL mode so multiple processes (server + admin CLI) can access
 	// the same database file concurrently without exclusive-lock conflicts.
-	gdb.Exec("PRAGMA journal_mode=WAL")
-	// This orchestrator now has its first pair of background writers — the
-	// ghsync worker's ingest and drain loops — issuing writes against one
-	// SQLite file alongside ordinary request handling. WAL allows concurrent
-	// readers, but two writers can still collide on SQLITE_BUSY; a busy
-	// timeout makes SQLite retry for a while internally instead of failing
-	// the call immediately.
-	gdb.Exec("PRAGMA busy_timeout=5000")
+	// Best-effort: not every dialector understands PRAGMA (Postgres doesn't),
+	// so a failure here is logged rather than treated as fatal.
+	if err := gdb.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
+		log.Printf("db: enable WAL mode: %v", err)
+	}
 	return gdb, gdb.AutoMigrate(
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
 		&GitHubRepo{}, &GitHubOutbox{},

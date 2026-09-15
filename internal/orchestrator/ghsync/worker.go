@@ -32,8 +32,10 @@ type Worker struct {
 	triggers map[uint]chan struct{} // repo ID → buffered(1) manual-trigger slot
 	notify   chan uint              // repo IDs whose slot has been claimed
 
-	stop     chan struct{}
+	stop     chan struct{} // closed by Stop to ask both loops to exit
 	stopOnce sync.Once
+	exited   chan struct{} // closed once either loop has actually returned, for any reason
+	exitOnce sync.Once
 	done     sync.WaitGroup
 }
 
@@ -46,7 +48,17 @@ func NewWorker(s *Syncer, pollInterval, drainInterval time.Duration) *Worker {
 		triggers:      map[uint]chan struct{}{},
 		notify:        make(chan uint, notifyBuffer),
 		stop:          make(chan struct{}),
+		exited:        make(chan struct{}),
 	}
+}
+
+// signalExited closes exited on the first call and is a no-op afterward. Both
+// loops defer it so exited reflects "either loop has returned", regardless of
+// whether that happened via Stop (w.stop) or via the caller's own ctx being
+// cancelled — TriggerSync's guard needs to see both, not just the former (see
+// TriggerSync).
+func (w *Worker) signalExited() {
+	w.exitOnce.Do(func() { close(w.exited) })
 }
 
 // slot returns the manual-trigger slot channel for a repo, creating it on
@@ -84,18 +96,23 @@ func (w *Worker) releaseSlot(repoID uint) {
 // buffer is bounded — see notifyBuffer) the claim is rolled back rather than
 // left held with nothing to release it, so this can never strand the repo's
 // slot or block the caller. It reports false when a sync is already queued
-// for that repo, when the worker has already been stopped, or when notify
-// was full, in which case the request is deliberately dropped — the queued
-// or next scheduled pass will pick up the same work.
+// for that repo, when the worker has already stopped or exited, or when
+// notify was full, in which case the request is deliberately dropped — the
+// queued or next scheduled pass will pick up the same work.
 func (w *Worker) TriggerSync(repoID uint) bool {
 	select {
 	case <-w.stop:
-		// Best-effort only: Stop may close w.stop concurrently with the rest
-		// of this call, in which case the race below still applies. But
-		// checking here closes the common case — without it, a trigger
-		// arriving after Stop has already returned would claim the slot,
-		// report success, and never be released, permanently stranding the
-		// repo for the life of the process.
+		return false
+	case <-w.exited:
+		// Best-effort only: either channel can close concurrently with the
+		// rest of this call, in which case the race below still applies. But
+		// checking both here closes the common cases — w.stop for an
+		// explicit Stop(), w.exited for either loop having already returned
+		// via ctx cancellation with Stop() never called (the caller's ctx
+		// was cancelled directly, which both loops also select on). Without
+		// this, a trigger arriving after either exit would claim the slot,
+		// report success, and never be released or processed, permanently
+		// stranding the repo for the life of the process.
 		return false
 	default:
 	}
@@ -142,6 +159,7 @@ func (w *Worker) Stop() {
 // sees it.
 func (w *Worker) ingestLoop(ctx context.Context) {
 	defer w.done.Done()
+	defer w.signalExited()
 	ticker := time.NewTicker(w.pollInterval)
 	defer ticker.Stop()
 
@@ -195,6 +213,7 @@ func (w *Worker) ingestOne(ctx context.Context, repoID uint) {
 // drainLoop delivers queued GitHub writes on the fast ticker.
 func (w *Worker) drainLoop(ctx context.Context) {
 	defer w.done.Done()
+	defer w.signalExited()
 	ticker := time.NewTicker(w.drainInterval)
 	defer ticker.Stop()
 	for {
