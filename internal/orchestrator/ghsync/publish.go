@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"gorm.io/gorm"
 )
 
 // MaxAttempts is the number of failed deliveries after which an outbox row is
@@ -50,6 +51,21 @@ func Backoff(attempts int) time.Duration {
 // Drain delivers every outbox row that is due. A row that fails is retried
 // later with exponential backoff; after MaxAttempts it is parked. Delivery
 // errors never abort the pass — one stuck row must not block the queue.
+//
+// A row's post-delivery local write (if any — see deliver's postWrite) and
+// the done_at commit that finalises it happen in one transaction, via
+// commitSuccess. This matters because the GitHub call has already
+// irreversibly happened by the time either of those local writes runs: if
+// the process crashed (or, more mundanely, one write failed) between the
+// GitHub call returning and done_at landing, a row left with done_at still
+// NULL is redelivered on the next pass — reposting the same comment, or
+// re-invoking any other non-idempotent call. Making the local writes atomic
+// doesn't close that gap (the GitHub call itself can never be inside the
+// same transaction as a local commit), but it does guarantee that a failure
+// on the local side never leaves a *half*-applied result (e.g. a pull
+// request linked onto the ticket while the row still looks undelivered) —
+// either both local writes land, or neither does and the row is retried like
+// any other failure.
 func (s *Syncer) Drain(ctx context.Context) error {
 	var rows []db.GitHubOutbox
 	if err := s.DB.
@@ -59,31 +75,53 @@ func (s *Syncer) Drain(ctx context.Context) error {
 	}
 
 	for _, row := range rows {
-		if err := s.deliver(ctx, row); err != nil {
+		postWrite, err := s.deliver(ctx, row)
+		if err != nil {
 			s.recordFailure(row, err)
 			continue
 		}
-		s.recordSuccess(row)
+		if err := s.commitSuccess(row, postWrite); err != nil {
+			// GitHub already accepted the call; only the local commit
+			// failed. That must not be silently dropped (it would leave
+			// the row eligible for redelivery with no record of the
+			// failure) and must not mark the row done — route it through
+			// the same retry/backoff/parking path as any other failure.
+			s.recordFailure(row, err)
+		}
 	}
 	return nil
 }
 
-// recordSuccess marks a row done. The update is best-effort: if it fails, the
-// row will be redelivered on the next pass rather than silently vanishing, so
-// the failure is logged rather than swallowed.
-func (s *Syncer) recordSuccess(row db.GitHubOutbox) {
+// commitSuccess finalises a successful delivery: it runs the kind-specific
+// local write returned by deliver (postWrite, nil for kinds with none) and
+// the done_at update in a single transaction, so a failure of either leaves
+// neither applied.
+func (s *Syncer) commitSuccess(row db.GitHubOutbox, postWrite func(tx *gorm.DB) error) error {
 	now := time.Now()
-	if err := s.DB.Model(&db.GitHubOutbox{}).Where("id = ?", row.ID).
-		Updates(map[string]any{"done_at": now, "last_error": ""}).Error; err != nil {
-		log.Printf("ghsync: outbox row %d delivered but could not be marked done: %v", row.ID, err)
-	}
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		if postWrite != nil {
+			if err := postWrite(tx); err != nil {
+				return err
+			}
+		}
+		if err := tx.Model(&db.GitHubOutbox{}).Where("id = ?", row.ID).
+			Updates(map[string]any{"done_at": now, "last_error": ""}).Error; err != nil {
+			return fmt.Errorf("mark outbox row %d done: %w", row.ID, err)
+		}
+		return nil
+	})
 }
 
-// deliver performs the GitHub call for one row.
-func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) error {
+// deliver performs the GitHub call for one row. When the delivery has a
+// local write of its own to make (currently only KindPR, recording the
+// created pull request's number/URL onto the ticket), deliver does not
+// perform that write itself — it returns a closure that Drain runs inside
+// the same transaction as marking the row done, via commitSuccess. Kinds
+// with no local write beyond done_at return a nil closure.
+func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gorm.DB) error, error) {
 	ticket, repo, err := s.linkedIssue(row.TicketID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	number := *ticket.IssueNumber
 
@@ -91,44 +129,47 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) error {
 	case KindComment:
 		var p CommentPayload
 		if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
-			return fmt.Errorf("decode comment payload for outbox row %d: %w", row.ID, err)
+			return nil, fmt.Errorf("decode comment payload for outbox row %d: %w", row.ID, err)
 		}
 		if err := s.GH.CreateComment(ctx, repo.Owner, repo.Name, number, p.Body); err != nil {
-			return fmt.Errorf("create comment on %s#%d: %w", repo.RepoRemote, number, err)
+			return nil, fmt.Errorf("create comment on %s#%d: %w", repo.RepoRemote, number, err)
 		}
-		return nil
+		return nil, nil
 
 	case KindLabel:
 		var p LabelPayload
 		if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
-			return fmt.Errorf("decode label payload for outbox row %d: %w", row.ID, err)
+			return nil, fmt.Errorf("decode label payload for outbox row %d: %w", row.ID, err)
 		}
-		return s.applyPhaseLabel(ctx, repo, number, p.Phase)
+		return nil, s.applyPhaseLabel(ctx, repo, number, p.Phase)
 
 	case KindClose:
 		if err := s.GH.SetIssueState(ctx, repo.Owner, repo.Name, number, "closed"); err != nil {
-			return fmt.Errorf("close %s#%d: %w", repo.RepoRemote, number, err)
+			return nil, fmt.Errorf("close %s#%d: %w", repo.RepoRemote, number, err)
 		}
-		return nil
+		return nil, nil
 
 	case KindPR:
 		var p PRPayload
 		if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
-			return fmt.Errorf("decode pr payload for outbox row %d: %w", row.ID, err)
+			return nil, fmt.Errorf("decode pr payload for outbox row %d: %w", row.ID, err)
 		}
 		pr, err := s.GH.CreatePullRequest(ctx, repo.Owner, repo.Name,
 			p.Head, p.Base, p.Title, p.Body, true)
 		if err != nil {
-			return fmt.Errorf("create pull request for ticket %s: %w", ticket.ID, err)
+			return nil, fmt.Errorf("create pull request for ticket %s: %w", ticket.ID, err)
 		}
-		if err := s.DB.Model(&db.Ticket{}).Where("id = ?", ticket.ID).
-			Updates(map[string]any{"pr_number": pr.Number, "pr_url": pr.HTMLURL}).Error; err != nil {
-			return fmt.Errorf("record pull request %d on ticket %s: %w", pr.Number, ticket.ID, err)
-		}
-		return nil
+		ticketID := ticket.ID
+		return func(tx *gorm.DB) error {
+			if err := tx.Model(&db.Ticket{}).Where("id = ?", ticketID).
+				Updates(map[string]any{"pr_number": pr.Number, "pr_url": pr.HTMLURL}).Error; err != nil {
+				return fmt.Errorf("record pull request %d on ticket %s: %w", pr.Number, ticketID, err)
+			}
+			return nil
+		}, nil
 
 	default:
-		return fmt.Errorf("unknown outbox kind %q on row %d", row.Kind, row.ID)
+		return nil, fmt.Errorf("unknown outbox kind %q on row %d", row.Kind, row.ID)
 	}
 }
 

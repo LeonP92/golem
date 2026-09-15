@@ -455,3 +455,80 @@ func TestDrainWrapsQueryError(t *testing.T) {
 		t.Errorf("Drain error = %q, want it to mention %q", err.Error(), "query outbox rows")
 	}
 }
+
+// TestDrainCommitsPostWriteAndDoneAtAtomically forces the done_at write that
+// finalises a successful KindPR delivery to fail, via a SQLite trigger that
+// aborts any UPDATE setting done_at to non-null (mirroring the trigger
+// technique already used in ingest_test.go's partial-failure coverage). This
+// simulates a crash — or any other local-write failure — landing between
+// GitHub accepting the CreatePullRequest call and Golem committing that fact
+// locally.
+//
+// It asserts the two things the fix round asked for: the ticket's
+// pr_number/pr_url — written in the same transaction as done_at — were
+// rolled back with it rather than left half-applied, and the row is left
+// retryable (attempts incremented, LastError set, done_at still nil) rather
+// than either silently "done" (which would permanently lose the PR link) or
+// silently stuck with no record of the failure.
+func TestDrainCommitsPostWriteAndDoneAtAtomically(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedLinkedTicket(t, gdb, "plan")
+	f := github.NewFake()
+	f.AddIssue(github.Issue{Number: 7, State: "open", Labels: []string{"golem"}})
+
+	// Fires only for an UPDATE that sets done_at to a non-null value, so
+	// recordFailure's own update (attempts/last_error/next_attempt, never
+	// done_at) is untouched by this trigger and continues to work normally.
+	if err := gdb.Exec(`
+		CREATE TRIGGER outbox_done_write_fails
+		BEFORE UPDATE OF done_at ON git_hub_outboxes
+		WHEN NEW.done_at IS NOT NULL
+		BEGIN
+			SELECT RAISE(ABORT, 'simulated done_at write failure');
+		END;
+	`).Error; err != nil {
+		t.Fatalf("install trigger: %v", err)
+	}
+
+	if err := ghsync.Enqueue(gdb, db.GitHubOutbox{
+		TicketID: "t1", Kind: ghsync.KindPR,
+		Payload:        `{"head":"ticket/add-rate-limiting-t1","base":"main","title":"Add rate limiting","body":"Ready for review."}`,
+		IdempotencyKey: ghsync.PRKey("t1"),
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+
+	s := ghsync.NewSyncer(gdb, f)
+	if err := s.Drain(context.Background()); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+
+	// GitHub's side already happened — the fake recorded the PR — but the
+	// local write recording it on the ticket must have rolled back along
+	// with the done_at write it shares a transaction with.
+	if len(f.PRs) != 1 {
+		t.Fatalf("PRs created = %d, want 1 (the GitHub call itself must still go through)", len(f.PRs))
+	}
+	var ticket db.Ticket
+	if err := gdb.First(&ticket, "id = ?", "t1").Error; err != nil {
+		t.Fatalf("load ticket: %v", err)
+	}
+	if ticket.PRNumber != nil {
+		t.Errorf("ticket.PRNumber = %v, want nil — the rolled-back transaction must not leave it written", *ticket.PRNumber)
+	}
+	if ticket.PRURL != "" {
+		t.Errorf("ticket.PRURL = %q, want empty — the rolled-back transaction must not leave it written", ticket.PRURL)
+	}
+
+	var row db.GitHubOutbox
+	gdb.First(&row, "ticket_id = ?", "t1")
+	if row.DoneAt != nil {
+		t.Error("DoneAt set despite the commit transaction failing")
+	}
+	if row.Attempts != 1 {
+		t.Errorf("Attempts = %d, want 1 — a failed commit must be retried like any other delivery failure", row.Attempts)
+	}
+	if row.LastError == "" {
+		t.Error("LastError empty after the commit transaction failed")
+	}
+}
