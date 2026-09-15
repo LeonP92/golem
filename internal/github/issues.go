@@ -98,28 +98,26 @@ func (c *client) DefaultBranch(ctx context.Context, owner, repo string) (string,
 	return r.GetDefaultBranch(), nil
 }
 
-// Task 2 replaces each of the following stubs with a real implementation.
-
-func (c *client) CreateIssue(context.Context, string, string, string, string, []string) (Issue, error) {
-	return Issue{}, errors.New("not implemented")
+// CreateIssue opens a new issue with the given labels.
+func (c *client) CreateIssue(ctx context.Context, owner, repo, title, body string, labels []string) (Issue, error) {
+	in, _, err := c.api.Issues.Create(ctx, owner, repo, &gh.IssueRequest{
+		Title:  gh.Ptr(title),
+		Body:   gh.Ptr(body),
+		Labels: &labels,
+	})
+	if err != nil {
+		return Issue{}, fmt.Errorf("create issue %s/%s: %w", owner, repo, err)
+	}
+	return toIssue(in), nil
 }
 
-func (c *client) SetIssueState(context.Context, string, string, int, string) error {
-	return errors.New("not implemented")
-}
-
-func (c *client) AddLabel(context.Context, string, string, int, string) error {
-	return errors.New("not implemented")
-}
-
-func (c *client) RemoveLabel(context.Context, string, string, int, string) error {
-	return errors.New("not implemented")
-}
-
-func (c *client) CreateComment(context.Context, string, string, int, string) error {
-	return errors.New("not implemented")
-}
-
-func (c *client) CreatePullRequest(context.Context, string, string, string, string, string, string, bool) (PullRequest, error) {
-	return PullRequest{}, errors.New("not implemented")
+// SetIssueState sets an issue to "open" or "closed".
+func (c *client) SetIssueState(ctx context.Context, owner, repo string, number int, state string) error {
+	_, _, err := c.api.Issues.Edit(ctx, owner, repo, number, &gh.IssueRequest{
+		State: gh.Ptr(state),
+	})
+	if err != nil {
+		return fmt.Errorf("set issue state %s/%s#%d: %w", owner, repo, number, err)
+	}
+	return nil
 }

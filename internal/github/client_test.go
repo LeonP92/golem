@@ -169,33 +169,3 @@ func TestDefaultBranch(t *testing.T) {
 		})
 	}
 }
-
-// TestUnimplementedStubs locks in the "not implemented" behavior of the
-// write-path methods Task 2 replaces, so a future implementation must
-// deliberately remove these stubs rather than leave one behind by accident.
-func TestUnimplementedStubs(t *testing.T) {
-	c, err := github.New("token", "")
-	if err != nil {
-		t.Fatalf("New: %v", err)
-	}
-	ctx := context.Background()
-
-	if _, err := c.CreateIssue(ctx, "org", "repo", "title", "body", nil); err == nil {
-		t.Error("CreateIssue: want error, got nil")
-	}
-	if err := c.SetIssueState(ctx, "org", "repo", 1, "closed"); err == nil {
-		t.Error("SetIssueState: want error, got nil")
-	}
-	if err := c.AddLabel(ctx, "org", "repo", 1, "golem"); err == nil {
-		t.Error("AddLabel: want error, got nil")
-	}
-	if err := c.RemoveLabel(ctx, "org", "repo", 1, "golem"); err == nil {
-		t.Error("RemoveLabel: want error, got nil")
-	}
-	if err := c.CreateComment(ctx, "org", "repo", 1, "body"); err == nil {
-		t.Error("CreateComment: want error, got nil")
-	}
-	if _, err := c.CreatePullRequest(ctx, "org", "repo", "head", "base", "title", "body", false); err == nil {
-		t.Error("CreatePullRequest: want error, got nil")
-	}
-}
