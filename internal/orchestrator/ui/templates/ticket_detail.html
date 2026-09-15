@@ -34,6 +34,7 @@
           </span>
         </p>
         <pre class="description mt-2 text-sm font-sans whitespace-pre-wrap bg-base-200 rounded p-3 max-h-64 overflow-y-auto">{{.Ticket.Description}}</pre>
+        {{/* This card lives inside the .Ticket.IssueNumber branch, so a pending-approval ticket with a nil IssueNumber would have no release control at all: only createTicketFromIssue produces this phase, and it always sets IssueNumber, but that coupling is implicit — any future path that creates a pending-approval ticket without an IssueNumber must either set one or add a release control outside this branch. */}}
         {{if eq .Ticket.Phase "pending-approval"}}
         <div class="card border-l-4 border-warning bg-warning/10 shadow-sm mt-3">
           <div class="card-body p-4">

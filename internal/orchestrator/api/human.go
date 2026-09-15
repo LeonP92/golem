@@ -429,13 +429,25 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 var errNotPendingApproval = errors.New("ticket is not pending approval")
 
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {
-	result := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Update("phase", "needs-attention")
+	// pending-approval is excluded for the same reason requeue excludes it:
+	// flagging a never-run, externally-sourced ticket moves it into a phase
+	// that requeue *does* release, routing around the intake review
+	// (spec Amendment 1).
+	result := h.DB.Model(&db.Ticket{}).
+		Where("id = ? AND phase != 'pending-approval'", id).
+		Update("phase", "needs-attention")
 	if result.Error != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	if result.RowsAffected == 0 {
-		http.Error(w, "ticket not found", http.StatusNotFound)
+		var count int64
+		h.DB.Model(&db.Ticket{}).Where("id = ?", id).Count(&count)
+		if count == 0 {
+			http.Error(w, "ticket not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "ticket is awaiting intake approval", http.StatusConflict)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

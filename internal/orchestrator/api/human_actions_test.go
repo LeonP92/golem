@@ -802,6 +802,56 @@ func TestRequeueActionRejectsPendingApprovalTicket(t *testing.T) {
 	}
 }
 
+// TestNeedsAttentionActionRejectsPendingApprovalTicket guards fix-round-2 of
+// the intake approval gate (spec Amendment 1): needs-attention is a fourth
+// door, laundered through an intermediate phase — pending-approval ->
+// needs-attention -> requeue -> unassigned would release a never-reviewed,
+// externally-sourced ticket via two authenticated POSTs. It must 409 on a
+// pending-approval ticket, and the phase in the database must be unchanged,
+// not just the status code.
+func TestNeedsAttentionActionRejectsPendingApprovalTicket(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "pending-approval"}
+	h.DB.Create(&ticket)
+
+	body, _ := json.Marshal(map[string]string{"action": "needs-attention"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "pending-approval" {
+		t.Errorf("phase = %q, want unchanged pending-approval", got.Phase)
+	}
+}
+
+// TestNeedsAttentionAction_MissingTicketReturns404 verifies that a missing
+// ticket is reported as 404, not misreported as the 409 the pending-approval
+// guard now also returns on RowsAffected == 0.
+func TestNeedsAttentionAction_MissingTicketReturns404(t *testing.T) {
+	_, mux, cookie := setupActionTest(t)
+
+	body, _ := json.Marshal(map[string]string{"action": "needs-attention"})
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets/does-not-exist/actions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
 // TestPendingApproval_NoneReturnsEmpty verifies empty array when no pending approval exists.
 func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 	h, mux, apiKey := setupAPIKeyTest(t)
