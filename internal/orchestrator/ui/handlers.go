@@ -95,11 +95,12 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 
 	const layoutFile = "templates/layout.html"
 	pages := map[string]string{
-		"login":         "templates/login.html",
-		"dashboard":     "templates/dashboard.html",
-		"shems":         "templates/shems.html",
-		"ticket_new":    "templates/ticket_new.html",
-		"ticket_detail": "templates/ticket_detail.html",
+		"login":           "templates/login.html",
+		"dashboard":       "templates/dashboard.html",
+		"shems":           "templates/shems.html",
+		"github_settings": "templates/github_settings.html",
+		"ticket_new":      "templates/ticket_new.html",
+		"ticket_detail":   "templates/ticket_detail.html",
 	}
 
 	out := make(map[string]*template.Template, len(pages))
@@ -144,6 +145,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /logout", h.logout)
 	mux.Handle("GET /dashboard", auth.RequireSession(h.DB)(http.HandlerFunc(h.dashboard)))
 	mux.Handle("GET /shems", auth.RequireSession(h.DB)(http.HandlerFunc(h.shems)))
+	mux.Handle("GET /settings/github", auth.RequireSession(h.DB)(http.HandlerFunc(h.githubSettings)))
+	mux.Handle("POST /settings/github", auth.RequireSession(h.DB)(http.HandlerFunc(h.githubSettingsSubmit)))
 	mux.Handle("GET /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewForm)))
 	mux.Handle("POST /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewSubmit)))
 	mux.Handle("GET /tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketDetail)))

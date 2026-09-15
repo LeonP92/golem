@@ -1,0 +1,121 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">GitHub Issues</h1>
+</div>
+
+<p class="text-sm text-base-content/60 mb-4">
+  Issues carrying the trigger label become tickets automatically. Golem polls
+  every 15 minutes; use <strong>Sync now</strong> to pull issues in immediately.
+</p>
+
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Repository</th>
+            <th>Enabled</th>
+            <th>Label</th>
+            <th>Last polled</th>
+            <th>Status</th>
+            <th class="w-8"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Repos}}
+          <tr>
+            <td class="font-mono text-sm">{{.Owner}}/{{.Name}}</td>
+            <td>
+              <form method="post" action="/settings/github">
+                <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
+                <input type="checkbox" name="enabled" class="checkbox checkbox-sm"
+                       {{if .Enabled}}checked{{end}} onchange="this.form.submit()">
+              </form>
+            </td>
+            <td>
+              <form method="post" action="/settings/github" class="flex items-center gap-1">
+                <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
+                <input type="text" name="label" value="{{.Label}}" size="10"
+                       class="input input-bordered input-xs">
+                <button type="submit" class="btn btn-xs">Save</button>
+              </form>
+            </td>
+            <td class="text-sm text-base-content/60 whitespace-nowrap">
+              {{if .LastPolledAt}}{{.LastPolledAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}
+            </td>
+            <td class="text-sm">
+              {{if .LastError}}<span class="text-error" title="{{.LastError}}">{{truncate 40 .LastError}}</span>{{else}}<span class="text-success">ok</span>{{end}}
+            </td>
+            <td class="text-right">
+              {{if .ID}}
+              <button type="button" data-repo-id="{{.ID}}" class="btn btn-xs sync-now">Sync now</button>
+              {{else}}
+              <span class="text-xs text-base-content/40" title="Enable this repo above to register it before it can be synced">unregistered</span>
+              {{end}}
+            </td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="6" class="text-center py-12 text-base-content/50">
+              <div class="flex flex-col items-center gap-2">
+                <span class="iconify text-4xl" data-icon="heroicons:code-bracket-square"></span>
+                <p>No repositories registered.</p>
+                <p class="text-sm">Repos appear here once a shem registers with them.</p>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+document.querySelectorAll('.sync-now').forEach(function (btn) {
+  btn.addEventListener('click', function () {
+    var id = btn.dataset.repoId;
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Syncing…';
+
+    fetch('/api/github/repos/' + id + '/sync', { method: 'POST' })
+      .then(function (r) {
+        // auth.RequireSession redirects an expired/missing session to
+        // /login (fetch follows that transparently), so a "successful"
+        // response here can still be an HTML login page rather than JSON.
+        // Guard on content-type before ever calling r.json().
+        var contentType = r.headers.get('content-type') || '';
+        if (contentType.indexOf('application/json') === -1) {
+          throw new Error('non-JSON response (status ' + r.status + ')');
+        }
+        return r.json().then(function (body) { return { status: r.status, body: body }; });
+      })
+      .then(function (res) {
+        if (res.status === 429) {
+          var secs = res.body.retry_after_secs || 60;
+          btn.textContent = 'Wait ' + secs + 's';
+          setTimeout(function () {
+            btn.textContent = original;
+            btn.disabled = false;
+          }, secs * 1000);
+          return;
+        }
+        if (res.status !== 202) {
+          throw new Error('unexpected status ' + res.status);
+        }
+        btn.textContent = res.body.queued ? 'Queued' : 'Already queued';
+        setTimeout(function () {
+          btn.textContent = original;
+          btn.disabled = false;
+        }, 60000);
+      })
+      .catch(function () {
+        btn.textContent = 'Failed — retry?';
+        btn.disabled = false;
+      });
+  });
+});
+</script>
+{{end}}
