@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/bloat"
+	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/ticket"
 )
 

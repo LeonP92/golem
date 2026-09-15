@@ -9,15 +9,15 @@ import (
 type Phase string
 
 const (
-	PhaseBrainstorm      Phase = "brainstorm"
-	PhasePlan            Phase = "plan"
-	PhaseApprove         Phase = "approve"
-	PhaseImplement       Phase = "implement"
-	PhaseReview          Phase = "review"
-	PhaseReadyForReview  Phase = "ready-for-review"
-	PhaseNeedsAttention  Phase = "needs-attention"
-	PhaseClose           Phase = "close"
-	PhaseClosed          Phase = "closed"
+	PhaseBrainstorm     Phase = "brainstorm"
+	PhasePlan           Phase = "plan"
+	PhaseApprove        Phase = "approve"
+	PhaseImplement      Phase = "implement"
+	PhaseReview         Phase = "review"
+	PhaseReadyForReview Phase = "ready-for-review"
+	PhaseNeedsAttention Phase = "needs-attention"
+	PhaseClose          Phase = "close"
+	PhaseClosed         Phase = "closed"
 )
 
 type State struct {

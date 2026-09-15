@@ -16,10 +16,10 @@ import (
 
 // Handlers holds the shared dependencies for all API handlers.
 type Handlers struct {
-	DB            *gorm.DB
-	Hub           *ws.Hub
-	Broker        *sse.Broker
-	LogEntryHTML  func(sse.LogEntryEvent) string // renders a log entry to HTML for SSE; nil = send JSON
+	DB           *gorm.DB
+	Hub          *ws.Hub
+	Broker       *sse.Broker
+	LogEntryHTML func(sse.LogEntryEvent) string // renders a log entry to HTML for SSE; nil = send JSON
 }
 
 // NewHandlers creates a Handlers with the given dependencies.

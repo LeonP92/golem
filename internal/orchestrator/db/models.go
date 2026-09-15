@@ -25,10 +25,10 @@ type Session struct {
 
 // Shem represents a registered Shem worker.
 type Shem struct {
-	ID            uint       `gorm:"primaryKey"`
-	Name          string     `gorm:"uniqueIndex;not null"`
-	APIKeyHash    string     `gorm:"not null"`
-	Repos         string     `gorm:"not null"` // JSON: []string of normalized URLs
+	ID            uint   `gorm:"primaryKey"`
+	Name          string `gorm:"uniqueIndex;not null"`
+	APIKeyHash    string `gorm:"not null"`
+	Repos         string `gorm:"not null"` // JSON: []string of normalized URLs
 	LastHeartbeat *time.Time
 	Status        string  `gorm:"not null;default:'offline'"` // online | offline
 	CurrentTicket *string // UUID of the ticket currently being worked on
