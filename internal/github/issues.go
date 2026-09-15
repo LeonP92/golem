@@ -3,7 +3,10 @@ package github
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	gh "github.com/google/go-github/v69/github"
@@ -11,31 +14,58 @@ import (
 
 // ListIssuesSince returns issues carrying label that changed at or after
 // since, including closed ones. Passing a non-empty etag makes the request
-// conditional; a 304 response returns IssuePage{NotModified: true}.
+// conditional via If-None-Match; a 304 response returns
+// IssuePage{NotModified: true} and Issues is empty.
+//
+// This bypasses the Issues.ListByRepo convenience method because go-github
+// gives no way to attach a request header through it: the request is built
+// by hand here (mirroring the query string ListByRepo would have produced)
+// so If-None-Match can be set before the request is sent.
 func (c *client) ListIssuesSince(ctx context.Context, owner, repo, label string, since time.Time, etag string) (IssuePage, error) {
-	opts := &gh.IssueListByRepoOptions{
-		State:       "all",
-		Since:       since,
-		ListOptions: gh.ListOptions{PerPage: 100},
-	}
-	if label != "" {
-		opts.Labels = []string{label}
-	}
+	path := fmt.Sprintf("repos/%s/%s/issues", owner, repo)
 
 	var page IssuePage
+	haveETag := false
+	pageNum := 0
 	for {
-		issues, resp, err := c.api.Issues.ListByRepo(ctx, owner, repo, opts)
+		q := url.Values{}
+		q.Set("state", "all")
+		if label != "" {
+			q.Set("labels", label)
+		}
+		q.Set("since", since.Format(time.RFC3339))
+		q.Set("per_page", "100")
+		if pageNum != 0 {
+			q.Set("page", strconv.Itoa(pageNum))
+		}
+
+		req, err := c.api.NewRequest(http.MethodGet, path+"?"+q.Encode(), nil)
+		if err != nil {
+			return IssuePage{}, fmt.Errorf("list issues for %s/%s: %w", owner, repo, err)
+		}
+		if etag != "" {
+			req.Header.Set("If-None-Match", etag)
+		}
+
+		var issues []*gh.Issue
+		resp, err := c.api.Do(ctx, req, &issues)
 		if err != nil {
 			var errResp *gh.ErrorResponse
 			if errors.As(err, &errResp) && errResp.Response != nil &&
 				errResp.Response.StatusCode == http.StatusNotModified {
 				return IssuePage{ETag: etag, NotModified: true}, nil
 			}
-			return IssuePage{}, err
+			return IssuePage{}, fmt.Errorf("list issues for %s/%s: %w", owner, repo, err)
 		}
-		if resp != nil && resp.StatusCode == http.StatusNotModified {
-			return IssuePage{ETag: etag, NotModified: true}, nil
+
+		// A conditional GET must be re-sent with the ETag of the *first*
+		// page, since that is what identifies the whole listing; capture it
+		// once and ignore ETags on any subsequent pages.
+		if !haveETag {
+			page.ETag = resp.Header.Get("ETag")
+			haveETag = true
 		}
+
 		for _, in := range issues {
 			// Pull requests come back from the issues endpoint too; skip them.
 			if in.IsPullRequest() {
@@ -43,13 +73,10 @@ func (c *client) ListIssuesSince(ctx context.Context, owner, repo, label string,
 			}
 			page.Issues = append(page.Issues, toIssue(in))
 		}
-		if resp == nil || resp.NextPage == 0 {
-			if resp != nil {
-				page.ETag = resp.Header.Get("ETag")
-			}
+		if resp.NextPage == 0 {
 			return page, nil
 		}
-		opts.Page = resp.NextPage
+		pageNum = resp.NextPage
 	}
 }
 
@@ -57,7 +84,7 @@ func (c *client) ListIssuesSince(ctx context.Context, owner, repo, label string,
 func (c *client) GetIssue(ctx context.Context, owner, repo string, number int) (Issue, error) {
 	in, _, err := c.api.Issues.Get(ctx, owner, repo, number)
 	if err != nil {
-		return Issue{}, err
+		return Issue{}, fmt.Errorf("get issue %s/%s#%d: %w", owner, repo, number, err)
 	}
 	return toIssue(in), nil
 }
@@ -66,7 +93,7 @@ func (c *client) GetIssue(ctx context.Context, owner, repo string, number int) (
 func (c *client) DefaultBranch(ctx context.Context, owner, repo string) (string, error) {
 	r, _, err := c.api.Repositories.Get(ctx, owner, repo)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("get default branch for %s/%s: %w", owner, repo, err)
 	}
 	return r.GetDefaultBranch(), nil
 }
