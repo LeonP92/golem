@@ -27,5 +27,6 @@ func Open(dsn string) (*gorm.DB, error) {
 	gdb.Exec("PRAGMA journal_mode=WAL")
 	return gdb, gdb.AutoMigrate(
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
+		&GitHubRepo{}, &GitHubOutbox{},
 	)
 }

@@ -37,7 +37,7 @@ type Shem struct {
 // Ticket represents a work ticket assigned to a Shem.
 type Ticket struct {
 	ID              string    `gorm:"primaryKey" json:"id"`
-	RepoRemote      string    `gorm:"not null;index" json:"repo_remote"`
+	RepoRemote      string    `gorm:"not null;index;uniqueIndex:idx_repo_issue" json:"repo_remote"`
 	Title           string    `gorm:"not null;default:''" json:"title"`
 	BaseBranch      string    `gorm:"not null;default:'main'" json:"base_branch"`
 	Branch          string    `gorm:"not null" json:"branch"`
@@ -47,6 +47,11 @@ type Ticket struct {
 	CreatedByUserID *uint     `gorm:"index" json:"created_by_user_id"`
 	CheckpointPhase *string   `json:"checkpoint_phase"`
 	CheckpointSHA   *string   `json:"checkpoint_sha"`
+	IssueNumber     *int      `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
+	IssueURL        string    `json:"issue_url"`
+	PRNumber        *int      `json:"pr_number"`
+	PRURL           string    `json:"pr_url"`
+	BranchPushed    bool      `gorm:"not null;default:false" json:"branch_pushed"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
@@ -114,4 +119,40 @@ type HumanInput struct {
 	Response   *string    `json:"response"`
 	CreatedAt  time.Time  `json:"created_at"`
 	ResolvedAt *time.Time `json:"resolved_at"`
+}
+
+// GitHubRepo holds per-repository issue-sync settings, managed from the
+// dashboard. One row per repository Golem may sync.
+type GitHubRepo struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	RepoRemote     string     `gorm:"uniqueIndex;not null" json:"repo_remote"` // normalized via urlnorm
+	Owner          string     `gorm:"not null" json:"owner"`
+	Name           string     `gorm:"not null" json:"name"`
+	Enabled        bool       `gorm:"not null;default:false" json:"enabled"`
+	Label          string     `gorm:"not null;default:'golem'" json:"label"`
+	LastIssueSync  *time.Time `json:"last_issue_sync"` // `since` cursor
+	LastPolledAt   *time.Time `json:"last_polled_at"`
+	LastManualSync *time.Time `json:"last_manual_sync"`
+	ETag           string     `gorm:"column:etag" json:"-"`
+	LastError      string     `json:"last_error"`
+}
+
+// GitHubOutbox is a pending write to GitHub. Rows are inserted in the same
+// transaction as the ticket change that caused them, and drained by the
+// ghsync worker.
+//
+// IdempotencyKey is a deterministic string derived from the event (for
+// example "<ticketID>:comment:plan-approved"). The unique index on it is what
+// makes re-enqueuing after a crash safe: the duplicate insert fails and the
+// caller treats that specific failure as success.
+type GitHubOutbox struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	TicketID       string     `gorm:"not null;index" json:"ticket_id"`
+	Kind           string     `gorm:"not null" json:"kind"` // comment | label | pr | close_issue
+	Payload        string     `gorm:"not null" json:"payload"`
+	IdempotencyKey string     `gorm:"uniqueIndex;not null" json:"idempotency_key"`
+	Attempts       int        `gorm:"not null;default:0" json:"attempts"`
+	NextAttempt    time.Time  `gorm:"index" json:"next_attempt"`
+	LastError      string     `json:"last_error"`
+	DoneAt         *time.Time `json:"done_at"`
 }
