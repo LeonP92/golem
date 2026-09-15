@@ -469,3 +469,97 @@ All four phases are in scope. This is ordering, not a scope reduction.
   rejected.
 - GitHub unreachable for an hour causes no lost phase transitions, and queued
   writes land once it recovers.
+
+---
+
+# Amendment 1 — Intake approval for externally-ingested tickets
+
+**Date:** 2026-09-15
+**Status:** Approved, supersedes the "Work start" decision in the Decisions table.
+
+## What changed and why
+
+The original design chose **auto-start**: a labeled issue became an `unassigned`
+ticket and a shem claimed it within seconds, with no human step. This amendment
+replaces that with an **intake approval gate**: a ticket created from an
+external integration enters a new `pending-approval` phase that no shem can
+claim, and a human must release it before any agent runs.
+
+The reason is a finding from Task 10's security review, independently verified:
+`internal/shem/worker/executor.go` interpolates the ticket description **bare**
+into all four agent prompts —
+
+```
+:395  buildBrainstormPrompt    Description: %s
+:429  buildPlanPrompt          Description: %s
+:457  buildImplementPrompt     Description: %s   ← drives shell and repo writes
+:495  buildRevisePrompt        Description: %s
+```
+
+— with no delimiter and no treat-as-data framing. Before this feature a
+description could only originate from an authenticated human using the
+orchestrator's web form. After it, the description **is a GitHub issue body**,
+authored by anyone who can open an issue in a synced repository.
+
+Auto-start therefore meant stranger-authored text reaching an autonomous coding
+agent with shell and repository write access, with no human in the loop. The
+existing brainstorm and plan approval gates are real but insufficient: the
+brainstorm phase itself runs on the raw description before any human sees
+anything.
+
+## The gate
+
+- Ingest creates GitHub-sourced tickets in phase **`pending-approval`**.
+- `pending-approval` is not claimable. Claimability is defined by
+  `phase = 'unassigned'` in exactly two queries — the atomic claim
+  (`api/tickets.go:52`) and the available list (`api/tickets.go:222`) — so the
+  new phase is excluded by construction rather than by an added filter.
+- Shems cannot set it: `validPhases` in `updatePhase` does not include it, and
+  gains no new entry.
+- A human releases the ticket from the dashboard, which transitions
+  `pending-approval → unassigned`. From that point the existing flow is
+  unchanged: a shem claims it and runs brainstorm as before.
+- Tickets created through the orchestrator's own web form are unaffected and
+  still enter at `unassigned`. The gate applies to externally-sourced tickets,
+  identified by a non-nil `IssueNumber`.
+- Closing the linked issue on GitHub still closes the ticket, including while it
+  sits in `pending-approval`.
+
+## What the gate does and does not buy
+
+It guarantees a human sees the issue text before any agent does, and gives them
+a place to reject obviously hostile or junk content. It does **not** guarantee
+they will spot a subtle injection buried in a long issue body, which is why
+Amendment 2 still applies.
+
+## Amendment 2 — Prompt fencing (defence in depth)
+
+Independently of the gate, the four prompt builders must mark externally-sourced
+descriptions and fence them with explicit treat-as-data framing, so a released
+ticket whose body carries an injection is still handled as data rather than as
+instructions.
+
+## Out of scope, recommended separately
+
+Two items the security review raised that are repo-wide rather than this
+feature's to decide:
+
+- **DOMPurify** around `marked.parse`, or server-side sanitized rendering.
+  `.Spec.Message` and `.Plan.Message` still render through an unsanitized
+  `innerHTML` sink, and are now transitively reachable from external input
+  (issue body → LLM prompt → `spec.md` → `.Spec.Message`).
+- **A Content-Security-Policy header.** The orchestrator currently sets none,
+  behind five third-party CDN script tags.
+
+## Revised acceptance criteria
+
+These replace the corresponding original criteria:
+
+- Labelling an open GitHub issue `golem` produces exactly one ticket in
+  **`pending-approval`**, within 15 minutes or immediately on manual sync.
+- A `pending-approval` ticket is never returned by `/api/tickets/available` and
+  can never be claimed, including under concurrent claim attempts.
+- Releasing a `pending-approval` ticket moves it to `unassigned`, after which a
+  shem claims it and the existing lifecycle is unchanged.
+- No agent prompt is ever constructed from a ticket still in
+  `pending-approval`.
