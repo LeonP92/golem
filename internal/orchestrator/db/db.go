@@ -1,6 +1,7 @@
 package db
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -21,6 +22,25 @@ func Open(dsn string) (*gorm.DB, error) {
 	gdb, err := gorm.Open(dialector, &gorm.Config{})
 	if err != nil {
 		return nil, err
+	}
+	if dsn == ":memory:" {
+		// glebarez/sqlite's ":memory:" DSN has no shared cache: every new
+		// pooled connection sees a brand-new, empty database rather than the
+		// one AutoMigrate just populated below. That is invisible under
+		// sequential access (the pool never grows past one connection), but
+		// any genuinely concurrent caller — such as the ghsync worker's
+		// ingest and drain loops running alongside the goroutine that opened
+		// this handle — can have the pool open a second connection and hit
+		// "no such table", deterministically reproducible under `go test
+		// -race`. Pinning the pool to one connection keeps every query
+		// against the same in-process database; harmless for tests and never
+		// reached in production, which always opens a real file path or a
+		// Postgres DSN.
+		sqlDB, err := gdb.DB()
+		if err != nil {
+			return nil, fmt.Errorf("get sql.DB handle for in-memory database: %w", err)
+		}
+		sqlDB.SetMaxOpenConns(1)
 	}
 	// Enable WAL mode so multiple processes (server + admin CLI) can access
 	// the same database file concurrently without exclusive-lock conflicts.

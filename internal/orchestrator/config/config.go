@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -12,12 +13,62 @@ type TLSConfig struct {
 	Key  string `yaml:"key"`
 }
 
+// GitHubConfig holds settings for the GitHub Issues integration. Durations are
+// strings parsed by time.ParseDuration; an empty or unparseable value falls
+// back to the documented default rather than failing startup.
+type GitHubConfig struct {
+	TokenEnv           string `yaml:"token_env"`
+	PollInterval       string `yaml:"poll_interval"`
+	DrainInterval      string `yaml:"drain_interval"`
+	ManualSyncCooldown string `yaml:"manual_sync_cooldown"`
+	APIBase            string `yaml:"api_base"`
+}
+
+const (
+	defaultPollInterval       = 15 * time.Minute
+	defaultDrainInterval      = 20 * time.Second
+	defaultManualSyncCooldown = time.Minute
+	defaultTokenEnv           = "GOLEM_GITHUB_TOKEN"
+)
+
+// PollIntervalDuration returns the ingest interval, defaulting to 15 minutes.
+func (g GitHubConfig) PollIntervalDuration() time.Duration {
+	return parseDurationOr(g.PollInterval, defaultPollInterval)
+}
+
+// DrainIntervalDuration returns the outbox drain interval, defaulting to 20s.
+// It is deliberately independent of the ingest interval: ingest polls a mostly
+// idle external system, while the drain reacts to local events and must stay
+// prompt for retry backoff to mean anything.
+func (g GitHubConfig) DrainIntervalDuration() time.Duration {
+	return parseDurationOr(g.DrainInterval, defaultDrainInterval)
+}
+
+// ManualSyncCooldownDuration returns the minimum gap between manual syncs of
+// one repo, defaulting to 1 minute.
+func (g GitHubConfig) ManualSyncCooldownDuration() time.Duration {
+	return parseDurationOr(g.ManualSyncCooldown, defaultManualSyncCooldown)
+}
+
+func parseDurationOr(raw string, fallback time.Duration) time.Duration {
+	if raw == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil || d <= 0 {
+		return fallback
+	}
+	return d
+}
+
 // Config holds all orchestrator server configuration.
 type Config struct {
-	Port          int       `yaml:"port"`
-	DBPath        string    `yaml:"db_path"`
-	SessionSecret string    `yaml:"session_secret"`
-	TLS           TLSConfig `yaml:"tls"`
+	Port          int          `yaml:"port"`
+	DBPath        string       `yaml:"db_path"`
+	SessionSecret string       `yaml:"session_secret"`
+	BaseURL       string       `yaml:"base_url"`
+	TLS           TLSConfig    `yaml:"tls"`
+	GitHub        GitHubConfig `yaml:"github"`
 }
 
 // Load reads and parses the YAML config file at path.
@@ -27,5 +78,11 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	var cfg Config
-	return &cfg, yaml.Unmarshal(data, &cfg)
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return nil, err
+	}
+	if cfg.GitHub.TokenEnv == "" {
+		cfg.GitHub.TokenEnv = defaultTokenEnv
+	}
+	return &cfg, nil
 }

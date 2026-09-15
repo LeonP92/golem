@@ -172,6 +172,21 @@ func (f *Fake) CreateComment(_ context.Context, _, _ string, number int, body st
 	return nil
 }
 
+// CommentsFor returns a copy of the comments recorded for the given issue
+// number. Reading the Comments field directly is safe only when nothing else
+// can be calling CreateComment concurrently (true for every synchronous
+// test); a caller that polls Comments from a separate goroutine while a
+// worker may be delivering outbox rows in the background — as the ghsync
+// worker's drain loop does — must use this method instead, or race with the
+// lock CreateComment already takes.
+func (f *Fake) CommentsFor(number int) []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.Comments[number]))
+	copy(out, f.Comments[number])
+	return out
+}
+
 func (f *Fake) CreatePullRequest(_ context.Context, _, _, _, _, _, _ string, _ bool) (PullRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

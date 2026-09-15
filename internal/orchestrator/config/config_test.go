@@ -2,7 +2,9 @@ package config_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/config"
 )
@@ -22,5 +24,49 @@ func TestLoad(t *testing.T) {
 	}
 	if cfg.DBPath != "./test.db" {
 		t.Errorf("db_path: got %q", cfg.DBPath)
+	}
+}
+
+func TestGitHubConfigDefaults(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orchestrator.yaml")
+	if err := os.WriteFile(path, []byte("port: 8080\ndb_path: x.db\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.GitHub.PollIntervalDuration(); got != 15*time.Minute {
+		t.Errorf("PollIntervalDuration = %v, want 15m", got)
+	}
+	if got := cfg.GitHub.DrainIntervalDuration(); got != 20*time.Second {
+		t.Errorf("DrainIntervalDuration = %v, want 20s", got)
+	}
+	if got := cfg.GitHub.ManualSyncCooldownDuration(); got != time.Minute {
+		t.Errorf("ManualSyncCooldownDuration = %v, want 1m", got)
+	}
+	if cfg.GitHub.TokenEnv != "GOLEM_GITHUB_TOKEN" {
+		t.Errorf("TokenEnv = %q, want GOLEM_GITHUB_TOKEN", cfg.GitHub.TokenEnv)
+	}
+}
+
+func TestGitHubConfigOverrides(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "orchestrator.yaml")
+	body := "port: 8080\ndb_path: x.db\ngithub:\n  poll_interval: 5m\n  drain_interval: 1s\n  manual_sync_cooldown: 10s\n  token_env: OTHER_TOKEN\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got := cfg.GitHub.PollIntervalDuration(); got != 5*time.Minute {
+		t.Errorf("PollIntervalDuration = %v, want 5m", got)
+	}
+	if got := cfg.GitHub.DrainIntervalDuration(); got != time.Second {
+		t.Errorf("DrainIntervalDuration = %v, want 1s", got)
+	}
+	if cfg.GitHub.TokenEnv != "OTHER_TOKEN" {
+		t.Errorf("TokenEnv = %q, want OTHER_TOKEN", cfg.GitHub.TokenEnv)
 	}
 }

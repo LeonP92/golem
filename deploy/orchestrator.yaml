@@ -4,3 +4,10 @@ db_path: /data/orchestrator.db
 # tls:
 #   cert: /etc/golem/tls/cert.pem
 #   key:  /etc/golem/tls/key.pem
+
+github:
+  token_env: GOLEM_GITHUB_TOKEN
+  poll_interval: 15m
+  drain_interval: 20s
+  manual_sync_cooldown: 60s
+  api_base: ""          # set for GitHub Enterprise

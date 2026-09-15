@@ -8,9 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/admin"
 	"github.com/leonp92/golem/internal/orchestrator/config"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/server"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
@@ -135,8 +137,42 @@ func main() {
 	hub := ws.NewHub()
 	broker := sse.NewBroker()
 	ws.StartHeartbeatMonitor(context.Background(), gdb, hub, 60*time.Second, 90*time.Second)
+
+	// GitHub sync: started only when at least one repo is enabled and its
+	// token is present. Required secrets are validated at startup with a loud
+	// log message, not a silent no-op — and a missing token never prevents
+	// the rest of the orchestrator from serving.
+	var ghWorker *ghsync.Worker
+	token := os.Getenv(cfg.GitHub.TokenEnv)
+	var enabledRepos int64
+	if err := gdb.Model(&db.GitHubRepo{}).Where("enabled = ?", true).Count(&enabledRepos).Error; err != nil {
+		log.Printf("ERROR github sync: count enabled repos: %v — sync DISABLED", err)
+	}
+	switch {
+	case enabledRepos == 0:
+		log.Printf("github sync: no repos enabled, sync idle")
+	case token == "":
+		log.Printf("ERROR github sync: %d repo(s) enabled but %s is empty — "+
+			"sync DISABLED until a token is provided", enabledRepos, cfg.GitHub.TokenEnv)
+	default:
+		client, err := github.New(token, cfg.GitHub.APIBase)
+		if err != nil {
+			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)
+			break
+		}
+		ghWorker = ghsync.NewWorker(
+			ghsync.NewSyncer(gdb, client),
+			cfg.GitHub.PollIntervalDuration(),
+			cfg.GitHub.DrainIntervalDuration(),
+		)
+		ghWorker.Start(context.Background())
+		defer ghWorker.Stop()
+		log.Printf("github sync: started (ingest %v, drain %v)",
+			cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration())
+	}
+
 	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
-	srv := server.New(gdb, hub, broker, secureCookie)
+	srv := server.New(gdb, hub, broker, secureCookie, cfg.BaseURL)
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	if secureCookie {
 		log.Printf("listening on %s (TLS)", addr)
