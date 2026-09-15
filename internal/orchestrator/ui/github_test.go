@@ -523,6 +523,77 @@ func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 	}
 }
 
+// TestTicketDetailSuppressesRequeueOnlyForPendingApproval guards fix-round-1
+// of the intake approval gate (spec Amendment 1): the generic "Re-queue"
+// control is a second, unlabeled door that would release a pending-approval
+// ticket without the human review "Approve & Start" performs, so it must be
+// hidden for that phase. The Close control must still be offered — closing
+// an unwanted ingested ticket is legitimate. A phase where re-queue is still
+// valid (implement) must still show it, so the suppression can't silently
+// regress into hiding the control everywhere.
+func TestTicketDetailSuppressesRequeueOnlyForPendingApproval(t *testing.T) {
+	tests := []struct {
+		name        string
+		phase       string
+		wantRequeue bool
+		wantClose   bool
+	}{
+		{name: "pending-approval hides requeue, keeps close", phase: "pending-approval", wantRequeue: false, wantClose: true},
+		{name: "implement still offers requeue and close", phase: "implement", wantRequeue: true, wantClose: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gdb, err := db.Open(":memory:")
+			if err != nil {
+				t.Fatalf("db.Open: %v", err)
+			}
+			n := 12
+			ticket := db.Ticket{ID: "gh-issue-requeue-" + tt.phase, RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "ticket/x", Description: "d",
+				Phase: tt.phase, IssueNumber: &n,
+				IssueURL: "https://github.com/org/repo/issues/12"}
+			if err := gdb.Create(&ticket).Error; err != nil {
+				t.Fatalf("seed ticket: %v", err)
+			}
+
+			user := db.User{Username: "leon", PasswordHash: "x"}
+			gdb.Create(&user)
+			w := httptest.NewRecorder()
+			if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			cookie := w.Result().Cookies()[0]
+
+			tmpls, err := ui.LoadTemplates()
+			if err != nil {
+				t.Fatalf("LoadTemplates: %v", err)
+			}
+			h := ui.NewHandlersWithMap(gdb, tmpls, false)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			req := httptest.NewRequest(http.MethodGet, "/tickets/"+ticket.ID, nil)
+			req.AddCookie(cookie)
+			w = httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			body := w.Body.String()
+			hasRequeue := strings.Contains(body, `"action":"requeue"`)
+			if hasRequeue != tt.wantRequeue {
+				t.Errorf("requeue control present = %v, want %v", hasRequeue, tt.wantRequeue)
+			}
+			hasClose := strings.Contains(body, `"action":"close"`)
+			if hasClose != tt.wantClose {
+				t.Errorf("close control present = %v, want %v", hasClose, tt.wantClose)
+			}
+		})
+	}
+}
+
 // TestDashboardShowsIssueBadgeForLinkedTicket guards the ticket_row partial:
 // its dot context is ui.TicketRow (with a nested .Ticket), so the badge must
 // reference .Ticket.IssueNumber/.Ticket.IssueURL, not a bare .IssueNumber —

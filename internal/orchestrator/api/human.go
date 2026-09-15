@@ -271,8 +271,12 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
+	// pending-approval is deliberately excluded alongside unassigned/closed:
+	// re-queue is a generic "unstick it" action for a ticket a shem has
+	// already touched, not a substitute for the human review that "start"
+	// performs on a never-run, externally-sourced ticket (spec Amendment 1).
 	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase NOT IN ('unassigned', 'closed')", id).
+		Where("id = ? AND phase NOT IN ('unassigned', 'pending-approval', 'closed')", id).
 		Updates(map[string]any{
 			"phase":            "unassigned",
 			"assigned_shem":    nil,
@@ -284,7 +288,7 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	if result.RowsAffected == 0 {
-		http.Error(w, "ticket already unassigned or closed", http.StatusConflict)
+		http.Error(w, "ticket is unassigned, closed, or awaiting intake approval", http.StatusConflict)
 		return
 	}
 

@@ -103,6 +103,7 @@
         Close
       </button>
       {{end}}
+      {{if ne .Ticket.Phase "pending-approval"}}
       <button class="btn btn-sm btn-ghost gap-1.5"
         hx-post="/api/tickets/{{.Ticket.ID}}/actions"
         hx-vals='{"action":"requeue"}'
@@ -111,6 +112,7 @@
         <span class="iconify" data-icon="heroicons:arrow-path"></span>
         Re-queue
       </button>
+      {{end}}
     </div>
 
     {{if eq .Ticket.Phase "ready-for-review"}}

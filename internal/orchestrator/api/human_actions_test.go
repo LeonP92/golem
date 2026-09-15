@@ -770,6 +770,38 @@ func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
 	}
 }
 
+// TestRequeueActionRejectsPendingApprovalTicket guards against a second,
+// unintended door around the intake approval gate (spec Amendment 1
+// fix-round-1): "requeue" is a generic "unstick it" action for a ticket a
+// shem has already touched, not a substitute for the human review "start"
+// performs on a never-run, externally-sourced ticket. It must 409 on a
+// pending-approval ticket, and — critically — must leave the phase in the
+// database untouched, not just report the right status code.
+func TestRequeueActionRejectsPendingApprovalTicket(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "pending-approval"}
+	h.DB.Create(&ticket)
+
+	body, _ := json.Marshal(map[string]string{"action": "requeue"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "pending-approval" {
+		t.Errorf("phase = %q, want unchanged pending-approval", got.Phase)
+	}
+}
+
 // TestPendingApproval_NoneReturnsEmpty verifies empty array when no pending approval exists.
 func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 	h, mux, apiKey := setupAPIKeyTest(t)
