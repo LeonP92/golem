@@ -459,6 +459,70 @@ func TestTicketDetailNonLinkedTicketUnchanged(t *testing.T) {
 	}
 }
 
+// TestTicketDetailOffersStartControlOnlyForPendingApproval guards the intake
+// approval gate's UI surface (spec Amendment 1): a pending-approval,
+// GitHub-linked ticket must offer the human "Approve & Start" control that
+// posts action=start, and no other phase must offer it — including
+// unassigned, which is what a released pending-approval ticket becomes.
+func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
+	tests := []struct {
+		name      string
+		phase     string
+		wantStart bool
+	}{
+		{name: "pending-approval offers the start control", phase: "pending-approval", wantStart: true},
+		{name: "unassigned (already released) does not offer it", phase: "unassigned", wantStart: false},
+		{name: "implement (already running) does not offer it", phase: "implement", wantStart: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gdb, err := db.Open(":memory:")
+			if err != nil {
+				t.Fatalf("db.Open: %v", err)
+			}
+			n := 11
+			ticket := db.Ticket{ID: "gh-issue-start-" + tt.phase, RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "ticket/x", Description: "d",
+				Phase: tt.phase, IssueNumber: &n,
+				IssueURL: "https://github.com/org/repo/issues/11"}
+			if err := gdb.Create(&ticket).Error; err != nil {
+				t.Fatalf("seed ticket: %v", err)
+			}
+
+			user := db.User{Username: "leon", PasswordHash: "x"}
+			gdb.Create(&user)
+			w := httptest.NewRecorder()
+			if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			cookie := w.Result().Cookies()[0]
+
+			tmpls, err := ui.LoadTemplates()
+			if err != nil {
+				t.Fatalf("LoadTemplates: %v", err)
+			}
+			h := ui.NewHandlersWithMap(gdb, tmpls, false)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			req := httptest.NewRequest(http.MethodGet, "/tickets/"+ticket.ID, nil)
+			req.AddCookie(cookie)
+			w = httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			body := w.Body.String()
+			hasStart := strings.Contains(body, `"action":"start"`)
+			if hasStart != tt.wantStart {
+				t.Errorf("start control present = %v, want %v", hasStart, tt.wantStart)
+			}
+		})
+	}
+}
+
 // TestDashboardShowsIssueBadgeForLinkedTicket guards the ticket_row partial:
 // its dot context is ui.TicketRow (with a nested .Ticket), so the badge must
 // reference .Ticket.IssueNumber/.Ticket.IssueURL, not a bare .IssueNumber —

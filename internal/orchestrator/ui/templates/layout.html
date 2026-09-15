@@ -1,4 +1,4 @@
-{{define "phase_label"}}{{if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
+{{define "phase_label"}}{{if eq . "pending-approval"}}Pending Approval{{else if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
 {{define "layout"}}<!DOCTYPE html>
 <html lang="en" data-theme="nord" id="html-root">
 <script>
@@ -26,6 +26,7 @@
     .entry-HUMAN_FEEDBACK { color: #6b7280; font-style: italic; }
     .entry-INFO { color: #374151; }
     .entry-STATUS { color: #0369a1; font-style: italic; }
+    .phase-pending-approval { background-color: #fef9c3; color: #854d0e; }
     .phase-unassigned { background-color: #e5e7eb; color: #6b7280; }
     .phase-claimed { background-color: #dbeafe; color: #1d4ed8; }
     .phase-brainstorm { background-color: #ede9fe; color: #6d28d9; }

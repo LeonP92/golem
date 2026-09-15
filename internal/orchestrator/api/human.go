@@ -137,7 +137,7 @@ func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
 }
 
 // ticketAction is the single dispatcher for all human-initiated ticket actions.
-// Body: {"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer",
+// Body: {"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer"|"start",
 //
 //	"feedback": "...",   (requeue / request-changes)
 //	"input_id": 123,     (answer)
@@ -204,6 +204,8 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.actionAnswer(w, r, id, body.InputID, body.Response)
+	case "start":
+		h.actionStart(w, r, id)
 	default:
 		http.Error(w, "unknown action: "+body.Action, http.StatusBadRequest)
 	}
@@ -369,6 +371,58 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 // errAlreadyClosed signals that the ticket was already in the closed phase
 // when a close action was attempted.
 var errAlreadyClosed = errors.New("ticket already closed")
+
+// actionStart releases an externally-ingested ticket for execution, moving it
+// from pending-approval to unassigned so a shem can claim it. This is the
+// human checkpoint required before any agent prompt is built from an issue
+// body written by a stranger (spec Amendment 1).
+func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string) {
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
+		http.Error(w, "ticket not found", http.StatusNotFound)
+		return
+	}
+
+	// The release transition and its GitHub label write commit together, so a
+	// release can never be recorded without its follow-up queued.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase = 'pending-approval'", id).
+			Update("phase", "unassigned")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotPendingApproval
+		}
+		return enqueueGitHubPhase(tx, ticket, "unassigned", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotPendingApproval) {
+		http.Error(w, "ticket is not pending approval", http.StatusConflict)
+		return
+	}
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if err := h.appendLog(id, "STATUS", "human", "", "Approved and released for execution"); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	// Broadcast availability to all shems watching this repo, same as requeue.
+	h.Hub.Broadcast(ticket.RepoRemote, ws.WSMessage{
+		Type:     "ticket_available",
+		TicketID: strPtr(id),
+		Repo:     ticket.RepoRemote,
+	})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// errNotPendingApproval signals that a start action was attempted on a
+// ticket that is not sitting in pending-approval.
+var errNotPendingApproval = errors.New("ticket is not pending approval")
 
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {
 	result := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Update("phase", "needs-attention")

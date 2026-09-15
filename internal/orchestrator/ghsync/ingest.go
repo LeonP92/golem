@@ -137,8 +137,10 @@ func (s *Syncer) applyIssue(ctx context.Context, repo *db.GitHubRepo, issue gith
 	return nil
 }
 
-// createTicketFromIssue opens a new unassigned ticket for an issue. A shem
-// claims it through the existing /api/tickets/available path.
+// createTicketFromIssue opens a new ticket for an issue, gated in
+// pending-approval. A human releases it to unassigned from the dashboard
+// before any shem can claim it through the existing /api/tickets/available
+// path.
 func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo, issue github.Issue) error {
 	base, err := s.GH.DefaultBranch(ctx, repo.Owner, repo.Name)
 	if err != nil || base == "" {
@@ -153,7 +155,13 @@ func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo,
 		Title:       issue.Title,
 		Branch:      slug.Branch(issue.Title, id),
 		Description: issue.Body,
-		Phase:       "unassigned",
+		// Externally-sourced tickets are NOT claimable on arrival. The issue
+		// body is authored by anyone who can open an issue in this repo, and it
+		// is interpolated into the agent prompts that drive brainstorm, plan,
+		// implement, and revise — one of which has shell and repo write access.
+		// A human releases the ticket to "unassigned" from the dashboard after
+		// reading it. See spec Amendment 1.
+		Phase:       "pending-approval",
 		IssueNumber: &number,
 		IssueURL:    issue.HTMLURL,
 	}

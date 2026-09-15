@@ -16,6 +16,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
@@ -666,6 +667,106 @@ func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testin
 	}
 	if fb.Prompt != "needs more detail" {
 		t.Errorf("expected prompt %q, got %q", "needs more detail", fb.Prompt)
+	}
+}
+
+// TestStartActionReleasesPendingApprovalTicket verifies the intake approval
+// gate release action (spec Amendment 1): "start" moves a pending-approval
+// ticket to unassigned so a shem can claim it; any other phase must 409 and
+// leave the ticket's phase untouched.
+func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
+	tests := []struct {
+		name       string
+		phase      string
+		wantStatus int
+		wantPhase  string
+	}{
+		{name: "pending-approval releases to unassigned",
+			phase: "pending-approval", wantStatus: http.StatusNoContent, wantPhase: "unassigned"},
+		{name: "already unassigned is a conflict, phase unchanged",
+			phase: "unassigned", wantStatus: http.StatusConflict, wantPhase: "unassigned"},
+		{name: "mid-execution phase is a conflict, phase unchanged",
+			phase: "implement", wantStatus: http.StatusConflict, wantPhase: "implement"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, mux, cookie := setupActionTest(t)
+
+			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: tt.phase}
+			h.DB.Create(&ticket)
+
+			body, _ := json.Marshal(map[string]string{"action": "start"})
+			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(cookie)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != tt.wantStatus {
+				t.Fatalf("expected %d, got %d: %s", tt.wantStatus, w.Code, w.Body.String())
+			}
+
+			var got db.Ticket
+			h.DB.First(&got, "id = ?", ticket.ID)
+			if got.Phase != tt.wantPhase {
+				t.Errorf("phase = %q, want %q", got.Phase, tt.wantPhase)
+			}
+		})
+	}
+}
+
+// TestStartActionEnqueuesGitHubLabelWrite verifies that releasing a
+// GitHub-linked pending-approval ticket queues a label outbox row (so the
+// issue reflects "unassigned" promptly), while an unlinked ticket (created
+// through the orchestrator's own web form) queues nothing at all.
+func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
+	cases := []struct {
+		name      string
+		linked    bool
+		wantLabel int
+	}{
+		{name: "linked ticket queues a label write", linked: true, wantLabel: 1},
+		{name: "unlinked ticket queues nothing", linked: false, wantLabel: 0},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mux, cookie := setupActionTest(t)
+
+			ticket := db.Ticket{RepoRemote: "https://github.com/org/repo", Branch: "b",
+				Description: "d", Phase: "pending-approval"}
+			if tc.linked {
+				n := 7
+				ticket.IssueNumber = &n
+			}
+			if err := h.DB.Create(&ticket).Error; err != nil {
+				t.Fatalf("seed ticket: %v", err)
+			}
+
+			body, _ := json.Marshal(map[string]string{"action": "start"})
+			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.AddCookie(cookie)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+			}
+
+			var rows []db.GitHubOutbox
+			h.DB.Where("ticket_id = ?", ticket.ID).Find(&rows)
+			kinds := map[string]int{}
+			for _, row := range rows {
+				kinds[row.Kind]++
+			}
+			if kinds[ghsync.KindLabel] != tc.wantLabel {
+				t.Errorf("label rows = %d, want %d", kinds[ghsync.KindLabel], tc.wantLabel)
+			}
+		})
 	}
 }
 

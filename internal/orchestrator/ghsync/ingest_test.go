@@ -37,12 +37,12 @@ func TestIngest(t *testing.T) {
 		wantTitle   string
 	}{
 		{
-			name: "new labeled issue creates an unassigned ticket",
+			name: "new labeled issue creates a pending-approval ticket",
 			issue: github.Issue{Number: 7, Title: "Add rate limiting", Body: "details",
 				State: "open", HTMLURL: "https://github.com/org/repo/issues/7",
 				UpdatedAt: now, Labels: []string{"golem"}},
 			wantTickets: 1,
-			wantPhase:   "unassigned",
+			wantPhase:   "pending-approval",
 			wantTitle:   "Add rate limiting",
 		},
 		{
@@ -339,6 +339,38 @@ func TestIngestSkipsProcessingWhenNotModified(t *testing.T) {
 	if got.LastIssueSync == nil || got.LastIssueSync.Sub(cursor).Abs() > time.Second {
 		t.Errorf("LastIssueSync = %v, want unchanged at ~%v — a NotModified poll must not move the cursor",
 			got.LastIssueSync, cursor)
+	}
+}
+
+// TestIngestedTicketIsNotClaimable guards the intake approval gate (spec
+// Amendment 1): an externally-sourced ticket must never land in the
+// claimable phase ("unassigned") on arrival — it must sit in
+// pending-approval until a human releases it. This asserts by counting
+// claimable rows rather than reading back a single phase string, so the
+// assertion still holds even if a future change adds more ingested rows.
+func TestIngestedTicketIsNotClaimable(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	repo := newRepo(t, gdb)
+	f := github.NewFake()
+	f.AddIssue(github.Issue{Number: 7, Title: "t", State: "open",
+		UpdatedAt: time.Now(), Labels: []string{"golem"}})
+
+	if err := ghsync.NewSyncer(gdb, f).IngestRepo(context.Background(), repo); err != nil {
+		t.Fatalf("IngestRepo: %v", err)
+	}
+
+	var n int64
+	gdb.Model(&db.Ticket{}).Where("phase = ?", "unassigned").Count(&n)
+	if n != 0 {
+		t.Fatalf("%d ingested ticket(s) are claimable; an externally-sourced "+
+			"ticket must not be claimable before a human releases it", n)
+	}
+	gdb.Model(&db.Ticket{}).Where("phase = ?", "pending-approval").Count(&n)
+	if n != 1 {
+		t.Errorf("pending-approval tickets = %d, want 1", n)
 	}
 }
 

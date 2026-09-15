@@ -34,6 +34,29 @@
           </span>
         </p>
         <pre class="description mt-2 text-sm font-sans whitespace-pre-wrap bg-base-200 rounded p-3 max-h-64 overflow-y-auto">{{.Ticket.Description}}</pre>
+        {{if eq .Ticket.Phase "pending-approval"}}
+        <div class="card border-l-4 border-warning bg-warning/10 shadow-sm mt-3">
+          <div class="card-body p-4">
+            <h2 class="font-semibold text-sm text-warning flex items-center gap-1.5 mb-2">
+              <span class="iconify" data-icon="heroicons:shield-exclamation"></span>
+              Pending Approval
+            </h2>
+            <p class="text-sm text-base-content/70 mb-3">
+              This ticket came from GitHub issue
+              <a href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.IssueNumber}}</a>
+              and no agent has run yet. Read the description above, then release it so a shem can claim it.
+            </p>
+            <button class="btn btn-sm btn-warning gap-1.5"
+              hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              hx-vals='{"action":"start"}'
+              hx-confirm="Approve and start this ticket? A shem will be able to claim it immediately."
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+              <span class="iconify" data-icon="heroicons:play"></span>
+              Approve &amp; Start
+            </button>
+          </div>
+        </div>
+        {{end}}
         {{else}}
         <p class="text-base-content/70 mt-1 text-sm font-medium"
            title="{{.Ticket.Title}}">{{displayTitle .Ticket.Title .Ticket.Description}}</p>
