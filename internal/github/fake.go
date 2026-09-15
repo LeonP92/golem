@@ -7,7 +7,16 @@ import (
 	"time"
 )
 
-// Fake is an in-memory Client for tests. It is safe for concurrent use.
+// Fake is an in-memory Client for tests. Its methods are safe for concurrent
+// use — each takes the internal lock. Reading its exported fields (Comments,
+// PRs, Calls, Issues, ETag, FailNext) directly is safe only when nothing else
+// can be calling a Fake method concurrently, which holds for every
+// synchronous test. A caller that inspects or configures state from a
+// separate goroutine while a worker may be calling into the fake in the
+// background — as the ghsync worker's ingest and drain loops do — must use
+// the accessor methods instead (CommentsFor, CallsSnapshot, PRsSnapshot,
+// IssueByNumber, SetFailNext), or race with the lock every method already
+// takes.
 type Fake struct {
 	mu sync.Mutex
 
@@ -205,4 +214,47 @@ func (f *Fake) DefaultBranch(_ context.Context, _, _ string) (string, error) {
 		return "", err
 	}
 	return f.Default, nil
+}
+
+// CallsSnapshot returns a copy of the method-call log recorded so far. Safe
+// for concurrent use, unlike reading the Calls field directly.
+func (f *Fake) CallsSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]string, len(f.Calls))
+	copy(out, f.Calls)
+	return out
+}
+
+// PRsSnapshot returns a copy of the pull requests created so far. Safe for
+// concurrent use, unlike reading the PRs field directly.
+func (f *Fake) PRsSnapshot() []PullRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]PullRequest, len(f.PRs))
+	copy(out, f.PRs)
+	return out
+}
+
+// IssueByNumber returns a copy of the issue with the given number, and
+// whether it exists. Safe for concurrent use, unlike reading the Issues field
+// directly.
+func (f *Fake) IssueByNumber(number int) (Issue, bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	i, ok := f.Issues[number]
+	if !ok {
+		return Issue{}, false
+	}
+	i.Labels = append([]string(nil), i.Labels...) // defensive copy of the slice too
+	return i, true
+}
+
+// SetFailNext sets the error returned by the next call to any method (then
+// cleared), mirroring the FailNext field. Safe for concurrent use, unlike
+// writing the FailNext field directly.
+func (f *Fake) SetFailNext(err error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.FailNext = err
 }

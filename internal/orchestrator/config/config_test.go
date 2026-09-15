@@ -70,3 +70,42 @@ func TestGitHubConfigOverrides(t *testing.T) {
 		t.Errorf("TokenEnv = %q, want OTHER_TOKEN", cfg.GitHub.TokenEnv)
 	}
 }
+
+// TestGitHubConfigInvalidDurationFallsBack covers fix-round-1's judgment-call
+// item: parseDurationOr must not silently swallow an unparseable or
+// non-positive duration string — it logs the bad value and falls back to the
+// documented default, which is the behavior asserted here. (The log line
+// itself isn't captured; this pins the observable fallback value.)
+func TestGitHubConfigInvalidDurationFallsBack(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want time.Duration
+	}{
+		{
+			name: "unparseable value falls back to the 15m default",
+			body: "port: 8080\ndb_path: x.db\ngithub:\n  poll_interval: 15mn\n",
+			want: 15 * time.Minute,
+		},
+		{
+			name: "non-positive value falls back to the 15m default",
+			body: "port: 8080\ndb_path: x.db\ngithub:\n  poll_interval: -5m\n",
+			want: 15 * time.Minute,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "orchestrator.yaml")
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if got := cfg.GitHub.PollIntervalDuration(); got != tt.want {
+				t.Errorf("PollIntervalDuration = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

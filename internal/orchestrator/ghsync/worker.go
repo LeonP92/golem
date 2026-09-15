@@ -79,15 +79,38 @@ func (w *Worker) releaseSlot(repoID uint) {
 
 // TriggerSync requests an immediate ingest of one repo. It claims that repo's
 // size-1 slot and, only on success, publishes the repo ID to the shared
-// notify channel that ingestLoop selects on. It reports false when a sync is
-// already queued for that repo, in which case the request is deliberately
-// dropped — the queued pass will pick up the same work.
+// notify channel that ingestLoop selects on. Both the slot claim and the
+// notify publish are non-blocking: if notify is momentarily saturated (its
+// buffer is bounded — see notifyBuffer) the claim is rolled back rather than
+// left held with nothing to release it, so this can never strand the repo's
+// slot or block the caller. It reports false when a sync is already queued
+// for that repo, when the worker has already been stopped, or when notify
+// was full, in which case the request is deliberately dropped — the queued
+// or next scheduled pass will pick up the same work.
 func (w *Worker) TriggerSync(repoID uint) bool {
 	select {
-	case w.slot(repoID) <- struct{}{}:
-		w.notify <- repoID
+	case <-w.stop:
+		// Best-effort only: Stop may close w.stop concurrently with the rest
+		// of this call, in which case the race below still applies. But
+		// checking here closes the common case — without it, a trigger
+		// arriving after Stop has already returned would claim the slot,
+		// report success, and never be released, permanently stranding the
+		// repo for the life of the process.
+		return false
+	default:
+	}
+
+	ch := w.slot(repoID)
+	select {
+	case ch <- struct{}{}:
+	default:
+		return false // a sync is already queued for this repo
+	}
+	select {
+	case w.notify <- repoID:
 		return true
 	default:
+		<-ch // release the claim: never leave a slot held with no notify sent
 		return false
 	}
 }

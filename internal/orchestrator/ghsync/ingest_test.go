@@ -204,7 +204,7 @@ func TestIngestRecordsGitHubErrorAndReturnsIt(t *testing.T) {
 	}
 	repo := newRepo(t, gdb)
 	f := github.NewFake()
-	f.FailNext = errors.New("boom")
+	f.SetFailNext(errors.New("boom"))
 
 	s := ghsync.NewSyncer(gdb, f)
 	if err := s.IngestRepo(context.Background(), repo); err == nil {

@@ -41,10 +41,25 @@ func Open(dsn string) (*gorm.DB, error) {
 			return nil, fmt.Errorf("get sql.DB handle for in-memory database: %w", err)
 		}
 		sqlDB.SetMaxOpenConns(1)
+		// The pin above only helps as long as that one connection is never
+		// recycled: SetMaxIdleConns(1) stops it being closed as idle, and
+		// SetConnMaxLifetime(0) (no limit) stops it being closed on age. Either
+		// one being left at its default would eventually close the sole
+		// connection to this ":memory:" database — and with it, silently and
+		// confusingly, every table AutoMigrate just created.
+		sqlDB.SetMaxIdleConns(1)
+		sqlDB.SetConnMaxLifetime(0)
 	}
 	// Enable WAL mode so multiple processes (server + admin CLI) can access
 	// the same database file concurrently without exclusive-lock conflicts.
 	gdb.Exec("PRAGMA journal_mode=WAL")
+	// This orchestrator now has its first pair of background writers — the
+	// ghsync worker's ingest and drain loops — issuing writes against one
+	// SQLite file alongside ordinary request handling. WAL allows concurrent
+	// readers, but two writers can still collide on SQLITE_BUSY; a busy
+	// timeout makes SQLite retry for a while internally instead of failing
+	// the call immediately.
+	gdb.Exec("PRAGMA busy_timeout=5000")
 	return gdb, gdb.AutoMigrate(
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
 		&GitHubRepo{}, &GitHubOutbox{},

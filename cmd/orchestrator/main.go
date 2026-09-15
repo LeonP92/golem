@@ -155,6 +155,15 @@ func main() {
 		log.Printf("ERROR github sync: %d repo(s) enabled but %s is empty — "+
 			"sync DISABLED until a token is provided", enabledRepos, cfg.GitHub.TokenEnv)
 	default:
+		if cfg.BaseURL == "" {
+			// Not fatal — sync still runs — but every milestone comment
+			// ghsync posts to a real GitHub issue would otherwise end in a
+			// bare "/tickets/<id>" with no host, a silently broken link.
+			log.Printf("WARNING github sync: base_url is empty — milestone " +
+				"comments will link to a relative /tickets/<id> path; set " +
+				"base_url in the config to the orchestrator's externally " +
+				"reachable URL")
+		}
 		client, err := github.New(token, cfg.GitHub.APIBase)
 		if err != nil {
 			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)

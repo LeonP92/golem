@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"time"
 
@@ -33,7 +34,7 @@ const (
 
 // PollIntervalDuration returns the ingest interval, defaulting to 15 minutes.
 func (g GitHubConfig) PollIntervalDuration() time.Duration {
-	return parseDurationOr(g.PollInterval, defaultPollInterval)
+	return parseDurationOr("github.poll_interval", g.PollInterval, defaultPollInterval)
 }
 
 // DrainIntervalDuration returns the outbox drain interval, defaulting to 20s.
@@ -41,21 +42,32 @@ func (g GitHubConfig) PollIntervalDuration() time.Duration {
 // idle external system, while the drain reacts to local events and must stay
 // prompt for retry backoff to mean anything.
 func (g GitHubConfig) DrainIntervalDuration() time.Duration {
-	return parseDurationOr(g.DrainInterval, defaultDrainInterval)
+	return parseDurationOr("github.drain_interval", g.DrainInterval, defaultDrainInterval)
 }
 
 // ManualSyncCooldownDuration returns the minimum gap between manual syncs of
 // one repo, defaulting to 1 minute.
 func (g GitHubConfig) ManualSyncCooldownDuration() time.Duration {
-	return parseDurationOr(g.ManualSyncCooldown, defaultManualSyncCooldown)
+	return parseDurationOr("github.manual_sync_cooldown", g.ManualSyncCooldown, defaultManualSyncCooldown)
 }
 
-func parseDurationOr(raw string, fallback time.Duration) time.Duration {
+// parseDurationOr parses raw as a duration, falling back to fallback when raw
+// is empty, unparseable, or non-positive. An empty raw is the documented way
+// to ask for the default and is silent; an actually-invalid value (e.g. a
+// typo like "15mn") is not silently discarded — it is logged, naming the
+// config key, the bad value, and the fallback applied, so a startup typo is
+// visible in the logs instead of just quietly behaving like it was never set.
+func parseDurationOr(name, raw string, fallback time.Duration) time.Duration {
 	if raw == "" {
 		return fallback
 	}
 	d, err := time.ParseDuration(raw)
-	if err != nil || d <= 0 {
+	if err != nil {
+		log.Printf("config: %s: invalid duration %q (%v) — using default %v", name, raw, err, fallback)
+		return fallback
+	}
+	if d <= 0 {
+		log.Printf("config: %s: duration %q must be positive — using default %v", name, raw, fallback)
 		return fallback
 	}
 	return d

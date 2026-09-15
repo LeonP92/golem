@@ -44,7 +44,7 @@ func TestDrainComment(t *testing.T) {
 		t.Fatalf("Drain: %v", err)
 	}
 
-	if got := f.Comments[7]; len(got) != 1 || got[0] != "Plan approved." {
+	if got := f.CommentsFor(7); len(got) != 1 || got[0] != "Plan approved." {
 		t.Fatalf("comments = %v, want one \"Plan approved.\"", got)
 	}
 	var row db.GitHubOutbox
@@ -57,7 +57,7 @@ func TestDrainComment(t *testing.T) {
 	if err := s.Drain(context.Background()); err != nil {
 		t.Fatalf("second Drain: %v", err)
 	}
-	if got := len(f.Comments[7]); got != 1 {
+	if got := len(f.CommentsFor(7)); got != 1 {
 		t.Errorf("comment count = %d after second drain, want 1", got)
 	}
 }
@@ -132,7 +132,7 @@ func TestDrainRetriesWithBackoffThenParks(t *testing.T) {
 	s := ghsync.NewSyncer(gdb, f)
 
 	// First failure: row stays undone, attempts=1, NextAttempt pushed out.
-	f.FailNext = errors.New("503 from GitHub")
+	f.SetFailNext(errors.New("503 from GitHub"))
 	if err := s.Drain(context.Background()); err != nil {
 		t.Fatalf("Drain: %v", err)
 	}
@@ -238,18 +238,19 @@ func TestDrainPullRequest(t *testing.T) {
 		t.Fatalf("Drain: %v", err)
 	}
 
-	if len(f.PRs) != 1 {
-		t.Fatalf("PRs created = %d, want 1", len(f.PRs))
+	prs := f.PRsSnapshot()
+	if len(prs) != 1 {
+		t.Fatalf("PRs created = %d, want 1", len(prs))
 	}
 	var ticket db.Ticket
 	if err := gdb.First(&ticket, "id = ?", "t1").Error; err != nil {
 		t.Fatalf("load ticket: %v", err)
 	}
-	if ticket.PRNumber == nil || *ticket.PRNumber != f.PRs[0].Number {
-		t.Errorf("ticket.PRNumber = %v, want %d", ticket.PRNumber, f.PRs[0].Number)
+	if ticket.PRNumber == nil || *ticket.PRNumber != prs[0].Number {
+		t.Errorf("ticket.PRNumber = %v, want %d", ticket.PRNumber, prs[0].Number)
 	}
-	if ticket.PRURL != f.PRs[0].HTMLURL {
-		t.Errorf("ticket.PRURL = %q, want %q", ticket.PRURL, f.PRs[0].HTMLURL)
+	if ticket.PRURL != prs[0].HTMLURL {
+		t.Errorf("ticket.PRURL = %q, want %q", ticket.PRURL, prs[0].HTMLURL)
 	}
 
 	var row db.GitHubOutbox
@@ -410,7 +411,7 @@ func TestDrainRetriesOnGitHubFailureAcrossKinds(t *testing.T) {
 			seedLinkedTicket(t, gdb, tt.phase)
 			f := github.NewFake()
 			f.AddIssue(github.Issue{Number: 7, State: "open", Labels: []string{"golem"}})
-			f.FailNext = errors.New("boom")
+			f.SetFailNext(errors.New("boom"))
 
 			if err := ghsync.Enqueue(gdb, db.GitHubOutbox{
 				TicketID: "t1", Kind: tt.kind, Payload: tt.payload,
@@ -431,7 +432,7 @@ func TestDrainRetriesOnGitHubFailureAcrossKinds(t *testing.T) {
 			if row.Attempts != 1 {
 				t.Errorf("%s: Attempts = %d, want 1", tt.name, row.Attempts)
 			}
-			if len(f.PRs) != 0 {
+			if len(f.PRsSnapshot()) != 0 {
 				t.Errorf("%s: PR created despite CreatePullRequest failing", tt.name)
 			}
 		})
@@ -506,8 +507,8 @@ func TestDrainCommitsPostWriteAndDoneAtAtomically(t *testing.T) {
 	// GitHub's side already happened — the fake recorded the PR — but the
 	// local write recording it on the ticket must have rolled back along
 	// with the done_at write it shares a transaction with.
-	if len(f.PRs) != 1 {
-		t.Fatalf("PRs created = %d, want 1 (the GitHub call itself must still go through)", len(f.PRs))
+	if prs := f.PRsSnapshot(); len(prs) != 1 {
+		t.Fatalf("PRs created = %d, want 1 (the GitHub call itself must still go through)", len(prs))
 	}
 	var ticket db.Ticket
 	if err := gdb.First(&ticket, "id = ?", "t1").Error; err != nil {
