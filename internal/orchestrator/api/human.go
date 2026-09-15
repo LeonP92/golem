@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,8 +11,10 @@ import (
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
+	"gorm.io/gorm"
 )
 
 // RegisterHumanRoutes adds human-input management and ticket action routes to mux.
@@ -315,17 +319,41 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "ticket not found", http.StatusNotFound)
 		return
 	}
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase != 'closed'", id).
-		Update("phase", "closed")
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if result.RowsAffected == 0 {
+
+	// The close transition and its GitHub close-issue write commit together,
+	// so a close can never be recorded without its follow-up queued.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase != 'closed'", id).
+			Update("phase", "closed")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errAlreadyClosed
+		}
+		if ticket.IssueNumber == nil {
+			return nil
+		}
+		if err := ghsync.Enqueue(tx, db.GitHubOutbox{
+			TicketID:       id,
+			Kind:           ghsync.KindClose,
+			Payload:        "{}",
+			IdempotencyKey: ghsync.CloseKey(id),
+		}); err != nil {
+			return fmt.Errorf("enqueue close: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(txErr, errAlreadyClosed) {
 		http.Error(w, "ticket already closed", http.StatusConflict)
 		return
 	}
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	h.DB.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{})
 
 	if ticket.AssignedShem != nil {
@@ -337,6 +365,10 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
+
+// errAlreadyClosed signals that the ticket was already in the closed phase
+// when a close action was attempted.
+var errAlreadyClosed = errors.New("ticket already closed")
 
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {
 	result := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Update("phase", "needs-attention")

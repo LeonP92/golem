@@ -20,6 +20,9 @@ type Handlers struct {
 	Hub          *ws.Hub
 	Broker       *sse.Broker
 	LogEntryHTML func(sse.LogEntryEvent) string // renders a log entry to HTML for SSE; nil = send JSON
+	// BaseURL is the orchestrator's externally reachable base URL, used to
+	// build ticket links in GitHub comments. Empty renders a relative link.
+	BaseURL string
 }
 
 // NewHandlers creates a Handlers with the given dependencies.

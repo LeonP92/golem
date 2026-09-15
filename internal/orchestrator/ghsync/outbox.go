@@ -84,6 +84,23 @@ func Enqueue(tx *gorm.DB, row db.GitHubOutbox) error {
 	return err
 }
 
+// MilestoneComment returns the milestone slug and comment body for a phase
+// transition, and whether that phase has a milestone at all. The slug becomes
+// part of the idempotency key, so it must be stable across releases.
+func MilestoneComment(phase, ticketID, baseURL string) (string, string, bool) {
+	link := strings.TrimSuffix(baseURL, "/") + "/tickets/" + ticketID
+	switch phase {
+	case "plan":
+		return "spec-written", "Golem wrote a spec for this issue.\n\n" + link, true
+	case "implement":
+		return "plan-approved", "Plan approved; implementation starting.\n\n" + link, true
+	case "ready-for-review":
+		return "implementation-complete", "Implementation complete, ready for review.\n\n" + link, true
+	default:
+		return "", "", false
+	}
+}
+
 // isDuplicateKey reports whether err is a unique-constraint violation. GORM
 // surfaces gorm.ErrDuplicatedKey for drivers that support translation; the
 // string checks cover the SQLite and Postgres messages that reach us

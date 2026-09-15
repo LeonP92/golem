@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,9 +10,11 @@ import (
 	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/slug"
+	"gorm.io/gorm"
 )
 
 // ticketResponse wraps a db.Ticket with a resolved creator username for
@@ -316,14 +319,79 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid phase", http.StatusBadRequest)
 		return
 	}
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND assigned_shem = ?", id, shem.ID).
-		Updates(map[string]any{"phase": body.Phase})
-	if result.RowsAffected == 0 {
+
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
 		http.Error(w, "ticket not owned by this shem", http.StatusConflict)
 		return
 	}
+
+	// The phase update and its GitHub follow-ups commit together, so a phase
+	// can never be recorded without its writes queued.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND assigned_shem = ?", id, shem.ID).
+			Updates(map[string]any{"phase": body.Phase})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotOwner
+		}
+		return enqueueGitHubPhase(tx, ticket, body.Phase, h.BaseURL)
+	})
+	if errors.Is(txErr, errNotOwner) {
+		http.Error(w, "ticket not owned by this shem", http.StatusConflict)
+		return
+	}
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// errNotOwner signals that the ticket is not assigned to the calling shem.
+var errNotOwner = errors.New("ticket not owned by this shem")
+
+// enqueueGitHubPhase queues the label and milestone-comment writes for a phase
+// transition on a GitHub-linked ticket. Unlinked tickets (nil IssueNumber) are
+// a no-op — every ticket created through the web UI is unlinked, and those
+// flows must see no outbox activity at all.
+func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) error {
+	if ticket.IssueNumber == nil {
+		return nil
+	}
+	labelPayload, err := json.Marshal(ghsync.LabelPayload{Phase: phase})
+	if err != nil {
+		return fmt.Errorf("marshal label payload: %w", err)
+	}
+	if err := ghsync.Enqueue(tx, db.GitHubOutbox{
+		TicketID:       ticket.ID,
+		Kind:           ghsync.KindLabel,
+		Payload:        string(labelPayload),
+		IdempotencyKey: ghsync.LabelKey(ticket.ID, phase),
+	}); err != nil {
+		return fmt.Errorf("enqueue label: %w", err)
+	}
+
+	milestone, body, ok := ghsync.MilestoneComment(phase, ticket.ID, baseURL)
+	if !ok {
+		return nil
+	}
+	commentPayload, err := json.Marshal(ghsync.CommentPayload{Body: body})
+	if err != nil {
+		return fmt.Errorf("marshal comment payload: %w", err)
+	}
+	if err := ghsync.Enqueue(tx, db.GitHubOutbox{
+		TicketID:       ticket.ID,
+		Kind:           ghsync.KindComment,
+		Payload:        string(commentPayload),
+		IdempotencyKey: ghsync.CommentKey(ticket.ID, milestone),
+	}); err != nil {
+		return fmt.Errorf("enqueue comment: %w", err)
+	}
+	return nil
 }
 
 func (h *Handlers) updateCheckpoint(w http.ResponseWriter, r *http.Request) {
