@@ -225,4 +225,121 @@ func TestIngestRecordsGitHubErrorAndReturnsIt(t *testing.T) {
 	}
 }
 
+// TestIngestPartialFailureDoesNotAdvanceCursor covers fix-round-1 item 1: a
+// page with two issues where the older one's ticket write fails must not
+// advance the cursor at all, or the failed issue would be permanently
+// excluded from every future poll (since = max(updated_at) - overlap would
+// sit past it). The failure must also surface in repo.LastError.
+//
+// A SQLite trigger gives a deterministic, non-flaky write failure for one
+// specific issue's ticket insert — the alternative of racing two goroutines
+// against the (repo_remote, issue_number) unique index would be flaky and
+// wasn't attempted.
+func TestIngestPartialFailureDoesNotAdvanceCursor(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := gdb.Exec(`
+CREATE TRIGGER golem_test_fail_insert
+BEFORE INSERT ON tickets
+WHEN NEW.title = 'boom-title'
+BEGIN
+    SELECT RAISE(ABORT, 'simulated write failure');
+END;
+`).Error; err != nil {
+		t.Fatalf("create trigger: %v", err)
+	}
+	repo := newRepo(t, gdb)
+
+	older := time.Now().Add(-time.Hour)
+	newer := time.Now()
+	f := github.NewFake()
+	f.AddIssue(github.Issue{Number: 1, Title: "boom-title", State: "open",
+		UpdatedAt: older, Labels: []string{"golem"}})
+	f.AddIssue(github.Issue{Number: 2, Title: "ok-title", State: "open",
+		UpdatedAt: newer, Labels: []string{"golem"}})
+
+	s := ghsync.NewSyncer(gdb, f)
+	if err := s.IngestRepo(context.Background(), repo); err != nil {
+		t.Fatalf("IngestRepo: %v", err)
+	}
+
+	var got db.GitHubRepo
+	if err := gdb.First(&got, repo.ID).Error; err != nil {
+		t.Fatalf("reload repo: %v", err)
+	}
+	if got.LastIssueSync != nil {
+		t.Errorf("LastIssueSync = %v, want nil (unmoved) — a partial failure must not advance the cursor", *got.LastIssueSync)
+	}
+	if got.LastError == "" {
+		t.Error("LastError not recorded after a partial failure — the stall would be invisible to an operator")
+	}
+	if got.LastPolledAt == nil {
+		t.Error("LastPolledAt not set after a partial failure")
+	}
+
+	if err := gdb.Where("title = ?", "ok-title").First(&db.Ticket{}).Error; err != nil {
+		t.Errorf("ticket for the succeeding issue was not created: %v", err)
+	}
+	var n int64
+	gdb.Model(&db.Ticket{}).Where("title = ?", "boom-title").Count(&n)
+	if n != 0 {
+		t.Errorf("ticket count for the failing issue = %d, want 0", n)
+	}
+}
+
+// TestIngestSkipsProcessingWhenNotModified covers fix-round-1 item 2: a 304
+// (simulated via github.Fake's ETag field) must create or modify no tickets,
+// must still update LastPolledAt and clear LastError, and — the part that
+// most needs a regression test — must NOT move the cursor.
+func TestIngestSkipsProcessingWhenNotModified(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	repo := newRepo(t, gdb)
+	cursor := time.Now().Add(-time.Hour).Truncate(time.Second)
+	if err := gdb.Model(repo).Updates(map[string]any{
+		"last_issue_sync": cursor, "etag": "match-me",
+	}).Error; err != nil {
+		t.Fatalf("seed cursor/etag: %v", err)
+	}
+	repo.LastIssueSync = &cursor
+	repo.ETag = "match-me"
+
+	f := github.NewFake()
+	f.ETag = "match-me"
+	// An issue exists but must never be read: NotModified short-circuits
+	// before any issue is processed.
+	f.AddIssue(github.Issue{Number: 7, Title: "t", State: "open",
+		UpdatedAt: time.Now(), Labels: []string{"golem"}})
+
+	s := ghsync.NewSyncer(gdb, f)
+	if err := s.IngestRepo(context.Background(), repo); err != nil {
+		t.Fatalf("IngestRepo: %v", err)
+	}
+
+	var n int64
+	gdb.Model(&db.Ticket{}).Count(&n)
+	if n != 0 {
+		t.Errorf("ticket count = %d, want 0 — NotModified must skip processing", n)
+	}
+
+	var got db.GitHubRepo
+	if err := gdb.First(&got, repo.ID).Error; err != nil {
+		t.Fatalf("reload repo: %v", err)
+	}
+	if got.LastPolledAt == nil {
+		t.Error("LastPolledAt not set on a NotModified poll")
+	}
+	if got.LastError != "" {
+		t.Errorf("LastError = %q, want empty after a clean NotModified poll", got.LastError)
+	}
+	if got.LastIssueSync == nil || got.LastIssueSync.Sub(cursor).Abs() > time.Second {
+		t.Errorf("LastIssueSync = %v, want unchanged at ~%v — a NotModified poll must not move the cursor",
+			got.LastIssueSync, cursor)
+	}
+}
+
 func intPtr(n int) *int { return &n }

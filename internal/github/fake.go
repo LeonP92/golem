@@ -16,6 +16,15 @@ type Fake struct {
 	PRs      []PullRequest
 	Default  string // default branch returned by DefaultBranch
 
+	// ETag, when non-empty, simulates GitHub's conditional-request caching:
+	// if ListIssuesSince is called with an etag argument equal to ETag, it
+	// returns IssuePage{ETag: ETag, NotModified: true} with no issues,
+	// mirroring a real 304 response. This does not model real HTTP caching
+	// semantics (e.g. ETag is never itself changed by adding issues) — it is
+	// a deliberately simple lever for tests that need to exercise a
+	// caller's NotModified handling.
+	ETag string
+
 	// FailNext, when non-nil, is returned by the next call to any method and
 	// then cleared — for exercising retry paths.
 	FailNext error
@@ -52,11 +61,14 @@ func (f *Fake) record(name string) error {
 	return nil
 }
 
-func (f *Fake) ListIssuesSince(_ context.Context, _, _, label string, since time.Time, _ string) (IssuePage, error) {
+func (f *Fake) ListIssuesSince(_ context.Context, _, _, label string, since time.Time, etag string) (IssuePage, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("ListIssuesSince"); err != nil {
 		return IssuePage{}, err
+	}
+	if f.ETag != "" && etag == f.ETag {
+		return IssuePage{ETag: f.ETag, NotModified: true}, nil
 	}
 	var page IssuePage
 	for _, i := range f.Issues {

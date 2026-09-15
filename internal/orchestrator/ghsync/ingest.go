@@ -58,10 +58,20 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 	}
 
 	newest := since
+	var failure error
 	for _, issue := range page.Issues {
 		if err := s.applyIssue(ctx, repo, issue); err != nil {
-			// One bad issue must not abandon the rest of the page.
+			// One bad issue must not abandon the rest of the page — the
+			// remaining issues still get applied, and their creates/updates
+			// are idempotent so re-processing them next poll is harmless.
+			// But the cursor must NOT advance past this failure: if it did,
+			// the next poll's `since` would permanently exclude the issue
+			// that just failed, with no way to ever pick it up again short
+			// of GitHub reporting a fresh update on it.
 			log.Printf("ghsync: repo %s issue #%d: %v", repo.RepoRemote, issue.Number, err)
+			if failure == nil {
+				failure = err
+			}
 			continue
 		}
 		if issue.UpdatedAt.After(newest) {
@@ -69,14 +79,26 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 		}
 	}
 
-	updates := map[string]any{"last_polled_at": now, "last_error": ""}
-	if page.ETag != "" {
-		updates["etag"] = page.ETag
-	}
-	if newest.After(since) {
-		cursor := newest.Add(-cursorOverlap)
-		updates["last_issue_sync"] = cursor
-		repo.LastIssueSync = &cursor
+	updates := map[string]any{"last_polled_at": now}
+	if failure != nil {
+		// Surface the stall so an operator can see why a labeled issue
+		// never turned into a ticket, instead of it only reaching the log.
+		// Deliberately skip advancing last_issue_sync and etag: retrying the
+		// whole page next poll is safe (creates are blocked by the unique
+		// (repo_remote, issue_number) index, updates are idempotent), and
+		// saving a fresh ETag here could make GitHub answer 304 on the next
+		// poll even though this failed issue was never actually applied.
+		updates["last_error"] = failure.Error()
+	} else {
+		updates["last_error"] = ""
+		if page.ETag != "" {
+			updates["etag"] = page.ETag
+		}
+		if newest.After(since) {
+			cursor := newest.Add(-cursorOverlap)
+			updates["last_issue_sync"] = cursor
+			repo.LastIssueSync = &cursor
+		}
 	}
 	if err := s.DB.Model(repo).Updates(updates).Error; err != nil {
 		return fmt.Errorf("record poll result for %s: %w", repo.RepoRemote, err)
