@@ -19,3 +19,9 @@ github:
   drain_interval: 20s
   manual_sync_cooldown: 60s
   api_base: ""          # set for GitHub Enterprise
+
+# Content-Security-Policy. "enforce" (default), "report-only", or "off".
+# Verify a new deployment once with the browser console open; "report-only"
+# logs violations without blocking so you can check safely first.
+csp:
+  mode: enforce

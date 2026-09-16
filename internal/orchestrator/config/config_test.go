@@ -109,3 +109,59 @@ func TestGitHubConfigInvalidDurationFallsBack(t *testing.T) {
 		})
 	}
 }
+
+// TestCSPMode covers config.Load's csp.mode validation: an empty value
+// defaults to "enforce" (a policy that protects nothing by default is not
+// protection), the three documented values pass through unchanged, and any
+// other value falls back to "enforce" rather than being silently accepted
+// or silently dropped. (The warning log itself isn't captured; this pins
+// the observable fallback value, matching the existing pattern for
+// TestGitHubConfigInvalidDurationFallsBack above.)
+func TestCSPMode(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "empty defaults to enforce",
+			body: "port: 8080\ndb_path: x.db\n",
+			want: "enforce",
+		},
+		{
+			name: "enforce passes through",
+			body: "port: 8080\ndb_path: x.db\ncsp:\n  mode: enforce\n",
+			want: "enforce",
+		},
+		{
+			name: "report-only passes through",
+			body: "port: 8080\ndb_path: x.db\ncsp:\n  mode: report-only\n",
+			want: "report-only",
+		},
+		{
+			name: "off passes through",
+			body: "port: 8080\ndb_path: x.db\ncsp:\n  mode: off\n",
+			want: "off",
+		},
+		{
+			name: "invalid value falls back to enforce",
+			body: "port: 8080\ndb_path: x.db\ncsp:\n  mode: totally-bogus\n",
+			want: "enforce",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "orchestrator.yaml")
+			if err := os.WriteFile(path, []byte(tt.body), 0o600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.CSP.Mode != tt.want {
+				t.Errorf("CSP.Mode = %q, want %q", cfg.CSP.Mode, tt.want)
+			}
+		})
+	}
+}

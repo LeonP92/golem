@@ -14,6 +14,13 @@ type TLSConfig struct {
 	Key  string `yaml:"key"`
 }
 
+// CSPConfig controls the orchestrator's Content-Security-Policy header. Mode
+// is one of "enforce" (default), "report-only", or "off"; see Load for
+// validation and fallback behavior.
+type CSPConfig struct {
+	Mode string `yaml:"mode"`
+}
+
 // GitHubConfig holds settings for the GitHub Issues integration. Durations are
 // strings parsed by time.ParseDuration; an empty or unparseable value falls
 // back to the documented default rather than failing startup.
@@ -30,6 +37,7 @@ const (
 	defaultDrainInterval      = 20 * time.Second
 	defaultManualSyncCooldown = time.Minute
 	defaultTokenEnv           = "GOLEM_GITHUB_TOKEN"
+	defaultCSPMode            = "enforce"
 )
 
 // PollIntervalDuration returns the ingest interval, defaulting to 15 minutes.
@@ -81,6 +89,7 @@ type Config struct {
 	BaseURL       string       `yaml:"base_url"`
 	TLS           TLSConfig    `yaml:"tls"`
 	GitHub        GitHubConfig `yaml:"github"`
+	CSP           CSPConfig    `yaml:"csp"`
 }
 
 // Load reads and parses the YAML config file at path.
@@ -95,6 +104,16 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.GitHub.TokenEnv == "" {
 		cfg.GitHub.TokenEnv = defaultTokenEnv
+	}
+	switch cfg.CSP.Mode {
+	case "":
+		cfg.CSP.Mode = defaultCSPMode
+	case "enforce", "report-only", "off":
+		// valid as configured.
+	default:
+		log.Printf("config: csp.mode: invalid value %q (must be enforce, report-only, or off) — using default %q",
+			cfg.CSP.Mode, defaultCSPMode)
+		cfg.CSP.Mode = defaultCSPMode
 	}
 	return &cfg, nil
 }

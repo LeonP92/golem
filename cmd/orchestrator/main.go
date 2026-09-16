@@ -183,6 +183,7 @@ func main() {
 	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
 	srv := server.New(gdb, hub, broker, secureCookie, cfg.BaseURL)
 	srv.ManualSyncCooldown = cfg.GitHub.ManualSyncCooldownDuration()
+	srv.CSPMode = cfg.CSP.Mode
 	// Only assign Sync when the worker was actually started. ghWorker is a
 	// *ghsync.Worker; assigning a nil *ghsync.Worker to the api.SyncTrigger
 	// interface field would produce a non-nil interface holding a nil

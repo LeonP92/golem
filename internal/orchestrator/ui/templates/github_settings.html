@@ -30,7 +30,7 @@
               <form method="post" action="/settings/github">
                 <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
                 <input type="checkbox" name="enabled" class="checkbox checkbox-sm"
-                       {{if .Enabled}}checked{{end}} onchange="this.form.submit()">
+                       {{if .Enabled}}checked{{end}} data-autosubmit>
               </form>
             </td>
             <td>
@@ -73,6 +73,10 @@
 </div>
 
 <script>
+document.querySelectorAll('[data-autosubmit]').forEach(function (el) {
+  el.addEventListener('change', function () { el.form.submit(); });
+});
+
 document.querySelectorAll('.sync-now').forEach(function (btn) {
   btn.addEventListener('click', function () {
     var id = btn.dataset.repoId;

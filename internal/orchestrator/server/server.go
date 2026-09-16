@@ -28,6 +28,11 @@ type Server struct {
 	Sync api.SyncTrigger
 	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
 	ManualSyncCooldown time.Duration
+	// CSPMode controls the Content-Security-Policy header: "enforce"
+	// (default), "report-only", or "off". Set from config.CSPConfig.Mode in
+	// cmd/orchestrator/main.go, which validates it; an unset or otherwise
+	// unrecognized value is treated as "enforce" by CSPMiddleware.
+	CSPMode string
 }
 
 // New creates a Server with the given dependencies. baseURL is the
@@ -65,5 +70,30 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte("ok")) //nolint:errcheck
 	})
-	return mux
+
+	// Content-Security-Policy. Inline scripts are allowed by hash, computed
+	// from the template sources so the policy stays in sync as they change
+	// (see csp.go). If the hashes can't be computed, don't ship a policy
+	// that silently blocks every inline script — log loudly and disable the
+	// header entirely instead, regardless of the configured mode.
+	mode := s.CSPMode
+	var policy string
+	hashes, err := InlineScriptHashes(templatesDir)
+	if err != nil {
+		log.Printf("ERROR csp: InlineScriptHashes(%s): %v — disabling Content-Security-Policy (mode=off) rather than shipping a stale or empty policy", templatesDir, err)
+		mode = cspModeOff
+	} else {
+		policy = BuildPolicy(hashes)
+	}
+	return CSPMiddleware(policy, mode)(mux)
 }
+
+// templatesDir is the on-disk location of the UI template sources, used at
+// startup to compute inline-script hashes for the Content-Security-Policy
+// header (see InlineScriptHashes). It is relative to the process's working
+// directory, matching this codebase's existing convention for default paths
+// (e.g. main.go's default "orchestrator.yaml" config path) — run the
+// orchestrator from the repository root, or set the working directory
+// accordingly, or the hash computation fails and CSP falls back to "off"
+// (logged loudly) rather than shipping a broken policy.
+const templatesDir = "internal/orchestrator/ui/templates"
