@@ -81,20 +81,39 @@
         <span class="iconify" data-icon="heroicons:server-stack"></span>
         Shems
       </a>
+      {{if .CanManageUsers}}
+      <a href="/users"
+         class="btn btn-sm gap-1.5 {{if eq .Nav `users`}}btn-active text-white{{else}}btn-ghost text-neutral-content opacity-75 hover:opacity-100{{end}}">
+        <span class="iconify" data-icon="heroicons:users"></span>
+        Users
+      </a>
+      {{end}}
     </div>
     <div class="flex-none gap-2">
+      {{if .CanCreateTicket}}
       <a href="/tickets/new"
          class="btn btn-sm gap-1.5 {{if eq .Nav `new`}}btn-primary btn-outline border-white{{else}}btn-primary{{end}}">
         <span class="iconify" data-icon="heroicons:plus"></span>
         New Ticket
       </a>
+      {{end}}
       <button id="theme-toggle" class="btn btn-ghost btn-sm btn-square text-neutral-content" title="Toggle theme" aria-label="Toggle dark/light mode">
         <span class="iconify text-lg" data-icon="heroicons:moon" id="theme-icon"></span>
       </button>
-      <a href="/logout" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
-        <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
-        Logout
+      {{if .CurrentUser}}
+      <a href="/settings"
+         class="btn btn-sm gap-1.5 {{if eq .Nav `settings`}}btn-active text-white{{else}}btn-ghost text-neutral-content opacity-75 hover:opacity-100{{end}}"
+         title="Account settings">
+        <span class="iconify" data-icon="heroicons:user-circle"></span>
+        <span class="hidden sm:inline">{{.CurrentUser}} · {{.CurrentRole}}</span>
       </a>
+      {{end}}
+      <form method="POST" action="/logout" class="inline">
+        <button type="submit" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
+          <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
+          Logout
+        </button>
+      </form>
     </div>
   </nav>
   {{end}}

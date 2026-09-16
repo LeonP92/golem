@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	"github.com/leonp92/golem/internal/slug"
@@ -100,6 +101,8 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 		"shems":         "templates/shems.html",
 		"ticket_new":    "templates/ticket_new.html",
 		"ticket_detail": "templates/ticket_detail.html",
+		"users":         "templates/users.html",
+		"settings":      "templates/settings.html",
 	}
 
 	out := make(map[string]*template.Template, len(pages))
@@ -141,12 +144,23 @@ func NewHandlersWithMap(gdb *gorm.DB, tmpls map[string]*template.Template, secur
 func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", h.loginPage)
 	mux.HandleFunc("POST /login", h.loginSubmit)
-	mux.HandleFunc("GET /logout", h.logout)
-	mux.Handle("GET /dashboard", auth.RequireSession(h.DB)(http.HandlerFunc(h.dashboard)))
-	mux.Handle("GET /shems", auth.RequireSession(h.DB)(http.HandlerFunc(h.shems)))
-	mux.Handle("GET /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewForm)))
-	mux.Handle("POST /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewSubmit)))
-	mux.Handle("GET /tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketDetail)))
+	// POST-only: a GET /logout is CSRF-exploitable — any hostile <img src="/logout">
+	// on another page could sign the user out.
+	mux.HandleFunc("POST /logout", h.logout)
+	mux.Handle("GET /dashboard", h.sessionRoute(rbac.PermTicketView, h.dashboard))
+	mux.Handle("GET /shems", h.sessionRoute(rbac.PermShemView, h.shems))
+	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
+	mux.Handle("POST /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
+	mux.Handle("GET /tickets/{id}", h.sessionRoute(rbac.PermTicketView, h.ticketDetail))
+	mux.Handle("GET /users", h.sessionRoute(rbac.PermUserManage, h.usersPage))
+	mux.Handle("POST /users", h.sessionRoute(rbac.PermUserManage, h.usersCreate))
+	mux.Handle("POST /users/{id}/role", h.sessionRoute(rbac.PermUserManage, h.usersSetRole))
+	mux.Handle("POST /users/{id}/delete", h.sessionRoute(rbac.PermUserManage, h.usersDelete))
+	// Self-service settings — no permission gate; adding a section is a
+	// one-line route addition plus a {{define "settings_<name>"}} block.
+	mux.Handle("GET /settings", h.authRoute(h.settingsIndex))
+	mux.Handle("GET /settings/security", h.authRoute(h.settingsSecurity))
+	mux.Handle("POST /settings/security/password", h.authRoute(h.settingsChangePassword))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -154,6 +168,42 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 		}
 		http.NotFound(w, r)
 	})
+}
+
+// sessionRoute wraps fn in session auth plus the permission check for p. Every
+// permission-gated UI route goes through here, so the route table doubles as
+// the audit list of who may call what.
+func (h *Handlers) sessionRoute(p rbac.Permission, fn http.HandlerFunc) http.Handler {
+	return auth.RequireSession(h.DB)(rbac.Require(p)(fn))
+}
+
+// authRoute is sessionRoute without a permission gate — use it for routes any
+// signed-in user is allowed on (e.g. self-service settings). Keeps the route
+// table the single audit surface for authz decisions.
+func (h *Handlers) authRoute(fn http.HandlerFunc) http.Handler {
+	return auth.RequireSession(h.DB)(fn)
+}
+
+// base returns the render map every authenticated page starts from: the nav key
+// plus the current user's identity and the permission flags the layout needs to
+// decide which controls to show. Pass nav="" for pages that render without the
+// nav bar (the ticket detail page).
+func (h *Handlers) base(r *http.Request, nav string) map[string]any {
+	u := auth.SessionUser(r)
+	m := map[string]any{
+		"Nav":             nav,
+		"CurrentUser":     "",
+		"CurrentUserID":   uint(0),
+		"CurrentRole":     "",
+		"CanManageUsers":  rbac.Can(u, rbac.PermUserManage),
+		"CanCreateTicket": rbac.Can(u, rbac.PermTicketCreate),
+	}
+	if u != nil {
+		m["CurrentUser"] = u.Username
+		m["CurrentUserID"] = u.ID
+		m["CurrentRole"] = u.Role
+	}
+	return m
 }
 
 // render executes the named page template (wrapping in the layout).
@@ -275,10 +325,9 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, "dashboard", map[string]any{
-		"Tickets": rows,
-		"Nav":     "dashboard",
-	})
+	data := h.base(r, "dashboard")
+	data["Tickets"] = rows
+	h.render(w, "dashboard", data)
 }
 
 // --- shems ---
@@ -303,10 +352,9 @@ func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, "shems", map[string]any{
-		"Shems": rows,
-		"Nav":   "shems",
-	})
+	data := h.base(r, "shems")
+	data["Shems"] = rows
+	h.render(w, "shems", data)
 }
 
 // --- ticket new ---
@@ -335,13 +383,18 @@ func (h *Handlers) shemsRepos() []string {
 	return out
 }
 
+// renderTicketNew renders the new-ticket form with the given field values and
+// an optional validation error.
+func (h *Handlers) renderTicketNew(w http.ResponseWriter, r *http.Request, form ticketForm, errMsg string) {
+	data := h.base(r, "new")
+	data["Form"] = form
+	data["Error"] = errMsg
+	data["AvailableRepos"] = h.shemsRepos()
+	h.render(w, "ticket_new", data)
+}
+
 func (h *Handlers) ticketNewForm(w http.ResponseWriter, r *http.Request) {
-	h.render(w, "ticket_new", map[string]any{
-		"Form":           ticketForm{BaseBranch: "main"},
-		"Error":          "",
-		"AvailableRepos": h.shemsRepos(),
-		"Nav":            "new",
-	})
+	h.renderTicketNew(w, r, ticketForm{BaseBranch: "main"}, "")
 }
 
 func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
@@ -356,12 +409,7 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		Description: r.FormValue("description"),
 	}
 	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
-		h.render(w, "ticket_new", map[string]any{
-			"Form":           form,
-			"Error":          "All fields are required.",
-			"AvailableRepos": h.shemsRepos(),
-			"Nav":            "new",
-		})
+		h.renderTicketNew(w, r, form, "All fields are required.")
 		return
 	}
 	user := auth.SessionUser(r)
@@ -379,12 +427,7 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		ticket.CreatedByUserID = &user.ID
 	}
 	if err := h.DB.Create(&ticket).Error; err != nil {
-		h.render(w, "ticket_new", map[string]any{
-			"Form":           form,
-			"Error":          "Failed to create ticket.",
-			"AvailableRepos": h.shemsRepos(),
-			"Nav":            "new",
-		})
+		h.renderTicketNew(w, r, form, "Failed to create ticket.")
 		return
 	}
 	http.Redirect(w, r, fmt.Sprintf("/tickets/%s", ticket.ID), http.StatusFound)
@@ -438,14 +481,15 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 		pending = &hi
 	}
 
-	h.render(w, "ticket_detail", map[string]any{
-		"Ticket":        ticket,
-		"CreatedByName": createdBy,
-		"LogEntries":    logEntries,
-		"PendingInput":  pending,
-		"Spec":          spec,
-		"Plan":          plan,
-	})
+	// nav="" keeps the ticket detail page's current nav-less layout.
+	data := h.base(r, "")
+	data["Ticket"] = ticket
+	data["CreatedByName"] = createdBy
+	data["LogEntries"] = logEntries
+	data["PendingInput"] = pending
+	data["Spec"] = spec
+	data["Plan"] = plan
+	h.render(w, "ticket_detail", data)
 }
 
 // humanAge returns a short human-readable age string for the given time.

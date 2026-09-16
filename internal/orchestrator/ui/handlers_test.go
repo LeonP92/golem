@@ -201,7 +201,7 @@ func TestLoadTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTemplates: %v", err)
 	}
-	expected := []string{"login", "dashboard", "shems", "ticket_new", "ticket_detail"}
+	expected := []string{"login", "dashboard", "shems", "ticket_new", "ticket_detail", "users", "settings"}
 	for _, name := range expected {
 		if tmpls[name] == nil {
 			t.Errorf("missing template set for page %q", name)

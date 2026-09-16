@@ -8,6 +8,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
@@ -33,9 +34,10 @@ var upgrader = websocket.Upgrader{
 
 // RegisterShemRoutes adds shem-facing routes to mux.
 func (h *Handlers) RegisterShemRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /api/shems/register", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.register)))
+	mux.Handle("PUT /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.register)))
 	mux.Handle("DELETE /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.deregister)))
-	mux.Handle("GET /api/shems", auth.RequireSession(h.DB)(http.HandlerFunc(h.listShems)))
+	mux.Handle("GET /api/shems",
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermShemView)(http.HandlerFunc(h.listShems))))
 	mux.Handle("GET /api/ws", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.wsUpgrade)))
 }
 

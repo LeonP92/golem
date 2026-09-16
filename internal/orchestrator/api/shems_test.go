@@ -28,7 +28,7 @@ func TestRegisterShem(t *testing.T) {
 		"name":  "node-a",
 		"repos": []string{"https://github.com/org/repo"},
 	})
-	req := httptest.NewRequest(http.MethodPost, "/api/shems/register", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, "/api/shems/me", bytes.NewReader(body))
 	req.Header.Set("Authorization", "Bearer key1")
 	req.Header.Set("X-Shem-Name", "node-a")
 	req.Header.Set("Content-Type", "application/json")

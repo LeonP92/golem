@@ -9,6 +9,7 @@ import (
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 )
 
@@ -19,7 +20,7 @@ func (h *Handlers) RegisterLogRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/tickets/{id}/log/document",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.postLogDocument)))
 	mux.Handle("GET /sse/tickets/{id}/log",
-		auth.RequireSession(h.DB)(http.HandlerFunc(h.sseLog)))
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.sseLog))))
 }
 
 // postLog inserts a LogEntry with a server-assigned sequence_num. Any

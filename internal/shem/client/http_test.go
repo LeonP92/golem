@@ -68,7 +68,7 @@ func TestClient_ExhaustsRetries(t *testing.T) {
 
 func TestClient_Register(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/shems/register" {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/shems/me" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}

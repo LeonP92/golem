@@ -1,0 +1,74 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Account settings</h1>
+</div>
+
+<div class="grid gap-6 md:grid-cols-[16rem_1fr]">
+  <aside>
+    <ul class="menu bg-base-100 rounded-box shadow-sm p-2">
+      <li>
+        <a href="/settings/security" class="{{if eq .Section `security`}}active{{end}}">
+          <span class="iconify" data-icon="heroicons:lock-closed"></span>
+          Security
+        </a>
+      </li>
+      {{/* Future sections drop in as siblings here, e.g. Profile, Notifications, API keys. */}}
+    </ul>
+  </aside>
+
+  <section class="min-w-0">
+    {{if .Success}}
+    <div class="alert alert-success mb-4">
+      <span class="iconify" data-icon="heroicons:check-circle"></span>
+      {{.Success}}
+    </div>
+    {{end}}
+    {{if .Error}}
+    <div class="alert alert-error mb-4">
+      <span class="iconify" data-icon="heroicons:x-circle"></span>
+      {{.Error}}
+    </div>
+    {{end}}
+
+    {{if eq .Section "security"}}{{template "settings_security" .}}{{end}}
+  </section>
+</div>
+{{end}}
+
+{{define "settings_security"}}
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body">
+    <h2 class="card-title text-base">Change password</h2>
+    <p class="text-sm text-base-content/60 mb-2">
+      Signed in as <span class="font-medium">{{.CurrentUser}}</span>.
+    </p>
+    <form method="POST" action="/settings/security/password" class="flex flex-col gap-4 max-w-md">
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Current password</span>
+        </label>
+        <input type="password" name="current_password" class="input input-bordered" required autocomplete="current-password">
+      </div>
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">New password</span>
+          <span class="label-text-alt text-base-content/50">At least {{.MinPasswordLen}} characters</span>
+        </label>
+        <input type="password" name="new_password" class="input input-bordered" required minlength="{{.MinPasswordLen}}" autocomplete="new-password">
+      </div>
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Confirm new password</span>
+        </label>
+        <input type="password" name="confirm_password" class="input input-bordered" required minlength="{{.MinPasswordLen}}" autocomplete="new-password">
+      </div>
+      <div class="flex gap-2 mt-2">
+        <button type="submit" class="btn btn-primary gap-1.5">
+          <span class="iconify" data-icon="heroicons:key"></span>
+          Update password
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+{{end}}

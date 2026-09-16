@@ -1,0 +1,112 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Users</h1>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error mb-4">
+  <span class="iconify" data-icon="heroicons:x-circle"></span>
+  {{.Error}}
+</div>
+{{end}}
+
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <div class="flex items-center justify-between px-4 py-3 border-b border-base-300">
+      <span class="text-sm text-base-content/60">{{len .Users}} user{{if ne (len .Users) 1}}s{{end}}</span>
+      <button type="button"
+              class="btn btn-sm btn-primary gap-1.5"
+              onclick="toggleAddUserRow()"
+              aria-controls="add-user-row"
+              aria-expanded="{{if .Error}}true{{else}}false{{end}}">
+        <span class="iconify" data-icon="heroicons:user-plus"></span>
+        Add user
+      </button>
+    </div>
+
+    <form id="add-user-row"
+          method="POST" action="/users"
+          class="flex flex-wrap items-end gap-2 px-4 py-3 border-b border-base-300 bg-base-200 {{if not .Error}}hidden{{end}}">
+      <div class="form-control flex-1 min-w-[10rem]">
+        <label class="label py-1"><span class="label-text text-xs">Username</span></label>
+        <input id="add-user-username" name="username" type="text" required
+               class="input input-sm input-bordered" placeholder="jane">
+      </div>
+      <div class="form-control flex-1 min-w-[12rem]">
+        <label class="label py-1"><span class="label-text text-xs">Password ({{.MinPasswordLen}}+ chars)</span></label>
+        <input name="password" type="password" required minlength="{{.MinPasswordLen}}"
+               class="input input-sm input-bordered" autocomplete="new-password">
+      </div>
+      <div class="form-control min-w-[9rem]">
+        <label class="label py-1"><span class="label-text text-xs">Role</span></label>
+        <select name="role" class="select select-sm select-bordered">
+          {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+      </div>
+      <div class="flex gap-2">
+        <button type="submit" class="btn btn-sm btn-primary">Create</button>
+        <button type="button" class="btn btn-sm btn-ghost" onclick="toggleAddUserRow()">Cancel</button>
+      </div>
+    </form>
+
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Role</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Users}}
+          <tr>
+            <td class="font-medium">
+              {{.Username}}
+              {{if eq .ID $.CurrentUserID}}<span class="badge badge-ghost badge-sm ml-2">you</span>{{end}}
+            </td>
+            <td>
+              <form method="POST" action="/users/{{.ID}}/role" class="flex gap-2 items-center">
+                {{$cur := .Role}}
+                <select name="role" class="select select-sm select-bordered">
+                  {{range $.Roles}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+                </select>
+                <button class="btn btn-sm">Save</button>
+              </form>
+            </td>
+            <td class="text-right">
+              {{if ne .ID $.CurrentUserID}}
+              <form method="POST" action="/users/{{.ID}}/delete">
+                <button class="btn btn-sm btn-error btn-outline gap-1.5">
+                  <span class="iconify" data-icon="heroicons:trash"></span>
+                  Delete
+                </button>
+              </form>
+              {{end}}
+            </td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="3" class="text-center py-12 text-base-content/50">No users.</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+  function toggleAddUserRow() {
+    var row = document.getElementById('add-user-row');
+    var btn = document.querySelector('[aria-controls="add-user-row"]');
+    var willOpen = row.classList.contains('hidden');
+    row.classList.toggle('hidden');
+    if (btn) btn.setAttribute('aria-expanded', String(willOpen));
+    if (willOpen) {
+      var u = document.getElementById('add-user-username');
+      if (u) u.focus();
+    }
+  }
+</script>
+{{end}}

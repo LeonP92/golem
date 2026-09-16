@@ -131,7 +131,7 @@ func (c *Client) Register(name string, repos []string) (uint, error) {
 		"name":  name,
 		"repos": repos,
 	}
-	resp, err := c.do("POST", "/api/shems/register", body)
+	resp, err := c.do("PUT", "/api/shems/me", body)
 	if err != nil {
 		return 0, err
 	}

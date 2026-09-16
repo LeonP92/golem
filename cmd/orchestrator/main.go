@@ -11,6 +11,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/admin"
 	"github.com/leonp92/golem/internal/orchestrator/config"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/server"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
@@ -23,7 +24,9 @@ func main() {
 	// starting the HTTP server.
 	//
 	// Usage:
-	//   orchestrator users add <username>
+	//   orchestrator users add <username> [--role admin|developer]
+	//   orchestrator users list
+	//   orchestrator users set-role <username> <role>
 	//   orchestrator users remove <username>
 	//   orchestrator shems add --name <name>
 	//   orchestrator shems remove <name>
@@ -42,12 +45,35 @@ func main() {
 			switch args[1] {
 			case "add":
 				if len(args) < 3 {
-					log.Fatal("usage: orchestrator users add <username>")
+					log.Fatal("usage: orchestrator users add <username> [--role admin|developer]")
 				}
-				if err := admin.UsersAdd(gdb, args[2]); err != nil {
+				role := string(rbac.RoleDeveloper)
+				for i := 3; i < len(args)-1; i++ {
+					if args[i] == "--role" {
+						role = args[i+1]
+						break
+					}
+				}
+				if err := admin.UsersAdd(gdb, args[2], role); err != nil {
 					log.Fatalf("users add: %v", err)
 				}
-				fmt.Printf("User %q added.\n", args[2])
+				fmt.Printf("User %q added with role %q.\n", args[2], role)
+			case "list":
+				users, err := admin.UsersList(gdb)
+				if err != nil {
+					log.Fatalf("users list: %v", err)
+				}
+				for _, u := range users {
+					fmt.Printf("%s\t%s\n", u.Username, u.Role)
+				}
+			case "set-role":
+				if len(args) < 4 {
+					log.Fatal("usage: orchestrator users set-role <username> <role>")
+				}
+				if err := admin.UsersSetRole(gdb, args[2], args[3]); err != nil {
+					log.Fatalf("users set-role: %v", err)
+				}
+				fmt.Printf("User %q role set to %q.\n", args[2], args[3])
 			case "remove":
 				if len(args) < 3 {
 					log.Fatal("usage: orchestrator users remove <username>")
@@ -57,7 +83,7 @@ func main() {
 				}
 				fmt.Printf("User %q removed.\n", args[2])
 			default:
-				log.Fatalf("unknown users subcommand %q; expected add|remove", args[1])
+				log.Fatalf("unknown users subcommand %q; expected add|list|set-role|remove", args[1])
 			}
 		case "shems":
 			switch args[1] {
@@ -115,7 +141,7 @@ func main() {
 		if username == "" {
 			username = "admin"
 		}
-		if err := admin.UsersAddOrUpdate(gdb, username, password); err != nil {
+		if err := admin.UsersAddOrUpdate(gdb, username, password, string(rbac.RoleAdmin)); err != nil {
 			log.Printf("warn: auto-provision admin user %q: %v", username, err)
 		} else {
 			log.Printf("auto-provisioned admin user %q", username)
