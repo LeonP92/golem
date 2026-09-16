@@ -13,6 +13,9 @@ type User struct {
 	ID           uint   `gorm:"primaryKey"`
 	Username     string `gorm:"uniqueIndex;not null"`
 	PasswordHash string `gorm:"not null"`
+	// Role is an rbac role name ("admin" | "developer"). Least privilege by
+	// default; an unrecognised value simply has no permissions.
+	Role string `gorm:"not null;default:'developer'"`
 }
 
 // Session represents an authenticated web UI session.

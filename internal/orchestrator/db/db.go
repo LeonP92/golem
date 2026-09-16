@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -25,7 +26,39 @@ func Open(dsn string) (*gorm.DB, error) {
 	// Enable WAL mode so multiple processes (server + admin CLI) can access
 	// the same database file concurrently without exclusive-lock conflicts.
 	gdb.Exec("PRAGMA journal_mode=WAL")
-	return gdb, gdb.AutoMigrate(
+	if err := gdb.AutoMigrate(
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
-	)
+	); err != nil {
+		return nil, err
+	}
+	if err := ensureAdmin(gdb); err != nil {
+		return nil, err
+	}
+	return gdb, nil
+}
+
+// ensureAdmin guarantees a non-empty users table always contains at least one
+// admin. AutoMigrate backfills pre-existing rows with the default 'developer'
+// role, which would otherwise lock an upgraded deployment out of user
+// management; the same guard also recovers a database whose last admin was
+// deleted out-of-band. Idempotent: a no-op once any admin exists.
+//
+// The role name is a literal here because db must not import
+// internal/orchestrator/rbac — rbac imports db.
+func ensureAdmin(gdb *gorm.DB) error {
+	var admins int64
+	if err := gdb.Model(&User{}).Where("role = ?", "admin").Count(&admins).Error; err != nil {
+		return err
+	}
+	if admins > 0 {
+		return nil
+	}
+	var first User
+	if err := gdb.Order("id asc").First(&first).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil // empty database: nothing to promote
+		}
+		return err
+	}
+	return gdb.Model(&first).Update("role", "admin").Error
 }
