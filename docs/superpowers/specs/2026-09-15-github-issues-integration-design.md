@@ -25,7 +25,7 @@ during implementation. Anything not listed here is an implementation choice.
 | Ingest interval | 15 minutes, plus an enforced manual trigger |
 | Outbox drain interval | 20 seconds |
 | Issue selection | Opt-in label (default `golem`) |
-| Work start | Automatic — labeled issues enter as `unassigned` and shems claim them |
+| Work start | ~~Automatic — labeled issues enter as `unassigned` and shems claim them~~ **SUPERSEDED by Amendment 1:** ingested tickets enter as `pending-approval` and a human must release them. |
 | Write-back | Phase labels, milestone comments, PR at ready-for-review, issue close |
 | Conflict resolution | GitHub is always the source of truth for content fields |
 
@@ -182,7 +182,7 @@ Runs every 15 minutes, and on manual trigger. For each `GitHubRepo` where
 
    | Condition | Action |
    |---|---|
-   | Not found, issue open, has label | Create ticket: `Title` and `Description` from the issue, `BaseBranch` from the repo default branch, `Branch: slug.Branch(title, id)`, `Phase: "unassigned"`, issue linkage set. A shem claims it via the existing `/api/tickets/available` path — no new claiming logic. |
+   | Not found, issue open, has label | Create ticket: `Title` and `Description` from the issue, `BaseBranch` from the repo default branch, `Branch: slug.Branch(title, id)`, ~~`Phase: "unassigned"`~~ **`Phase: "pending-approval"` (Amendment 1)**, issue linkage set. ~~A shem claims it via the existing `/api/tickets/available` path — no new claiming logic.~~ **Amendment 1: a shem cannot claim it at all until a human approves it; `/api/tickets/available` and `ClaimTicket` gained an approval predicate.** |
    | Found | Overwrite `Title` and `Description` from the issue. `Phase` is never touched. |
    | Found, issue closed | Transition the ticket to `closed`. |
       | Not found, issue closed | Ignore. Golem does not resurrect history. |
@@ -364,10 +364,16 @@ the project security rules.
 
 ```yaml
 github:
-  repo: org/repo    # optional; inferred from git remote origin
+  repo: org/repo    # required; NOT inferred from the git remote (as built)
   label: golem
-  write: false
+  write: true       # what `golem init` actually writes (as built)
 ```
+
+> **Corrected against the implementation.** `repo` is required and is never
+> inferred — `golem issue list` fails with "github.repo must be set to
+> \"org/repo\"" when it is absent — and `golem init` emits `write: true`, not
+> `false`. `golem init` does not emit `repo` or `label` at all; both must be
+> added by hand.
 
 Commands:
 
@@ -385,14 +391,23 @@ over labels.
 The guard is `github.write`. `golem init` writes `write: true` for standalone
 use. The shem's `ensureRepoReady` (`internal/shem/worker/executor.go`) sets it
 to **`false`** for any repo it initializes, because that repo is orchestrator-
-managed. When `write` is false the CLI commands are read-only: they pull issue
-content onto tickets and never call a GitHub write endpoint.
+managed. ~~When `write` is false the CLI commands are read-only: they pull issue
+content onto tickets and never call a GitHub write endpoint.~~
+
+> **Corrected against the implementation.** The CLI commands are read-only
+> **unconditionally**, whatever `write` is set to: none of `issue list`,
+> `issue sync` or `ticket new --from-issue` calls a GitHub write endpoint.
+> `github.write` is therefore a record of which side owns write access, not an
+> enforcement point, and nothing reads it today. A future write-capable CLI
+> command must check it itself.
 
 ## UI
 
 - **`/settings/github`** — repos discovered from registered shems; per-repo
   toggle for `Enabled`, label field, last-polled time, last error, and a
-  "Sync now" button disabled during cooldown.
+  "Sync now" button. ~~disabled during cooldown~~ **As built the button always
+  renders enabled; the cooldown is enforced by the endpoint's 429 and shown by
+  the button's own script as "Wait Ns" after a click.**
 - **Ticket row** (`partials/ticket_row.html`) — issue-number badge linking to
   GitHub.
 - **Ticket detail** (`ticket_detail.html`) — issue link, PR link, sync status,
@@ -452,7 +467,8 @@ All four phases are in scope. This is ordering, not a scope reduction.
 ## Acceptance criteria
 
 - Labelling an open GitHub issue `golem` produces exactly one Golem ticket in
-  `unassigned`, within 15 minutes or immediately on manual sync.
+  ~~`unassigned`~~ **`pending-approval` (Amendment 1)**, within 15 minutes or
+  immediately on manual sync.
 - The same issue seen in two overlapping polls produces exactly one ticket.
 - Editing an issue title on GitHub updates the ticket title within one cycle;
   the ticket's phase is unaffected.

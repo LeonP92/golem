@@ -1373,12 +1373,14 @@ func TestIngest(t *testing.T) {
 		wantTitle   string
 	}{
 		{
+			// SUPERSEDED BY TASK 16: the ticket is created in
+			// "pending-approval", not "unassigned".
 			name: "new labeled issue creates an unassigned ticket",
 			issue: github.Issue{Number: 7, Title: "Add rate limiting", Body: "details",
 				State: "open", HTMLURL: "https://github.com/org/repo/issues/7",
 				UpdatedAt: now, Labels: []string{"golem"}},
 			wantTickets: 1,
-			wantPhase:   "unassigned",
+			wantPhase:   "unassigned", // SUPERSEDED BY TASK 16: "pending-approval"
 			wantTitle:   "Add rate limiting",
 		},
 		{
@@ -1646,6 +1648,10 @@ func (s *Syncer) applyIssue(ctx context.Context, repo *db.GitHubRepo, issue gith
 	return s.DB.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error
 }
 
+// SUPERSEDED BY TASK 16 (spec Amendment 1): the ticket is created in
+// "pending-approval" and a human must release it before any shem can claim
+// it. Implement Task 16's version, not this one.
+//
 // createTicketFromIssue opens a new unassigned ticket for an issue. A shem
 // claims it through the existing /api/tickets/available path.
 func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo, issue github.Issue) error {
@@ -1662,7 +1668,7 @@ func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo,
 		Title:       issue.Title,
 		Branch:      slug.Branch(issue.Title, id),
 		Description: issue.Body,
-		Phase:       "unassigned",
+		Phase:       "unassigned", // SUPERSEDED BY TASK 16: "pending-approval"
 		IssueNumber: &number,
 		IssueURL:    issue.HTMLURL,
 	}
@@ -4190,7 +4196,7 @@ In `internal/config/config.go`:
 // comments and fight over labels. `golem init` sets Write true for standalone
 // use; the shem sets it false for repos it manages.
 type GitHubConfig struct {
-	Repo  string `yaml:"repo"`  // "org/repo"; inferred from origin when empty
+	Repo  string `yaml:"repo"`  // "org/repo" (required; NOT inferred from the git remote)
 	Label string `yaml:"label"` // trigger label, default "golem"
 	Write bool   `yaml:"write"`
 }
@@ -4303,9 +4309,10 @@ func IssueList(gh github.Client, cfg *config.Config, out io.Writer) error {
 // IssueSync pulls the linked issue's current title and body onto the ticket.
 // GitHub is the source of truth for both fields.
 //
-// This never writes to GitHub: CLI write-back is gated on cfg.GitHub.Write,
-// which is false for orchestrator-managed repos so that exactly one writer
-// exists.
+// This never writes to GitHub: it only calls the read-only GetIssue endpoint.
+// cfg.GitHub.Write is NOT consulted here — no command in this file calls a
+// GitHub write endpoint, so the CLI is read-only unconditionally. Write only
+// records which side owns write access for a repo.
 func IssueSync(gh github.Client, cfg *config.Config, ticketDir string) error {
 	owner, name, err := splitRepo(cfg.GitHub.Repo)
 	if err != nil {
@@ -4380,7 +4387,7 @@ In `internal/ticket/state.go`, add to `State`:
 	IssueURL    string `json:"issue_url,omitempty"`
 ```
 
-In `internal/cli/ticketnew.go`, accept a `--from-issue <n>` flag; when set, fetch the issue, use its title as the ticket description, and populate `IssueNumber`/`IssueURL` on the new state. Follow the flag-parsing style already used for `--ticket-id` and `--branch` in that file.
+In `internal/cli/ticketnew.go`, accept a `--from-issue <n>` flag; when set, fetch the issue, use its title **and body** as the ticket description (title, a blank line, then the body — `combineIssueDescription`, so that a later `golem issue sync` on an unchanged issue is a no-op), and populate `IssueNumber`/`IssueURL` on the new state. Follow the flag-parsing style already used for `--ticket-id` and `--branch` in that file.
 
 - [ ] **Step 8: Register the commands**
 
@@ -4602,7 +4609,7 @@ Verified by the tests named in each task, mapped from the spec:
 
 | Criterion | Verified by |
 |---|---|
-| Labelling an issue produces exactly one ticket in `unassigned` | Task 5 `TestIngest/new labeled issue`, Task 15 `TestGitHubIssueToTicketToComment` |
+| Labelling an issue produces exactly one ticket in ~~`unassigned`~~ **`pending-approval` (superseded by Task 16 / spec Amendment 1)** | Task 5 `TestIngest/new labeled issue`, Task 15 `TestGitHubIssueToTicketToComment` |
 | The same issue in two overlapping polls produces exactly one ticket | Task 5 `TestIngestIsIdempotentAcrossOverlappingPolls` |
 | Editing an issue title updates the ticket without touching its phase | Task 5 `TestIngest/existing ticket takes the issue title` |
 | A phase advance yields exactly one label and one comment, even across restarts | Task 6 `TestDrainComment`, Task 7 `TestPhaseChangeEnqueuesLabelAndComment` |

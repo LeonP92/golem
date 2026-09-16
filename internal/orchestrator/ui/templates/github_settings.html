@@ -11,8 +11,12 @@
 {{end}}
 
 <p class="text-sm text-base-content/60 mb-4">
-  Issues carrying the trigger label become tickets automatically. Golem polls
-  every 15 minutes; use <strong>Sync now</strong> to pull issues in immediately.
+  Issues carrying the trigger label become tickets. Each one arrives in
+  <strong>pending approval</strong> and no shem can claim it until a human
+  opens it, reads the description, and approves it. Golem polls on the
+  interval set by <code>github.poll_interval</code> (15 minutes by default);
+  use <strong>Sync now</strong> to pull immediately. Polling runs only when
+  <code>GOLEM_GITHUB_TOKEN</code> was set when the orchestrator started.
 </p>
 
 <div class="card bg-base-100 shadow-sm">

@@ -130,9 +130,9 @@ When a human resolves a ticket differently from what a role recommended, Golem n
 export GOLEM_GITHUB_TOKEN=ghp_...          # required for all `golem issue` commands
 
 golem issue list                           # open issues carrying the trigger label
-golem issue sync --ticket <id>             # refresh a ticket's description from its linked issue
+golem issue sync --ticket <id>             # refresh a ticket's description (title + body) from its linked issue
 
-golem ticket new --from-issue 42 --id t1   # create a ticket from issue #42, using its title as the description
+golem ticket new --from-issue 42 --id t1   # create a ticket from issue #42; the description is the issue's title, a blank line, then its body
 ```
 
 Configure the repo and trigger label in `.golem/config.yaml`:
@@ -204,7 +204,7 @@ golem wiki rebuild
 
 golem issue list                               list open issues carrying the trigger label
 golem issue sync --ticket <id>                 refresh a ticket's description from its linked issue
-golem ticket new --from-issue <n>              create a ticket from a GitHub issue's title
+golem ticket new --from-issue <n>              create a ticket from a GitHub issue's title and body
 
 golem observer dispatch --ticket <id> --role <role> --commit <sha>
 golem log emit --ticket <id> --role <role> --type <type> <message>
@@ -242,6 +242,8 @@ Browser ──► Orchestrator (dashboard, approval gates)
 
 On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` and one Claude Code auth option (`CLAUDE_HOME`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY`), then run it again. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
 
+`GOLEM_GITHUB_TOKEN` in the same file is optional and turns on the GitHub Issues integration — see [GitHub Issues](#github-issues-1) below for what else it needs.
+
 Create a ticket from the UI. The shem will pick it up within seconds, run brainstorm, and pause for your approval before proceeding to plan and implementation.
 
 ### How It Works
@@ -258,9 +260,62 @@ At every step the shem tails the ticket's `log.jsonl` and forwards entries to th
 
 ### GitHub Issues
 
-Configure a repo's GitHub sync from the dashboard at `/settings/github`: set the repo (`org/repo`), the trigger label, and a token. Once configured, the orchestrator polls that repo for issues carrying the trigger label every 15 minutes by default (`github.poll_interval` in `orchestrator.yaml`), ingesting new and updated issues as tickets. Click **Sync now** on the settings page to pull immediately instead of waiting for the next poll.
+Issues carrying a trigger label become tickets. The orchestrator polls, ingests, and — as the ticket moves — labels the issue, comments on it, closes it, and opens the pull request.
+
+**There is no add-repo form and no token field on `/settings/github`.** Repositories are discovered from the shems that register with them, and the token is read from the environment only, never stored in the database. The full path from a fresh install to a working sync is:
+
+1. **Give the orchestrator a token.** Create a fine-grained PAT with, on the target repository: Issues read/write, Pull requests read/write, Contents read/write, Metadata read. Put it in `.env` as `GOLEM_GITHUB_TOKEN` (docker compose passes it to both services) or in the orchestrator's environment directly. The variable's name is configurable as `github.token_env` in `orchestrator.yaml`.
+
+   The token is read once, at startup. If it was empty when the orchestrator started, sync stays off until you set it and **restart** — the log says so, and **Sync now** answers "GitHub sync is not running on this orchestrator". Enabling a repository does not need a restart; only supplying the token for the first time does.
+
+2. **Set `base_url` in `orchestrator.yaml`** to the orchestrator's externally reachable address, e.g. `https://golem.example.com`. Golem's milestone comments link back to `<base_url>/tickets/<id>`; leaving it empty produces a bare `/tickets/<id>` with no host — a broken link in a real GitHub comment. Startup logs a WARNING when sync runs without it.
+
+3. **Point a shem at the repository.** Add it to the shem's `repos:` list with its GitHub remote:
+
+   ```yaml
+   repos:
+     - path: /repos/your-repo
+       remote: https://github.com/your-org/your-repo
+   ```
+
+   The repository appears on `/settings/github` once that shem has registered.
+
+4. **Enable it on `/settings/github`.** Tick **Enabled** and set the trigger label (default `golem`; it must not start with `golem:`, which is Golem's own namespace — see below). Polling starts on the next interval, or immediately via **Sync now**.
+
+5. **Approve each ingested ticket.** See the next section — this step is required and is easy to miss.
+
+Poll interval, drain interval, manual-sync cooldown, and a GitHub Enterprise `api_base` are all under `github:` in `orchestrator.yaml`.
+
+#### The intake approval gate
+
+**An ingested ticket is not claimable until a human approves it.** It arrives in phase `pending-approval`, and no shem can take it until someone opens it in the dashboard, reads the description, and presses **Approve & Start**.
+
+This is deliberate and is the feature's load-bearing control. An issue body is written by anyone who can open an issue on that repository, and it is interpolated into the prompts that drive brainstorm, plan, implement, and revise — one of which has shell and repository write access. The approval binds to the exact text you were shown: if the issue is edited between the page rendering and your click, the approval is refused with a 409 and you are asked to reload and read the new text. If the issue is edited *after* approval and the ticket has not been claimed yet, it returns to `pending-approval` for a fresh read; if it has already been claimed, the running agent keeps working from the text that was approved and the change is recorded in the ticket's log.
+
+The CLI has no such gate, on purpose: `golem ticket new --from-issue 42` is typed by the human who would otherwise be approving, so the act of running it *is* the approval.
+
+#### The `golem:<phase>` label convention
+
+Golem owns the `golem:` prefix on issues it manages and nothing else. On each phase transition it applies `golem:<phase>` — `golem:pending-approval`, `golem:brainstorm`, `golem:plan`, `golem:implement`, `golem:ready-for-review` — and removes any *other* `golem:*` label, so an issue carries exactly one at a time. Every other label, including the trigger label `golem` (no colon) and all of your own, is left untouched.
+
+That is also why the trigger label may not itself start with `golem:`: the first phase transition would strip it and un-enroll the issue from its own filter. The settings form rejects such a label.
+
+Golem also comments at three milestones — spec written, plan approved, implementation complete — closes the issue when the ticket is closed, and opens a draft pull request once the ticket reaches `ready-for-review` and its branch has been pushed. Pushing requires `no_push: false` in the shem config plus a push credential; see `deploy/shem.yaml`.
+
+When a GitHub write fails often enough, it parks and stops retrying. Parked writes are listed at the bottom of `/settings/github` with a **Retry** button — check there if the issue stops reflecting the ticket.
 
 The orchestrator is the sole GitHub writer for any repo it manages: it posts comments, updates labels, and reflects ticket-state changes back onto the linked issue. This is why the shem forces `github.write: false` in that repo's `.golem/config.yaml` (see "Two-writer guard" under CLI Mode above) — the CLI must stay read-only there so the two systems never race each other on the same issue.
+
+### Upgrading
+
+Upgrading an existing deployment to the GitHub Issues release has one required
+step for some databases and three behaviour changes worth knowing about. See
+[docs/releases/2026-09-github-issues-integration.md](docs/releases/2026-09-github-issues-integration.md).
+
+```sh
+golem-orchestrator backfill body-hash --dry-run   # rehearse; writes nothing
+golem-orchestrator backfill body-hash
+```
 
 ### Shem Configuration
 
@@ -270,12 +325,14 @@ orchestrator: http://localhost:8080
 name: my-shem
 # api_key: set via GOLEM_SHEM_API_KEY env var
 
-no_push: true   # for local testing; remove in production
+no_push: true   # for local testing; see below
 
 repos:
   - path: /path/to/local/repo
     remote: https://github.com/your-org/your-repo
 ```
+
+`no_push: true` routes `git push` to the local repository instead of a remote, which is ideal for trying Golem out — but it also means **no branch reaches GitHub and no pull request is ever opened**. The shipped `deploy/shem.yaml` keeps it on, because the compose stack's default repositories are a throwaway local one and whatever `GOLEM_REPO_PATH` points at. To get the pull request, set `no_push: false` and give the shem a push credential: `GOLEM_GITHUB_TOKEN` in `.env` (the container's entrypoint installs it as an HTTPS credential helper for github.com) or an SSH key. Without one the push fails and the pull request is silently never opened — the ticket still reaches `ready-for-review`.
 
 ### Running Multiple Shems
 
@@ -341,6 +398,9 @@ internal/
 deploy/
   orchestrator.yaml ← orchestrator config for Docker Compose
   shem.yaml         ← shem config for Docker Compose
+  compose_test.go   ← keeps docker-compose.yml honest about what it delivers
+docs/
+  releases/         ← upgrade notes
 ```
 
 Golem built Golem. The reviewer approved.
