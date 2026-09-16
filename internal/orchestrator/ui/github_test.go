@@ -466,10 +466,12 @@ func TestTicketDetailNonLinkedTicketUnchanged(t *testing.T) {
 // posts action=start, and no other phase must offer it — including
 // unassigned, which is what a released pending-approval ticket becomes.
 func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
+	someShem := uint(7)
 	tests := []struct {
 		name           string
 		phase          string
 		intakeApproved bool
+		assignedShem   *uint
 		wantStart      bool
 	}{
 		{name: "pending-approval, unapproved: offers it",
@@ -484,6 +486,12 @@ func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 			phase: "unassigned", intakeApproved: false, wantStart: true},
 		{name: "implement, approved (actively running): does not offer it",
 			phase: "implement", intakeApproved: true, wantStart: false},
+		// Fix round 5: a claimed-but-unapproved ticket (a state that should
+		// never legitimately arise, but round 4's card condition did not
+		// defend against it) must not offer "start" either — starting it
+		// would double-claim it, same as actionStart's own guard.
+		{name: "implement, unapproved, claimed: does not offer it (double-claim guard)",
+			phase: "implement", intakeApproved: false, assignedShem: &someShem, wantStart: false},
 		{name: "closed, unapproved: does not offer it even though unapproved",
 			phase: "closed", intakeApproved: false, wantStart: false},
 	}
@@ -495,11 +503,12 @@ func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 				t.Fatalf("db.Open: %v", err)
 			}
 			n := 11
-			id := fmt.Sprintf("gh-issue-start-%s-%v", tt.phase, tt.intakeApproved)
+			id := fmt.Sprintf("gh-issue-start-%s-%v-claimed-%v", tt.phase, tt.intakeApproved, tt.assignedShem != nil)
 			ticket := db.Ticket{ID: id, RepoRemote: "https://github.com/org/repo",
 				Title: "t", Branch: "ticket/x", Description: "d",
 				Phase: tt.phase, IssueNumber: &n, IntakeApproved: tt.intakeApproved,
-				IssueURL: "https://github.com/org/repo/issues/11"}
+				AssignedShem: tt.assignedShem,
+				IssueURL:     "https://github.com/org/repo/issues/11"}
 			if err := gdb.Create(&ticket).Error; err != nil {
 				t.Fatalf("seed ticket: %v", err)
 			}

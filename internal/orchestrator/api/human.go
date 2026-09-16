@@ -391,17 +391,21 @@ var errAlreadyClosed = errors.New("ticket already closed")
 // intake_approved was before that transition.
 //
 // The guard below is deliberately provenance-based (issue_number set,
-// intake_approved false, not closed) rather than phase-based (fix round 4).
-// A GitHub-sourced ticket that leaves pending-approval by any route other
-// than start (needs-attention, requeue, ...) still has intake_approved=false
-// and is therefore still unclaimable, but under a phase-only guard it had NO
-// in-product recovery: one misclick of the dashboard's own Close or Re-queue
-// button bricked it permanently, since re-ingesting the same issue is
-// blocked by the unique (repo_remote, issue_number) index. Matching the
-// guard to the actual invariant it establishes — rather than to one
-// specific phase that invariant usually starts from — makes that
-// recoverable. A closed ticket is deliberately excluded: reopening one is a
-// separate action from starting it.
+// intake_approved false, not closed, not claimed) rather than phase-based
+// (fix round 4). A GitHub-sourced ticket that leaves pending-approval by any
+// route other than start (needs-attention, requeue, ...) still has
+// intake_approved=false and is therefore still unclaimable, but under a
+// phase-only guard it had NO in-product recovery: one misclick of the
+// dashboard's own Close or Re-queue button bricked it permanently, since
+// re-ingesting the same issue is blocked by the unique
+// (repo_remote, issue_number) index. Matching the guard to the actual
+// invariant it establishes — rather than to one specific phase that
+// invariant usually starts from — makes that recoverable. A closed ticket
+// is deliberately excluded: reopening one is a separate action from
+// starting it. assigned_shem IS NULL is also required (fix round 5): the
+// phase check alone let a claimed-but-unapproved ticket (a state that
+// should not arise, but round 4's guard did not defend against it) get
+// double-claimed — see the comment on that clause below.
 func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string) {
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
@@ -419,8 +423,20 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 		// the live issue body no longer hashes to what was approved here,
 		// for any ticket that has not yet been claimed.
 		approvedHash := ghsync.HashBody(ticket.Description)
+		// assigned_shem IS NULL closes a fix-round-4 double-claim (round 5):
+		// the provenance-based guard below checks intake_approved, not
+		// claim status, so without this a ticket that is claimed and
+		// mid-execution but somehow unapproved was startable — 204, phase
+		// moved to unassigned with assigned_shem still set, and a second
+		// shem could then claim the same ticket and branch. A claimed
+		// ticket has nothing for "start" to do: it was already released
+		// once (that is how it got claimed), and un-claiming it is
+		// requeue's job, not start's — requeue also pushes ticket_requeued
+		// to the running shem, which start still does not do, so start
+		// must not perform requeue's job under a different name.
 		result := tx.Model(&db.Ticket{}).
-			Where("id = ? AND issue_number IS NOT NULL AND intake_approved = false AND phase != 'closed'", id).
+			Where("id = ? AND issue_number IS NOT NULL AND intake_approved = false "+
+				"AND phase != 'closed' AND assigned_shem IS NULL", id).
 			Updates(map[string]any{
 				"phase":              "unassigned",
 				"intake_approved":    true,
@@ -435,7 +451,7 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 		return enqueueGitHubPhase(tx, ticket, "unassigned", h.BaseURL)
 	})
 	if errors.Is(txErr, errNotStartable) {
-		http.Error(w, "ticket is already approved, not linked to a GitHub issue, or closed", http.StatusConflict)
+		http.Error(w, "ticket is already approved, already claimed, not linked to a GitHub issue, or closed", http.StatusConflict)
 		return
 	}
 	if txErr != nil {
@@ -458,8 +474,8 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 }
 
 // errNotStartable signals that a start action was attempted on a ticket that
-// is already approved (intake_approved), not linked to a GitHub issue, or
-// closed.
+// is already approved (intake_approved), already claimed (assigned_shem set),
+// not linked to a GitHub issue, or closed.
 var errNotStartable = errors.New("ticket is not startable")
 
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {

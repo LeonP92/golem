@@ -68,12 +68,25 @@ type Ticket struct {
 	// that text. ghsync.applyIssue re-gates (clears both fields, moves the
 	// ticket back to pending-approval) when this no longer matches an
 	// unclaimed ticket's incoming issue body.
-	ApprovedBodyHash string    `gorm:"not null;default:''" json:"approved_body_hash"`
-	PRNumber         *int      `json:"pr_number"`
-	PRURL            string    `json:"pr_url"`
-	BranchPushed     bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	ApprovedBodyHash string `gorm:"not null;default:''" json:"approved_body_hash"`
+	// BodyHash is the hex-encoded SHA-256 hash of the CURRENT Description,
+	// written everywhere Description is written (createTicketFromIssue and
+	// ghsync.applyIssue) — fix round 5. The claim-adjacent predicates in
+	// api/tickets.go (ClaimTicket, availableTickets, resumableTickets)
+	// require ApprovedBodyHash = BodyHash, not merely IntakeApproved: a
+	// ticket that is claimed while approved deliberately keeps
+	// IntakeApproved=true and its now-stale ApprovedBodyHash if the issue is
+	// edited afterward (the running shem is not yanked), but BodyHash keeps
+	// moving to match the live issue. That mismatch is what makes the
+	// ticket unclaimable again the moment it returns to the pool by ANY
+	// path — requeue, the heartbeat reaper, or one none of these fix rounds
+	// anticipated — without needing to guard each such path individually.
+	BodyHash     string    `gorm:"not null;default:''" json:"body_hash"`
+	PRNumber     *int      `json:"pr_number"`
+	PRURL        string    `json:"pr_url"`
+	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {

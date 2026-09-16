@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 )
 
 // doTicketAction posts a human action to /api/tickets/{id}/actions with
@@ -214,6 +215,12 @@ func TestStartRecoversTicketStrandedOutsidePendingApproval(t *testing.T) {
 		RepoRemote:  "https://github.com/org/repo",
 		Branch:      "ticket/recover",
 		Description: "d",
+		// BodyHash mirrors what createTicketFromIssue always sets for a
+		// real GitHub-linked ticket; this test constructs the row directly
+		// (bypassing ghsync), so it must uphold that invariant itself, or
+		// the round-5 claim predicate's approved_body_hash = body_hash
+		// check would never match even after a correct approval.
+		BodyHash:    ghsync.HashBody("d"),
 		Phase:       "pending-approval",
 		IssueNumber: &n,
 	}

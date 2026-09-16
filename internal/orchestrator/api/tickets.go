@@ -48,14 +48,28 @@ type ClaimResponse struct {
 // ClaimTicket atomically claims a ticket for shemID. Exactly one concurrent
 // caller wins; all others receive a non-nil error.
 //
-// The intake_approved half of the predicate (spec Amendment 1) is provenance,
-// not phase: an externally-sourced ticket (non-nil issue_number) must have
-// been explicitly released by actionStart, regardless of what phase
-// gymnastics (close, needs-attention, requeue, ...) it has been through
-// since. A web-form ticket has a nil issue_number and is unaffected.
+// The (issue_number IS NULL OR (intake_approved AND approved_body_hash =
+// body_hash)) half of the predicate (spec Amendment 1) is provenance, not
+// phase: an externally-sourced ticket (non-nil issue_number) must have been
+// explicitly released by actionStart, regardless of what phase gymnastics
+// (close, needs-attention, requeue, ...) it has been through since. A
+// web-form ticket has a nil issue_number and is unaffected.
+//
+// Checking approved_body_hash = body_hash, not just intake_approved, closes
+// a fix-round-4 gap (round 5): a ticket claimed while approved deliberately
+// keeps intake_approved=true and its now-stale approved_body_hash if the
+// issue is edited afterward (the running shem is not yanked — see
+// ghsync.applyIssue), but body_hash keeps tracking the live issue. Without
+// this half of the predicate, that ticket became claimable again — with the
+// attacker's edited text — the moment it returned to the pool via requeue
+// or the heartbeat reaper, neither of which re-checks the hash. Requiring
+// equality here means approval means "a human approved THIS text", checked
+// at the one place it matters, regardless of how many paths return a
+// ticket to the pool now or later.
 func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, error) {
 	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase = 'unassigned' AND (issue_number IS NULL OR intake_approved)", ticketID).
+		Where("id = ? AND phase = 'unassigned' AND "+
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))", ticketID).
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
 	if result.Error != nil {
 		return nil, result.Error
@@ -118,18 +132,23 @@ func (h *Handlers) assignedTickets(w http.ResponseWriter, r *http.Request) {
 // resumableTickets returns tickets assigned to this shem that have a checkpoint
 // and are in an active execution phase — i.e. were mid-run when the shem died.
 //
-// The intake_approved clause is defence in depth (fix round 4), not load
-// bearing today: a non-nil assigned_shem is only ever set by ClaimTicket,
-// which already requires (issue_number IS NULL OR intake_approved), so every
-// row this query could return already satisfies it. Adding it here pins that
-// invariant explicitly rather than leaving this query's safety implicit in
-// "nothing else writes assigned_shem" — a property nothing in the test suite
-// otherwise asserts.
+// The approval clause matches ClaimTicket's (fix round 5: approved_body_hash
+// = body_hash, not just intake_approved — see ClaimTicket's doc comment for
+// why). It is not purely defence in depth here: if the issue was edited
+// after approval while this ticket was claimed, applyIssue deliberately does
+// not yank it (the shem may be mid-run), but Description is still refreshed
+// to the edited text. Without this clause, a shem restarting and resuming
+// via this endpoint would receive that edited text to continue working
+// from — the same exposure this task exists to close, reached through
+// resume instead of claim. Excluding it here means a restarted shem simply
+// does not resume it; the ticket stays assigned until a human re-approves
+// and something (currently nothing automatic) requeues it.
 func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var tickets []db.Ticket
 	h.DB.Where(
-		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ? AND (issue_number IS NULL OR intake_approved)",
+		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ? AND "+
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))",
 		shem.ID,
 		[]string{"unassigned", "ready-for-review", "revising", "closed"},
 	).Find(&tickets)
@@ -235,7 +254,8 @@ func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
 // why intake_approved, not phase alone, gates externally-sourced tickets.
 func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
-	query := h.DB.Where("phase = 'unassigned' AND (issue_number IS NULL OR intake_approved)")
+	query := h.DB.Where("phase = 'unassigned' AND " +
+		"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))")
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
 	}

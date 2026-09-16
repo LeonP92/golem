@@ -676,11 +676,13 @@ func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testin
 // leave the ticket's phase untouched.
 func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 	n := 42
+	someShem := uint(99)
 	tests := []struct {
 		name           string
 		phase          string
 		issueNumber    *int
 		intakeApproved bool
+		assignedShem   *uint
 		wantStatus     int
 		wantPhase      string
 	}{
@@ -701,6 +703,16 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 		{name: "already approved mid-execution -> conflict, unchanged",
 			phase: "implement", issueNumber: &n, intakeApproved: true,
 			wantStatus: http.StatusConflict, wantPhase: "implement"},
+		// Fix round 5 (the dangerous cell round 4's table left unpinned):
+		// claimed AND unapproved must still 409, not succeed. Round 4's
+		// guard checked only intake_approved, so this state — which should
+		// never legitimately arise, but the guard did not defend against
+		// it — was startable: 204, phase moved to unassigned with
+		// assigned_shem still set, and a second shem could then claim the
+		// same ticket. assigned_shem must also be unchanged afterward.
+		{name: "claimed AND unapproved, mid-execution -> conflict, unchanged (double-claim guard)",
+			phase: "implement", issueNumber: &n, intakeApproved: false, assignedShem: &someShem,
+			wantStatus: http.StatusConflict, wantPhase: "implement"},
 		{name: "not linked to a GitHub issue -> conflict, unchanged",
 			phase: "unassigned", issueNumber: nil, intakeApproved: false,
 			wantStatus: http.StatusConflict, wantPhase: "unassigned"},
@@ -714,7 +726,8 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 			h, mux, cookie := setupActionTest(t)
 
 			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
-				Phase: tt.phase, IssueNumber: tt.issueNumber, IntakeApproved: tt.intakeApproved}
+				Phase: tt.phase, IssueNumber: tt.issueNumber, IntakeApproved: tt.intakeApproved,
+				AssignedShem: tt.assignedShem}
 			h.DB.Create(&ticket)
 
 			body, _ := json.Marshal(map[string]string{"action": "start"})
@@ -733,6 +746,11 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 			h.DB.First(&got, "id = ?", ticket.ID)
 			if got.Phase != tt.wantPhase {
 				t.Errorf("phase = %q, want %q", got.Phase, tt.wantPhase)
+			}
+			if tt.assignedShem != nil {
+				if got.AssignedShem == nil || *got.AssignedShem != *tt.assignedShem {
+					t.Errorf("assigned_shem = %v, want unchanged %d", got.AssignedShem, *tt.assignedShem)
+				}
 			}
 		})
 	}

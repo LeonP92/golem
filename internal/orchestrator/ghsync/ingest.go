@@ -123,51 +123,95 @@ func (s *Syncer) applyIssue(ctx context.Context, repo *db.GitHubRepo, issue gith
 		return fmt.Errorf("look up ticket for issue #%d: %w", issue.Number, err)
 	}
 
+	// bodyHash always tracks the CURRENT description (fix round 5). It is
+	// written everywhere description is written (here and
+	// createTicketFromIssue) so the claim-adjacent predicates in
+	// api/tickets.go can require approved_body_hash = body_hash: approval
+	// then means "a human approved THIS text", enforced at the point of
+	// use, regardless of what phase/intake_approved bookkeeping below does
+	// or fails to do. This is what makes the claimed-ticket branch below
+	// (which deliberately leaves intake_approved=true and the now-stale
+	// approved_body_hash) safe: the moment a claimed-and-edited ticket
+	// returns to the pool by ANY path — requeue, the heartbeat reaper, or a
+	// future path this file's author never imagined — body_hash no longer
+	// matches approved_body_hash, and it is unclaimable until a human
+	// re-approves. Guarding requeue/reap individually was the same mistake
+	// this task already made three times over; this is the structural fix.
+	bodyHash := HashBody(issue.Body)
 	updates := map[string]any{
 		"title":       issue.Title,
 		"description": issue.Body,
 		"issue_url":   issue.HTMLURL,
+		"body_hash":   bodyHash,
 	}
 
-	// logMsg, when non-empty, is appended as a STATUS log entry after the
-	// update below commits, recording a post-approval edit to the issue
-	// body (spec Amendment 1 fix round 4: an approval binds to the text a
-	// human reviewed, not merely to the ticket).
-	var logMsg string
-	switch {
-	case issue.State == "closed":
+	if issue.State == "closed" {
 		// Closing wins outright: it does not matter whether the body also
 		// changed, and a closed ticket is never claimable regardless of
 		// IntakeApproved, so there is nothing to re-gate.
 		if ticket.Phase != "closed" {
 			updates["phase"] = "closed"
 		}
-	case ticket.IntakeApproved && HashBody(issue.Body) != ticket.ApprovedBodyHash:
-		if ticket.AssignedShem == nil {
-			// Not yet claimed: the approval was for the old text, and
-			// nobody has started work on the strength of it yet, so pull
-			// it back for a human to re-review the new text before it can
-			// be claimed.
-			updates["intake_approved"] = false
-			updates["approved_body_hash"] = ""
-			updates["phase"] = "pending-approval"
-			logMsg = "Issue body changed after approval; a human must re-approve before this ticket can be claimed."
-		} else {
-			// Already claimed: the assigned shem already has the
-			// previously-approved text and may be mid-run. Do not yank the
-			// ticket out from under it — just make the change loudly
-			// visible in its own log instead.
-			logMsg = "Issue body changed after approval; this ticket is already claimed, so the running agent is still working from the previously approved text."
+		if err := s.DB.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update ticket %s for issue #%d: %w", ticket.ID, issue.Number, err)
 		}
+		return nil
 	}
 
-	if err := s.DB.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error; err != nil {
-		return fmt.Errorf("update ticket %s for issue #%d: %w", ticket.ID, issue.Number, err)
-	}
-	if logMsg != "" {
-		if err := appendLog(s.DB, ticket.ID, "STATUS", "system", "", logMsg); err != nil {
-			return fmt.Errorf("log post-approval edit for ticket %s: %w", ticket.ID, err)
+	if !ticket.IntakeApproved || bodyHash == ticket.ApprovedBodyHash {
+		// Nothing approved, or approved and unchanged: a plain sync.
+		if err := s.DB.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update ticket %s for issue #%d: %w", ticket.ID, issue.Number, err)
 		}
+		return nil
+	}
+
+	// The body changed since approval. Whether to also reset phase and
+	// clear intake_approved/approved_body_hash (the UI-visible, "send it
+	// back for human re-review" bookkeeping) depends on whether the ticket
+	// is still unclaimed — but ticket.AssignedShem was read before this
+	// function did anything, so a concurrent claim could land in the
+	// window between that read and this write. Checking
+	// "assigned_shem IS NULL" in the same update, inside a transaction with
+	// the base field sync, decides atomically on the database's current
+	// state rather than the stale in-memory read, so this can never leave a
+	// ticket both claimed and re-gated back to pending-approval.
+	var logMsg string
+	txErr := s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error; err != nil {
+			return fmt.Errorf("update ticket %s for issue #%d: %w", ticket.ID, issue.Number, err)
+		}
+		regate := tx.Model(&db.Ticket{}).
+			Where("id = ? AND assigned_shem IS NULL", ticket.ID).
+			Updates(map[string]any{
+				"intake_approved":    false,
+				"approved_body_hash": "",
+				"phase":              "pending-approval",
+			})
+		if regate.Error != nil {
+			return regate.Error
+		}
+		if regate.RowsAffected > 0 {
+			// Not yet claimed: the approval was for the old text, and
+			// nobody has started work on the strength of it yet, so pull it
+			// back for a human to re-review the new text.
+			logMsg = "Issue body changed after approval; a human must re-approve before this ticket can be claimed."
+		} else {
+			// Already claimed (whether at the outer read or by a race that
+			// landed just now): the assigned shem already has the
+			// previously-approved text and may be mid-run. Do not yank the
+			// ticket out from under it — body_hash above already makes it
+			// unclaimable again once it returns to the pool; just make the
+			// change loudly visible in its own log.
+			logMsg = "Issue body changed after approval; this ticket is already claimed, so the running agent is still working from the previously approved text."
+		}
+		return nil
+	})
+	if txErr != nil {
+		return txErr
+	}
+	if err := appendLog(s.DB, ticket.ID, "STATUS", "system", "", logMsg); err != nil {
+		return fmt.Errorf("log post-approval edit for ticket %s: %w", ticket.ID, err)
 	}
 	return nil
 }
@@ -190,6 +234,7 @@ func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo,
 		Title:       issue.Title,
 		Branch:      slug.Branch(issue.Title, id),
 		Description: issue.Body,
+		BodyHash:    HashBody(issue.Body),
 		// Externally-sourced tickets are NOT claimable on arrival. The issue
 		// body is authored by anyone who can open an issue in this repo, and it
 		// is interpolated into the agent prompts that drive brainstorm, plan,
