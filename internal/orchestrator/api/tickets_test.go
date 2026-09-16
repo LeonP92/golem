@@ -14,6 +14,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
@@ -34,10 +35,11 @@ func setupTicketTest(t *testing.T) (*api.Handlers, *http.ServeMux) {
 	return h, mux
 }
 
-// seedSessionUser creates a db.User and an authenticated session cookie for it.
-func seedSessionUser(t *testing.T, gdb *gorm.DB, username string) (db.User, *http.Cookie) {
+// seedSessionUser creates a db.User with the given role and an authenticated
+// session cookie for it.
+func seedSessionUser(t *testing.T, gdb *gorm.DB, username, role string) (db.User, *http.Cookie) {
 	t.Helper()
-	user := db.User{Username: username, PasswordHash: "x"}
+	user := db.User{Username: username, PasswordHash: "x", Role: role}
 	if err := gdb.Create(&user).Error; err != nil {
 		t.Fatalf("create user: %v", err)
 	}
@@ -287,7 +289,7 @@ func TestAppendLog(t *testing.T) {
 
 func TestCreateTicket_SetsCreatedByFromSession(t *testing.T) {
 	h, mux := setupTicketTest(t)
-	user, cookie := seedSessionUser(t, h.DB, "leon")
+	user, cookie := seedSessionUser(t, h.DB, "leon", string(rbac.RoleDeveloper))
 
 	body, _ := json.Marshal(map[string]string{
 		"repo_remote": "https://github.com/org/repo5",
@@ -320,7 +322,7 @@ func TestCreateTicket_SetsCreatedByFromSession(t *testing.T) {
 
 func TestCreateTicket_IgnoresClientSuppliedCreatedByUserID(t *testing.T) {
 	h, mux := setupTicketTest(t)
-	user, cookie := seedSessionUser(t, h.DB, "leon")
+	user, cookie := seedSessionUser(t, h.DB, "leon", string(rbac.RoleDeveloper))
 
 	body, _ := json.Marshal(map[string]any{
 		"repo_remote":        "https://github.com/org/repo6",
@@ -350,7 +352,7 @@ func TestCreateTicket_IgnoresClientSuppliedCreatedByUserID(t *testing.T) {
 
 func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 	h, mux := setupTicketTest(t)
-	user, cookie := seedSessionUser(t, h.DB, "leon")
+	user, cookie := seedSessionUser(t, h.DB, "leon", string(rbac.RoleDeveloper))
 
 	owned := db.Ticket{
 		RepoRemote:      "https://github.com/org/repo7",
@@ -415,7 +417,7 @@ func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 
 func TestCreateTicket_RequiresTitle(t *testing.T) {
 	h, mux := setupTicketTest(t)
-	_, cookie := seedSessionUser(t, h.DB, "leon")
+	_, cookie := seedSessionUser(t, h.DB, "leon", string(rbac.RoleDeveloper))
 
 	body, _ := json.Marshal(map[string]string{
 		"repo_remote": "https://github.com/org/repo7",
@@ -434,7 +436,7 @@ func TestCreateTicket_RequiresTitle(t *testing.T) {
 
 func TestCreateTicket_ComputesBranchFromTitle(t *testing.T) {
 	h, mux := setupTicketTest(t)
-	_, cookie := seedSessionUser(t, h.DB, "leon")
+	_, cookie := seedSessionUser(t, h.DB, "leon", string(rbac.RoleDeveloper))
 
 	body, _ := json.Marshal(map[string]string{
 		"repo_remote": "https://github.com/org/repo8",
@@ -460,5 +462,25 @@ func TestCreateTicket_ComputesBranchFromTitle(t *testing.T) {
 	want := "ticket/human-friendly-branch-names-" + resp.ID[:8]
 	if resp.Branch != want {
 		t.Errorf("expected branch=%q, got %q", want, resp.Branch)
+	}
+}
+
+// TestSessionRoutes_UnknownRoleForbidden covers a row whose role is neither of
+// the known ones (hand-edited, or written before the Role column existed and
+// not yet bootstrapped): it must be refused, not admitted.
+func TestSessionRoutes_UnknownRoleForbidden(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	user, cookie := seedSessionUser(t, h.DB, "stranger", string(rbac.RoleDeveloper))
+	if err := h.DB.Model(&user).Update("role", "").Error; err != nil {
+		t.Fatalf("clear role: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/tickets", nil)
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusForbidden {
+		t.Errorf("got %d, want 403", w.Code)
 	}
 }

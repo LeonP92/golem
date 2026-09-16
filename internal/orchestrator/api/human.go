@@ -9,6 +9,7 @@ import (
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
@@ -25,7 +26,7 @@ func (h *Handlers) RegisterHumanRoutes(mux *http.ServeMux) {
 
 	// Human-facing: single action dispatcher (session auth).
 	mux.Handle("POST /api/tickets/{id}/actions",
-		auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketAction)))
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketManage)(http.HandlerFunc(h.ticketAction))))
 }
 
 // createHumanInput creates a new HumanInput for a ticket.

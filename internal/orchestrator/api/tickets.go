@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/slug"
@@ -75,12 +76,15 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 
 // RegisterTicketRoutes adds ticket-related routes to mux.
 func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.createTicket)))
-	mux.Handle("GET /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.listTickets)))
+	mux.Handle("POST /api/tickets",
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketCreate)(http.HandlerFunc(h.createTicket))))
+	mux.Handle("GET /api/tickets",
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.listTickets))))
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
 	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))
 	mux.Handle("GET /api/tickets/assigned", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.assignedTickets)))
-	mux.Handle("GET /api/tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.getTicket)))
+	mux.Handle("GET /api/tickets/{id}",
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.getTicket))))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("PATCH /api/tickets/{id}/phase", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updatePhase)))
