@@ -17,8 +17,10 @@ import (
 // credentials" has to hold here or it is not a claim, it is a coincidence of
 // which binary you happened to run.
 //
-// internal/shem/worker has the mirror of this file. The allow-list they share
-// lives in internal/agentenv and is tested there.
+// internal/shem/worker has the mirror of this file, and
+// internal/gate/env_test.go covers the third executor of instructions Golem
+// did not write: gate commands out of .golem/config.yaml. The allow-list all
+// three share lives in internal/agentenv and is tested there.
 
 // fakeClaude installs a `claude` on PATH that writes its own environment to a
 // file and returns that path. The prompt arrives on stdin and is discarded.

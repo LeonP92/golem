@@ -174,10 +174,11 @@ unconditionally — including on the shipped `no_push: true`, where there is
 nothing for a credential to do. Now the token arrives only when someone has
 decided it should, which is the same decision as turning `no_push` off.
 
-The agent subprocess never sees either token regardless: Golem execs `claude`
-with an allow-listed environment that excludes everything in the `GOLEM_`
-namespace, so the credential helper answers Golem's own `git push` and returns
-an empty password to anything the agent runs.
+The agent never sees either token regardless: Golem execs `claude` — and any
+gate command out of `.golem/config.yaml`, which an agent can edit — with an
+allow-listed environment that excludes everything in the `GOLEM_` namespace, so
+the credential helper answers Golem's own `git push` and returns an empty
+password to anything the agent runs or arranges to have run later.
 
 ## 4. Dashboard pages left open across the upgrade fail once
 
@@ -258,15 +259,23 @@ anything queued while it is down is delivered when it comes back.
   moment they turn `no_push: false` on. Set it to a push-only token if you can.
   **If you already run `no_push: false`, this is an upgrade action — see
   section 3.**
-- The agent subprocess runs with an allow-listed environment rather than
-  Golem's own, on **both** paths — the shem's `claude --print` and CLI mode's
-  `golem observer dispatch` / `golem ticket review`. It keeps its model
-  credentials, the shell, locale, proxy and TLS settings, git identity, and the
-  language toolchains; it no longer sees anything in the `GOLEM_` namespace.
-  Golem's own subprocesses, including the shem's `git push`, are unaffected. If
-  a build in your repository needs a variable the list does not cover, name it
-  in `GOLEM_AGENT_ENV` (comma-separated); that cannot re-add the `GOLEM_`
-  namespace.
+- **Nothing Golem runs that executes instructions Golem did not write holds
+  Golem's credentials.** That is all three such places: the shem's
+  `claude --print`, CLI mode's agent behind `golem observer dispatch` and
+  `golem ticket review`, and the **gate commands** in your
+  `.golem/config.yaml` — which live inside the repository an agent works in
+  and which an agent can therefore edit. Each runs with an allow-listed
+  environment: model credentials, shell, locale, proxy and TLS settings, git
+  identity and the language toolchains, but nothing in the `GOLEM_` namespace.
+
+  Golem's own commands — `golem ticket new`, `golem ticket advance`,
+  `git push` — are unaffected and keep the full environment, which is what
+  leaves the shem's credential helper working.
+
+  **If a gate command of yours needs a variable the list does not cover**, name
+  it in `GOLEM_AGENT_ENV` (comma-separated). A gate that has silently relied on
+  something ambient will start failing rather than quietly skipping, so it is
+  visible. The escape hatch cannot re-add the `GOLEM_` namespace.
 - Logging out is a `POST`. A `GET /logout` used to be reachable from rendered
   markdown via `![](/logout)`, which logged the operator out on page load.
 - DOMPurify, the sanitizer on the markdown sink, is pinned to an exact version

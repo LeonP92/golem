@@ -9,14 +9,28 @@ import (
 // Package agentenv decides what an agent subprocess is allowed to see of the
 // environment Golem is running in.
 //
-// It is a package rather than a helper inside one caller because there are two
-// places that exec an agent and both need the same answer: the shem worker's
-// `claude --print` (internal/shem/worker), and the CLI-mode backend adapter
-// used by `golem observer dispatch` and `golem ticket review`
-// (internal/agentrunner). CLI mode ingests GitHub issues too — `golem issue
-// sync`, `golem ticket new --from-issue N` — so untrusted description text
-// reaches an agent on that path as well, with no approval gate in front of it
-// at all. A rule that held in one of the two would not be a rule.
+// It is a package rather than a helper inside one caller because three places
+// need the same answer, and a rule that held in some of them would not be a
+// rule:
+//
+//   - the shem worker's `claude --print` (internal/shem/worker);
+//   - the CLI-mode backend adapter behind `golem observer dispatch` and
+//     `golem ticket review` (internal/agentrunner). CLI mode ingests GitHub
+//     issues too — `golem issue sync`, `golem ticket new --from-issue N` — so
+//     untrusted description text reaches an agent there as well, with no
+//     approval gate in front of it at all;
+//   - gate commands (internal/gate). Those are lines of shell out of
+//     .golem/config.yaml, a file inside the repository an agent works in and
+//     can edit, executed later by whichever process next runs
+//     `golem ticket review` on it. Without this they were the one path left
+//     by which an agent reached GOLEM_GITHUB_TOKEN — not from its own shell,
+//     but from an operator's, one command later.
+//
+// The property, stated once so it can be checked: nothing Golem executes that
+// runs agent-authored or repository-authored instructions holds Golem's own
+// credentials. Golem's own commands — `golem ticket new`, `golem ticket
+// advance`, `git push` — are a different thing and keep the full environment,
+// which is what leaves the shem's credential helper working.
 //
 // The agent subprocess runs with an allow-listed environment, not Golem's own.
 //

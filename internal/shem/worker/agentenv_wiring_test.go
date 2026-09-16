@@ -12,7 +12,9 @@ import (
 // this file asserts is that THIS package's agent exec site is actually built
 // with it — which was the original defect: `grep -rn "cmd.Env" internal/ cmd/`
 // returned nothing at all, so the allow-list could be perfect and still reach
-// nothing. internal/agentrunner has the mirror of this file for the CLI path.
+// nothing. internal/agentrunner has the mirror of this file for the CLI path,
+// and internal/gate/env_test.go covers the third executor of instructions
+// Golem did not write: gate commands out of .golem/config.yaml.
 
 // TestClaudePhaseCmdDoesNotLeakGolemSecrets closes the loop: the allow-list is
 // only worth anything if the agent subprocess is actually built with it.
