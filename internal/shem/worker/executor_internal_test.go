@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leonp92/golem/internal/promptfence"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/ticket"
 	"github.com/leonp92/golem/internal/workspace"
@@ -407,5 +408,17 @@ func TestCleanupTicket_UsesStateBranch(t *testing.T) {
 	}
 	if err := exec.Command("git", "-C", repoPath, "rev-parse", "--verify", branch).Run(); err == nil {
 		t.Errorf("expected branch %q to be deleted", branch)
+	}
+}
+
+// TestDescriptionFenceMarkersAreValid asserts the structural
+// no-reconstitution property over the ticket-description marker set, using
+// the shared checker rather than restating "the replacement contains no '<',
+// '>' or TICKET_DESCRIPTION". Those three exclusions are one way to satisfy
+// the property; this pins the property itself, so a future edit to either
+// annotation is checked against what actually makes it safe.
+func TestDescriptionFenceMarkersAreValid(t *testing.T) {
+	if err := promptfence.ValidateMarkers(descriptionFenceMarkers...); err != nil {
+		t.Fatalf("the ticket-description fence markers can be reconstituted: %v", err)
 	}
 }

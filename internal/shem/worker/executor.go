@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/leonp92/golem/internal/promptfence"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"gopkg.in/yaml.v3"
@@ -542,12 +543,27 @@ func fenceDescription(description string) string {
 // text, not a structural boundary. Neither replacement string contains "<",
 // ">", or the word "TICKET_DESCRIPTION" — by construction, leftover marker
 // characters on either side have nothing to recombine with.
+//
+// The substitution itself lives in internal/promptfence, shared with
+// agentrunner.BuildPrompt: the same issue body reaches both, and a fence is
+// only as strong as the weakest builder the text can reach.
 func escapeFenceMarkers(description string) string {
-	description = strings.ReplaceAll(description, descriptionFenceOpen,
-		"[literal fence-open marker quoted from the ticket body -- NOT a real fence boundary]")
-	description = strings.ReplaceAll(description, descriptionFenceClose,
-		"[literal fence-close marker quoted from the ticket body -- NOT a real fence boundary]")
-	return description
+	return promptfence.Escape(description, descriptionFenceMarkers...)
+}
+
+// descriptionFenceMarkers is the marker set escapeFenceMarkers neutralizes.
+// Neither replacement contains "<", ">", or the word "TICKET_DESCRIPTION";
+// TestDescriptionFenceMarkersAreValid asserts the general property that makes
+// that sufficient (see promptfence.ValidateMarkers).
+var descriptionFenceMarkers = []promptfence.Marker{
+	{
+		Literal:     descriptionFenceOpen,
+		Replacement: "[literal fence-open marker quoted from the ticket body -- NOT a real fence boundary]",
+	},
+	{
+		Literal:     descriptionFenceClose,
+		Replacement: "[literal fence-close marker quoted from the ticket body -- NOT a real fence boundary]",
+	},
 }
 
 // buildBrainstormPrompt returns the prompt for the brainstorm Claude session.
