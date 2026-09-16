@@ -12,6 +12,12 @@ Provides all browser-facing HTTP routes for the orchestrator:
 - **Ticket new** (`GET /tickets/new`, `POST /tickets/new`) — form to create a ticket (repo remote URL, branch, description)
 - **Ticket detail** (`/tickets/{id}`) — full view with metadata, action card for pending human input, log feed with HTMX SSE live-tail. The close/complete action button's label/color/icon is conditional on `.Ticket.Phase`: `ready-for-review` shows green "Mark Complete"; any other non-terminal phase shows red "Close" — the `action:"close"` payload sent to the server is identical either way.
 
+## Authorization
+
+Every authenticated route is registered through `h.sessionRoute(perm, fn)`, which nests `rbac.Require(perm)` inside `auth.RequireSession` — `ticket:view` for the dashboard and ticket detail, `shem:view` for `/shems`, `ticket:create` for the new-ticket form (see `orchestrator-rbac`). `/login`, `/logout` and `GET /` stay unauthenticated.
+
+`h.base(r, nav)` builds the render map every authenticated page starts from: `Nav`, `CurrentUser`, `CurrentRole`, `CanManageUsers`, `CanCreateTicket`. Handlers add their own keys to it rather than repeating these. `layout.html` uses the flags to hide controls the user cannot use (the "New Ticket" button, the "Users" nav item) and shows `username · role` next to Logout. The ticket detail page passes `nav=""`, which keeps `{{if .Nav}}` false and the page nav-less as before.
+
 ## Key types
 
 - `Handlers` — holds `*gorm.DB` and per-page `map[string]*template.Template`
