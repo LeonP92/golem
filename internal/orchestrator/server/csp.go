@@ -6,8 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
-	"os"
-	"path/filepath"
+	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -35,43 +34,50 @@ var inlineScriptRE = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)
 // would be meaningless, so such tags are skipped entirely.
 var srcAttrRE = regexp.MustCompile(`(?i)\bsrc\s*=`)
 
-// InlineScriptHashes walks dir recursively for *.html files (including a
+// InlineScriptHashes walks fsys recursively for *.html files (including a
 // partials/ subdirectory) and returns a sorted, de-duplicated list of CSP
 // script-src source tokens ("'sha256-<base64>'"), one per distinct inline
 // <script> body found. Scripts carrying a `src` attribute are skipped — they
 // load external code, and hashing their (empty) inline body would be
 // meaningless.
 //
+// fsys must be the filesystem the app actually renders from — in
+// production that is ui.TemplateFS(), the //go:embed'd filesystem baked
+// into the binary, not a path read from disk. Hashing a disk copy is wrong
+// even where the files happen to exist: a stale or locally-modified working
+// copy yields a policy that authorizes bytes nobody serves, or blocks bytes
+// that are served, and a container image that ships only the compiled
+// binary (as this project's does) has no disk copy at all. Taking an fs.FS
+// makes the hashes correct by construction, because they come from the same
+// bytes the renderer parses, and callers that do want a disk tree (e.g.
+// scratch test fixtures) can still supply one via os.DirFS.
+//
 // The hash is computed over the exact bytes between '>' and '</script>',
 // unmodified: trimming or normalizing whitespace would compute a hash that
 // does not match what the browser actually parses, silently blocking that
 // script under the resulting policy.
 //
-// An error is returned — never a nil/empty slice — if dir cannot be read.
-// Swallowing that error and returning no hashes would silently produce a
-// policy that blocks every inline script on every page; the caller (see
-// Server.Routes) is expected to fall back to CSP mode "off" rather than
-// ship that.
-func InlineScriptHashes(dir string) ([]string, error) {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return nil, fmt.Errorf("csp: stat template dir %s: %w", dir, err)
-	}
-	if !info.IsDir() {
-		return nil, fmt.Errorf("csp: template dir %s is not a directory", dir)
+// An error is returned — never a nil/empty slice — if fsys cannot be
+// walked. Swallowing that error and returning no hashes would silently
+// produce a policy that blocks every inline script on every page; the
+// caller (see Server.Routes) is expected to fall back to CSP mode "off"
+// rather than ship that.
+func InlineScriptHashes(fsys fs.FS) ([]string, error) {
+	if fsys == nil {
+		return nil, fmt.Errorf("csp: template filesystem is nil")
 	}
 
 	seen := make(map[string]struct{})
-	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+	walkErr := fs.WalkDir(fsys, ".", func(name string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return fmt.Errorf("csp: walk %s: %w", path, err)
+			return fmt.Errorf("csp: walk %s: %w", name, err)
 		}
-		if d.IsDir() || !strings.EqualFold(filepath.Ext(d.Name()), ".html") {
+		if d.IsDir() || !strings.EqualFold(path.Ext(d.Name()), ".html") {
 			return nil
 		}
-		data, err := os.ReadFile(path)
+		data, err := fs.ReadFile(fsys, name)
 		if err != nil {
-			return fmt.Errorf("csp: read %s: %w", path, err)
+			return fmt.Errorf("csp: read %s: %w", name, err)
 		}
 		for _, hash := range extractInlineScriptHashes(data) {
 			seen[hash] = struct{}{}

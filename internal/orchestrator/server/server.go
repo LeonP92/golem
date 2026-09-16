@@ -72,28 +72,23 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	// Content-Security-Policy. Inline scripts are allowed by hash, computed
-	// from the template sources so the policy stays in sync as they change
-	// (see csp.go). If the hashes can't be computed, don't ship a policy
-	// that silently blocks every inline script — log loudly and disable the
-	// header entirely instead, regardless of the configured mode.
+	// from ui.TemplateFS() — the same //go:embed'd bytes the renderer above
+	// parses — so the policy stays in sync as templates change and matches
+	// what's actually served regardless of deployment (a disk path would be
+	// wrong even where it exists: stale/locally-modified copies would yield
+	// a mismatched policy, and it's simply absent in a container image that
+	// ships only the compiled binary). If the hashes can't be computed,
+	// don't ship a policy that silently blocks every inline script — log
+	// loudly and disable the header entirely instead, regardless of the
+	// configured mode.
 	mode := s.CSPMode
 	var policy string
-	hashes, err := InlineScriptHashes(templatesDir)
+	hashes, err := InlineScriptHashes(ui.TemplateFS())
 	if err != nil {
-		log.Printf("ERROR csp: InlineScriptHashes(%s): %v — disabling Content-Security-Policy (mode=off) rather than shipping a stale or empty policy", templatesDir, err)
+		log.Printf("ERROR csp: InlineScriptHashes: %v — disabling Content-Security-Policy (mode=off) rather than shipping a stale or empty policy", err)
 		mode = cspModeOff
 	} else {
 		policy = BuildPolicy(hashes)
 	}
 	return CSPMiddleware(policy, mode)(mux)
 }
-
-// templatesDir is the on-disk location of the UI template sources, used at
-// startup to compute inline-script hashes for the Content-Security-Policy
-// header (see InlineScriptHashes). It is relative to the process's working
-// directory, matching this codebase's existing convention for default paths
-// (e.g. main.go's default "orchestrator.yaml" config path) — run the
-// orchestrator from the repository root, or set the working directory
-// accordingly, or the hash computation fails and CSP falls back to "off"
-// (logged loudly) rather than shipping a broken policy.
-const templatesDir = "internal/orchestrator/ui/templates"

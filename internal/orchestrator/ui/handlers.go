@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -28,6 +29,18 @@ var embeddedFS embed.FS
 // layout + the page + all partials).
 func LoadTemplates() (map[string]*template.Template, error) {
 	return loadTemplatesFromFS(embeddedFS)
+}
+
+// TemplateFS returns the embedded filesystem holding the UI template
+// sources (paths like "templates/layout.html", "templates/partials/*.html")
+// — the exact bytes LoadTemplates parses to serve the dashboard. Callers
+// that need to reason about rendered template bytes without re-parsing them
+// as templates — for example computing Content-Security-Policy script
+// hashes — should read from this, not from a path on disk: a disk copy can
+// be stale or locally modified, and a container image that ships only the
+// compiled binary has no disk copy of the templates at all.
+func TemplateFS() fs.FS {
+	return embeddedFS
 }
 
 // MakeLogEntryRenderer returns a function that renders a LogEntryEvent to HTML
