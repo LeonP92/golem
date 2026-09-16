@@ -72,7 +72,7 @@ func TestDrainLabelReplacesPriorPhaseLabel(t *testing.T) {
 	if err := ghsync.Enqueue(gdb, db.GitHubOutbox{
 		TicketID: "t1", Kind: ghsync.KindLabel,
 		Payload:        `{"phase":"implement"}`,
-		IdempotencyKey: ghsync.LabelKey("t1", "implement"),
+		IdempotencyKey: ghsync.LabelKey("t1", "implement", 1),
 	}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}

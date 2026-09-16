@@ -6,11 +6,13 @@ package ghsync
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // Outbox row kinds.
@@ -49,9 +51,21 @@ func CommentKey(ticketID, milestone string) string {
 	return ticketID + ":comment:" + milestone
 }
 
-// LabelKey returns the idempotency key for a phase label change.
-func LabelKey(ticketID, phase string) string {
-	return ticketID + ":label:" + phase
+// LabelKey returns the idempotency key for a phase label change. seq is the
+// ticket's label-transition ordinal, and it is what makes the key unique per
+// phase TRANSITION rather than per (ticket, phase) — finding I4.
+//
+// The phase graph has cycles: implement -> ready-for-review -> implement is
+// an ordinary revise round. Keyed on (ticket, phase) alone, the ticket's
+// second arrival at a phase reused its first arrival's key, the insert was
+// suppressed, and the issue was left advertising a phase the ticket had
+// already left. seq advances only when the phase Golem last queued a label
+// for actually changes (see enqueueGitHubPhase in the api package), so a
+// genuine retry of the SAME transition — a shem re-sending a PATCH it is not
+// sure landed — still computes the same key and is still de-duplicated by
+// the unique index.
+func LabelKey(ticketID, phase string, seq uint) string {
+	return ticketID + ":label:" + phase + ":" + strconv.FormatUint(uint64(seq), 10)
 }
 
 // CloseKey returns the idempotency key for closing the linked issue.
@@ -69,15 +83,32 @@ func PRKey(ticketID string) string {
 // Enqueue inserts an outbox row. Pass the surrounding transaction as tx so the
 // row is committed atomically with the ticket change that caused it.
 //
-// A unique-constraint violation on IdempotencyKey means this event was already
+// A row whose IdempotencyKey already exists means this event was already
 // queued — by a retry, a crash recovery, or a concurrent writer — and is
-// reported as success. This is the one error the package deliberately
-// swallows, and it is the mechanism that prevents duplicate comments.
+// reported as success. That de-duplication is the mechanism that prevents
+// duplicate comments.
+//
+// It is done with ON CONFLICT DO NOTHING rather than by catching the
+// constraint violation afterwards, because catching it is only safe on
+// SQLite (finding C1). On PostgreSQL the server puts the whole transaction
+// into the aborted state the moment it raises 23505: the next statement
+// fails with 25P02, and with no next statement Commit itself returns "commit
+// unexpectedly resulted in rollback". Since Enqueue runs inside the caller's
+// transaction — that is the entire point of the outbox — swallowing the
+// error there silently discarded the caller's ticket write. Reproduced
+// against PostgreSQL 18.3 through the real handlers: a ticket re-entering a
+// phase it had already visited answered 500 and rolled its phase change
+// back, and a re-gated ticket could never be approved again.
+//
+// With DO NOTHING the server raises nothing at all, so no transaction is
+// ever aborted, on either backend. isDuplicateKey is kept for
+// createTicketFromIssue, whose Create is standalone (its own implicit
+// transaction) and therefore poisons nothing.
 func Enqueue(tx *gorm.DB, row db.GitHubOutbox) error {
 	if row.NextAttempt.IsZero() {
 		row.NextAttempt = time.Now()
 	}
-	err := tx.Create(&row).Error
+	err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
 	if err != nil && isDuplicateKey(err) {
 		return nil
 	}

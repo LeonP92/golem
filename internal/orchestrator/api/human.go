@@ -309,20 +309,40 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 	// re-queue is a generic "unstick it" action for a ticket a shem has
 	// already touched, not a substitute for the human review that "start"
 	// performs on a never-run, externally-sourced ticket (spec Amendment 1).
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase NOT IN ('unassigned', 'pending-approval', 'closed')", id).
-		Updates(map[string]any{
-			"phase":            "unassigned",
-			"assigned_shem":    nil,
-			"checkpoint_phase": nil,
-			"checkpoint_sha":   nil,
-		})
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// The phase change and its GitHub label write commit together, the same
+	// way updatePhase's do. Before fix round 1b this was a bare Update that
+	// queued nothing, so a linked ticket dropped back to unassigned kept
+	// whatever golem:* label it was last given until some later reconcile
+	// pass happened to notice — and on a quiet repo the poll answers 304 and
+	// reconcile does not run at all (finding I4). The WHERE clause is
+	// unchanged.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase NOT IN ('unassigned', 'pending-approval', 'closed')", id).
+			Updates(map[string]any{
+				"phase":            "unassigned",
+				"assigned_shem":    nil,
+				"checkpoint_phase": nil,
+				"checkpoint_sha":   nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotRequeueable
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, "unassigned", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotRequeueable) {
+		http.Error(w, "ticket is unassigned, closed, or awaiting intake approval", http.StatusConflict)
 		return
 	}
-	if result.RowsAffected == 0 {
-		http.Error(w, "ticket is unassigned, closed, or awaiting intake approval", http.StatusConflict)
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -409,6 +429,14 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 // errAlreadyClosed signals that the ticket was already in the closed phase
 // when a close action was attempted.
 var errAlreadyClosed = errors.New("ticket already closed")
+
+// errNotRequeueable signals that the ticket was unassigned, closed, or still
+// awaiting intake approval when a requeue action was attempted.
+var errNotRequeueable = errors.New("ticket is not requeueable")
+
+// errNotFlaggable signals that the ticket did not exist, or was still
+// awaiting intake approval, when a needs-attention action was attempted.
+var errNotFlaggable = errors.New("ticket is not flaggable")
 
 // actionStart releases an externally-ingested ticket for execution, moving it
 // to unassigned so a shem can claim it. This is the human checkpoint required
@@ -517,14 +545,25 @@ func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, 
 	// flagging a never-run, externally-sourced ticket moves it into a phase
 	// that requeue *does* release, routing around the intake review
 	// (spec Amendment 1).
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase != 'pending-approval'", id).
-		Update("phase", "needs-attention")
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if result.RowsAffected == 0 {
+	// As in actionRequeue, the phase change and its GitHub label write commit
+	// together (finding I4). The WHERE clause is unchanged.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase != 'pending-approval'", id).
+			Update("phase", "needs-attention")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotFlaggable
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, "needs-attention", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotFlaggable) {
 		var count int64
 		if err := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Count(&count).Error; err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -535,6 +574,10 @@ func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		http.Error(w, "ticket is awaiting intake approval", http.StatusConflict)
+		return
+	}
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

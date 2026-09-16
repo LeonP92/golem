@@ -85,7 +85,21 @@ type Ticket struct {
 	// ticket unclaimable again the moment it returns to the pool by ANY
 	// path — requeue, the heartbeat reaper, or one none of these fix rounds
 	// anticipated — without needing to guard each such path individually.
-	BodyHash     string    `gorm:"not null;default:''" json:"body_hash"`
+	BodyHash string `gorm:"not null;default:''" json:"body_hash"`
+	// LabelPhase and LabelSeq record the last golem:<phase> label write
+	// Golem queued for this ticket, and are the only writers of the
+	// transition ordinal in ghsync.LabelKey (finding I4). LabelSeq advances
+	// by one whenever a phase transition queues a label for a phase other
+	// than LabelPhase; re-sending the SAME transition leaves both unchanged,
+	// so it recomputes the same idempotency key and is de-duplicated exactly
+	// as before. Without the ordinal the key was per (ticket, phase), which
+	// silently suppressed the second lap of a cycle such as
+	// implement -> ready-for-review -> implement and left the public issue
+	// advertising a phase the ticket had already left. Both are written only
+	// by enqueueGitHubPhase, inside the same transaction as the phase change
+	// and the outbox insert they describe.
+	LabelPhase   string    `gorm:"not null;default:''" json:"label_phase"`
+	LabelSeq     uint      `gorm:"not null;default:0" json:"label_seq"`
 	PRNumber     *int      `json:"pr_number"`
 	PRURL        string    `json:"pr_url"`
 	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`

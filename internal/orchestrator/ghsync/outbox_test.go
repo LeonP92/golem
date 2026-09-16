@@ -45,7 +45,7 @@ func TestEnqueueSetsNextAttemptImmediately(t *testing.T) {
 	}
 	if err := ghsync.Enqueue(gdb, db.GitHubOutbox{
 		TicketID: "t1", Kind: ghsync.KindLabel, Payload: `{"phase":"plan"}`,
-		IdempotencyKey: ghsync.LabelKey("t1", "plan"),
+		IdempotencyKey: ghsync.LabelKey("t1", "plan", 1),
 	}); err != nil {
 		t.Fatalf("Enqueue: %v", err)
 	}
@@ -63,11 +63,11 @@ func TestEnqueueSetsNextAttemptImmediately(t *testing.T) {
 
 func TestKeysAreDistinct(t *testing.T) {
 	keys := map[string]bool{
-		ghsync.CommentKey("t1", "spec"): true,
-		ghsync.CommentKey("t1", "plan"): true,
-		ghsync.LabelKey("t1", "plan"):   true,
-		ghsync.CloseKey("t1"):           true,
-		ghsync.PRKey("t1"):              true,
+		ghsync.CommentKey("t1", "spec"):  true,
+		ghsync.CommentKey("t1", "plan"):  true,
+		ghsync.LabelKey("t1", "plan", 1): true,
+		ghsync.CloseKey("t1"):            true,
+		ghsync.PRKey("t1"):               true,
 	}
 	if len(keys) != 5 {
 		t.Errorf("got %d distinct keys, want 5 — keys collide", len(keys))

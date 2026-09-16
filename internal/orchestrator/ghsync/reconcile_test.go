@@ -449,7 +449,7 @@ func TestIngestRepoReconcilesOnNotModifiedOnlyWhenOutboxIsParked(t *testing.T) {
 				row := db.GitHubOutbox{
 					TicketID: "t1", Kind: ghsync.KindLabel,
 					Payload:        `{"phase":"implement"}`,
-					IdempotencyKey: ghsync.LabelKey("t1", "implement"),
+					IdempotencyKey: ghsync.LabelKey("t1", "implement", 1),
 					Attempts:       ghsync.MaxAttempts,
 					NextAttempt:    time.Now().Add(-time.Hour),
 				}

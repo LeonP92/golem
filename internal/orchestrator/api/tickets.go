@@ -442,13 +442,33 @@ func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) er
 	if err != nil {
 		return fmt.Errorf("marshal label payload: %w", err)
 	}
+	// The label's idempotency key carries a transition ordinal (finding I4).
+	// It advances only when the phase Golem last queued a label for differs
+	// from the one being queued now, which is precisely the difference
+	// between "the ticket has entered a new phase" (a new side effect that
+	// must reach GitHub) and "the same transition arrived twice" (a shem
+	// re-sending a PATCH it is not sure landed, which must stay a no-op).
+	// ticket MUST therefore be the row as re-read inside tx after this
+	// transaction's own phase write — every caller does that — so LabelPhase
+	// and LabelSeq cannot come from a snapshot another writer has already
+	// superseded.
+	seq := ticket.LabelSeq
+	if ticket.LabelPhase != phase {
+		seq++
+	}
 	if err := ghsync.Enqueue(tx, db.GitHubOutbox{
 		TicketID:       ticket.ID,
 		Kind:           ghsync.KindLabel,
 		Payload:        string(labelPayload),
-		IdempotencyKey: ghsync.LabelKey(ticket.ID, phase),
+		IdempotencyKey: ghsync.LabelKey(ticket.ID, phase, seq),
 	}); err != nil {
 		return fmt.Errorf("enqueue label: %w", err)
+	}
+	if ticket.LabelPhase != phase {
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", ticket.ID).
+			Updates(map[string]any{"label_phase": phase, "label_seq": seq}).Error; err != nil {
+			return fmt.Errorf("record label transition for ticket %s: %w", ticket.ID, err)
+		}
 	}
 
 	// The PR check runs for every phase transition, not just ones with a
