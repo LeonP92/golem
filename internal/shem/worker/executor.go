@@ -291,10 +291,36 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	}
 }
 
+// golemTicketNewArgs builds the argv for `golem ticket new`.
+//
+// The "--" before the description is load-bearing, not cosmetic. The
+// description is a GitHub issue body an untrusted third party wrote, and
+// TicketNew hands its arguments to a flag.FlagSet, which treats anything
+// starting with "-" as a flag. Without the separator:
+//
+//   - Any ordinary markdown body opening with a bullet, a "- [ ]" checklist,
+//     a "---" rule or a "---" front-matter block fails to parse ("flag
+//     provided but not defined" / "bad flag syntax"), the worker posts
+//     needs-attention, and a human requeue fails identically — a permanent
+//     loop that anyone who can open an issue on a watched repo can trigger.
+//   - A body of exactly "--from-issue=N" parses as that flag and takes the
+//     GitHub-fetch branch, so on a co-located orchestrator+shem box (where
+//     GOLEM_GITHUB_TOKEN is in the environment) the shem would fetch an
+//     arbitrary, never-approved issue and use it as the description.
+//
+// Go's flag package stops parsing flags at a bare "--" and returns
+// everything after it from fs.Args(), which is what makes one argument close
+// both cases. See TestGolemTicketNewArgs_SeparatesDescription here and
+// TestTicketNew_DescriptionStartingWithDash in internal/cli, which proves
+// the real FlagSet honours it.
+func golemTicketNewArgs(ticketID, branch, description string) []string {
+	return []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch, "--", description}
+}
+
 // runGolemTicketNew creates the local ticket scaffold (worktree + branch) without
 // invoking Claude. Claude's role starts at brainstorm, after the scaffold exists.
 func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "new", "--ticket-id", ticketID, "--branch", branch, description)
+	cmd := exec.CommandContext(ctx, "golem", golemTicketNewArgs(ticketID, branch, description)...)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
