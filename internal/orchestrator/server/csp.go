@@ -1,9 +1,11 @@
 package server
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"fmt"
+	"html/template"
 	"io/fs"
 	"net/http"
 	"path"
@@ -34,6 +36,19 @@ var inlineScriptRE = regexp.MustCompile(`(?is)<script([^>]*)>(.*?)</script>`)
 // would be meaningless, so such tags are skipped entirely.
 var srcAttrRE = regexp.MustCompile(`(?i)\bsrc\s*=`)
 
+// openScriptTagRE matches every <script ...> opening tag on its own,
+// independent of how (or whether) inlineScriptRE finds a matching close.
+// HTML terminates a script element at a case-insensitive "</script"
+// followed by any of "\t\n\f />=" per the HTML5 spec — not only the exact
+// literal "</script>" inlineScriptRE requires. A tag closed some other way
+// (e.g. "</script >" or "</script/>") would make inlineScriptRE silently
+// skip that pair (or worse, swallow through to a later, unrelated
+// "</script>"), producing a missing or wrong hash with no error. Comparing
+// this count against the number of hashes actually extracted (see
+// extractInlineScriptHashes) turns that silent under-production into a
+// startup error instead.
+var openScriptTagRE = regexp.MustCompile(`(?i)<script([^>]*)>`)
+
 // InlineScriptHashes walks fsys recursively for *.html files (including a
 // partials/ subdirectory) and returns a sorted, de-duplicated list of CSP
 // script-src source tokens ("'sha256-<base64>'"), one per distinct inline
@@ -52,14 +67,23 @@ var srcAttrRE = regexp.MustCompile(`(?i)\bsrc\s*=`)
 // bytes the renderer parses, and callers that do want a disk tree (e.g.
 // scratch test fixtures) can still supply one via os.DirFS.
 //
-// The hash is computed over the exact bytes between '>' and '</script>',
-// unmodified: trimming or normalizing whitespace would compute a hash that
-// does not match what the browser actually parses, silently blocking that
-// script under the resulting policy.
+// The hash is computed over the exact bytes the browser receives, not the
+// source bytes between '>' and '</script>': html/template elides JavaScript
+// comments while rendering (escape.go's stateJSLineCmt drops a "//..." line
+// comment entirely; stateJSBlockCmt collapses a "/* */" block comment to a
+// single space or newline), so an inline script containing a comment is
+// served with bytes that differ from its source — hashing the source would
+// compute a token the browser never matches, silently blocking the script.
+// Each body is round-tripped through html/template in its own <script>
+// context (see renderScriptBody) before hashing, reproducing the exact
+// rendered bytes.
 //
 // An error is returned — never a nil/empty slice — if fsys cannot be
-// walked. Swallowing that error and returning no hashes would silently
-// produce a policy that blocks every inline script on every page; the
+// walked, if a script body cannot be rendered, if a script body contains a
+// template action (see extractInlineScriptHashes), or if the number of
+// hashes extracted from a file doesn't match its number of qualifying
+// opening tags. Swallowing any of these and returning fewer hashes than
+// exist would silently produce a policy that blocks that script; the
 // caller (see Server.Routes) is expected to fall back to CSP mode "off"
 // rather than ship that.
 func InlineScriptHashes(fsys fs.FS) ([]string, error) {
@@ -79,7 +103,11 @@ func InlineScriptHashes(fsys fs.FS) ([]string, error) {
 		if err != nil {
 			return fmt.Errorf("csp: read %s: %w", name, err)
 		}
-		for _, hash := range extractInlineScriptHashes(data) {
+		found, err := extractInlineScriptHashes(data)
+		if err != nil {
+			return fmt.Errorf("csp: %s: %w", name, err)
+		}
+		for _, hash := range found {
 			seen[hash] = struct{}{}
 		}
 		return nil
@@ -98,18 +126,85 @@ func InlineScriptHashes(fsys fs.FS) ([]string, error) {
 
 // extractInlineScriptHashes returns one CSP hash token per inline <script>
 // block (i.e. one with no src attribute) found in an HTML document's raw
-// bytes.
-func extractInlineScriptHashes(data []byte) []string {
+// bytes, hashing the rendered bytes (see renderScriptBody) rather than the
+// source bytes.
+//
+// Two conditions are treated as errors rather than silently producing a
+// partial or wrong result:
+//
+//   - A body containing "{{" is rejected outright: that marks a template
+//     action, whose rendered bytes depend on per-request data, so no
+//     startup-time hash could ever be correct for it.
+//   - The number of hashes produced must equal the number of <script>
+//     opening tags without a src attribute (openScriptTagRE) found in the
+//     same bytes. inlineScriptRE requires a literal "</script>" to close a
+//     block, but HTML itself terminates a script element at "</script"
+//     followed by any of "\t\n\f />=" — a tag closed one of those other
+//     ways would otherwise be silently missed (or worse, folded into a
+//     neighboring script's body) with no error at all.
+func extractInlineScriptHashes(data []byte) ([]string, error) {
 	var hashes []string
 	for _, m := range inlineScriptRE.FindAllSubmatch(data, -1) {
 		attrs, body := m[1], m[2]
 		if srcAttrRE.Match(attrs) {
 			continue
 		}
-		sum := sha256.Sum256(body)
+		if bytes.Contains(body, []byte("{{")) {
+			return nil, fmt.Errorf(`inline <script> contains "{{": its rendered bytes ` +
+				`would depend on per-request data, so no startup-time hash can be correct`)
+		}
+		rendered, err := renderScriptBody(attrs, body)
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256(rendered)
 		hashes = append(hashes, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
 	}
-	return hashes
+
+	openWithoutSrc := 0
+	for _, m := range openScriptTagRE.FindAllSubmatch(data, -1) {
+		if !srcAttrRE.Match(m[1]) {
+			openWithoutSrc++
+		}
+	}
+	if len(hashes) != openWithoutSrc {
+		return nil, fmt.Errorf("found %d <script> opening tag(s) without a src attribute "+
+			"but extracted %d inline script body/bodies — a non-standard closing tag "+
+			`(e.g. "</script >" or "</script/>") may have been missed`, openWithoutSrc, len(hashes))
+	}
+
+	return hashes, nil
+}
+
+// renderScriptBody returns the bytes html/template actually emits for an
+// inline <script>'s body, by parsing and executing that element in
+// isolation as its own tiny template (with attrs preserved, so e.g. a
+// type="application/json" script is classified the same way it would be in
+// the real page). The element opens a fresh JS parsing context regardless
+// of what surrounds it, so the isolated result is byte-identical to the
+// same script rendered as part of the real page — verified against live
+// full-page renders for every inline script this project ships as of fix
+// round 2 (see task-19-report.md).
+//
+// The caller has already rejected any body containing "{{", so this
+// executes with nil data and no custom FuncMap: there are no actions left
+// to evaluate, only literal text for the escaper to normalize.
+func renderScriptBody(attrs, body []byte) ([]byte, error) {
+	const closeTag = "</script>"
+	openTag := "<script" + string(attrs) + ">"
+	tmpl, err := template.New("csp-inline-script").Parse(openTag + string(body) + closeTag)
+	if err != nil {
+		return nil, fmt.Errorf("parse inline script for rendering: %w", err)
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, nil); err != nil {
+		return nil, fmt.Errorf("render inline script: %w", err)
+	}
+	out := buf.Bytes()
+	if len(out) < len(openTag)+len(closeTag) {
+		return nil, fmt.Errorf("rendered inline script is shorter than its own wrapper tags")
+	}
+	return out[len(openTag) : len(out)-len(closeTag)], nil
 }
 
 // BuildPolicy assembles the orchestrator's Content-Security-Policy directive
@@ -134,6 +229,18 @@ func extractInlineScriptHashes(data []byte) []string {
 // icon SVGs are fetched at runtime from api.iconify.design (falling back to
 // api.simplesvg.com / api.unisvg.com) — omitting them renders every icon
 // blank.
+//
+// img-src includes GitHub's own image hosts, targeted rather than a blanket
+// "https:": GitHub issue bodies host inline images on
+// user-images.githubusercontent.com and under github.com/user-attachments/,
+// which marked+DOMPurify turn into real <img> tags when rendering synced
+// issue content. Without these, that content renders with broken images —
+// the same "visible breakage that gets the policy switched off" class of
+// problem as the Iconify hosts above. A path-scoped source
+// (github.com/user-attachments/) is used instead of bare "https://github.com"
+// because a targeted allowlist is worth more than a permissive one here: an
+// <img> with an attacker-chosen src is a real, if minor, exfiltration
+// channel, and nothing else on github.com needs to be an image source.
 func BuildPolicy(scriptHashes []string) string {
 	scriptSrc := make([]string, 0, 2+len(scriptHashes)+4)
 	scriptSrc = append(scriptSrc, "'self'", "'unsafe-eval'")
@@ -149,7 +256,7 @@ func BuildPolicy(scriptHashes []string) string {
 		"default-src 'self'",
 		"script-src " + strings.Join(scriptSrc, " "),
 		"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-		"img-src 'self' data:",
+		"img-src 'self' data: https://user-images.githubusercontent.com https://github.com/user-attachments/",
 		"font-src 'self' data:",
 		"connect-src 'self' https://api.iconify.design https://api.simplesvg.com https://api.unisvg.com",
 		"base-uri 'self'",
