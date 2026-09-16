@@ -25,7 +25,17 @@
   <script src="https://unpkg.com/htmx.org@2.0.3"></script>
   <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+  <!-- DOMPurify is the control on the markdown sink, not one dependency among
+       several: renderMarkdown below assigns marked's output to innerHTML, and
+       marked does no sanitizing. So this one is pinned to an exact version and
+       integrity-checked, unlike the scripts above it. To upgrade: fetch the new
+       file and recompute with
+         openssl dgst -sha384 -binary purify.min.js | openssl base64 -A
+       A mismatch makes the browser refuse the script, which fails closed —
+       renderMarkdown's guard then takes the textContent path. -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js"
+          integrity="sha384-uUMu9JDY09vBzRf9SPcK2VgUj+W/70J6Soc+Dded5P474ElQ63iv9j5N3DE7Kp3N"
+          crossorigin="anonymous"></script>
   <script src="https://code.iconify.design/3/3.1.0/iconify.min.js"></script>
   <style>
     .log-feed { font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace; font-size: 0.8rem; line-height: 1.6; }
