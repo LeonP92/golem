@@ -155,7 +155,14 @@ func NewHandlersWithMap(gdb *gorm.DB, tmpls map[string]*template.Template, secur
 func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", h.loginPage)
 	mux.HandleFunc("POST /login", h.loginSubmit)
-	mux.HandleFunc("GET /logout", h.logout)
+	// POST, with the token (re-review finding F3). Logging out is a state
+	// change, and as a GET it was reachable from the markdown sink: <img src>
+	// survives the sanitizer by design, so `![](/logout)` in an issue body
+	// logged the operator out on every page load of any page that rendered
+	// it. RequireCSRF passes safe methods through, quite correctly — the bug
+	// was that logout was not a safe method.
+	mux.Handle("POST /logout",
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.logout))))
 	mux.Handle("GET /dashboard", auth.RequireSession(h.DB)(http.HandlerFunc(h.dashboard)))
 	mux.Handle("GET /shems", auth.RequireSession(h.DB)(http.HandlerFunc(h.shems)))
 	mux.Handle("GET /settings/github", auth.RequireSession(h.DB)(http.HandlerFunc(h.githubSettings)))
@@ -238,6 +245,8 @@ func (h *Handlers) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
+// logout clears the session cookie. It is registered for POST only and behind
+// RequireCSRF — see RegisterRoutes.
 func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:    "golem_session",

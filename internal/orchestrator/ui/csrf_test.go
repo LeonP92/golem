@@ -4,6 +4,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -244,5 +246,128 @@ func TestGitHubSettingsSubmit_RejectsTriggerLabelInGolemNamespace(t *testing.T) 
 				t.Errorf("Label = %q, want %q", repos[0].Label, tc.wantStored)
 			}
 		})
+	}
+}
+
+// TestLogoutIsNotReachableByGET covers re-review finding F3.
+//
+// /logout cleared the session cookie on a GET. RequireCSRF deliberately lets
+// safe methods through, which is correct — the bug was that logout was not a
+// safe method. <img src> survives the markdown sanitizer by design (img-src
+// https: is deliberate), so `![](/logout)` in an issue body, reaching any
+// .md-content sink, logged the operator out on every page load. Annoyance and
+// denial only: no ticket state changes and no privilege is gained. It is still
+// a state-changing GET reachable from untrusted text.
+func TestLogoutIsNotReachableByGET(t *testing.T) {
+	gdb, err := db.Open(":memory:")
+	if err != nil {
+		t.Fatalf("db.Open: %v", err)
+	}
+	user := db.User{Username: "leon", PasswordHash: "x"}
+	gdb.Create(&user)
+	rec := httptest.NewRecorder()
+	if err := auth.CreateSession(gdb, rec, user.ID, false); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	cookie := rec.Result().Cookies()[0]
+
+	tmpls, err := ui.LoadTemplates()
+	if err != nil {
+		t.Fatalf("LoadTemplates: %v", err)
+	}
+	h := ui.NewHandlersWithMap(gdb, tmpls, false)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	// clearsSession reports whether the response tells the browser to drop
+	// the session cookie, which is the whole of what logout does.
+	clearsSession := func(w *httptest.ResponseRecorder) bool {
+		for _, c := range w.Result().Cookies() {
+			if c.Name == "golem_session" && c.MaxAge < 0 {
+				return true
+			}
+		}
+		return false
+	}
+
+	tests := []struct {
+		name      string
+		build     func() *http.Request
+		wantClear bool
+		why       string
+	}{
+		{
+			name: "GET, as an injected <img src> would issue it",
+			build: func() *http.Request {
+				req := httptest.NewRequest(http.MethodGet, "/logout", nil)
+				req.AddCookie(cookie)
+				return req
+			},
+			wantClear: false,
+			why:       "a GET must not change state; this is the shape `![](/logout)` produces",
+		},
+		{
+			name: "POST without a CSRF token",
+			build: func() *http.Request {
+				req := httptest.NewRequest(http.MethodPost, "/logout", nil)
+				req.AddCookie(cookie)
+				return req
+			},
+			wantClear: false,
+			why:       "a cross-site POST has the cookie but cannot read the token",
+		},
+		{
+			name: "POST with the session's CSRF token, as the nav form sends it",
+			build: func() *http.Request {
+				req := httptest.NewRequest(http.MethodPost, "/logout",
+					strings.NewReader(url.Values{
+						"csrf_token": {auth.CSRFTokenForSession(cookie.Value)},
+					}.Encode()))
+				req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+				req.AddCookie(cookie)
+				return req
+			},
+			wantClear: true,
+			why:       "the operator must still be able to log out",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, tc.build())
+			if got := clearsSession(w); got != tc.wantClear {
+				t.Errorf("clears the session = %v, want %v — %s (status %d)",
+					got, tc.wantClear, tc.why, w.Code)
+			}
+		})
+	}
+}
+
+// TestLayoutLogoutControlPostsWithAToken keeps the server-side change above
+// from breaking the only way an operator logs out. A plain <a href> can no
+// longer reach the handler, so the nav control has to be a form.
+func TestLayoutLogoutControlPostsWithAToken(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("templates", "layout.html"))
+	if err != nil {
+		t.Fatalf("read layout.html: %v", err)
+	}
+	body := string(src)
+	if strings.Contains(body, `<a href="/logout"`) {
+		t.Error("the nav still links to /logout with an anchor; a GET no longer logs out")
+	}
+	if !strings.Contains(body, `action="/logout" method="post"`) {
+		t.Error("the nav has no POST form for /logout, so there is no way to log out")
+	}
+	idx := strings.Index(body, `action="/logout"`)
+	if idx == -1 {
+		return // already reported above
+	}
+	form := body[idx:]
+	if end := strings.Index(form, "</form>"); end != -1 {
+		form = form[:end]
+	}
+	if !strings.Contains(form, `name="csrf_token"`) {
+		t.Error("the logout form carries no csrf_token field, so RequireCSRF will refuse it")
 	}
 }

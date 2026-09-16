@@ -117,10 +117,15 @@
       <button id="theme-toggle" class="btn btn-ghost btn-sm btn-square text-neutral-content" title="Toggle theme" aria-label="Toggle dark/light mode">
         <span class="iconify text-lg" data-icon="heroicons:moon" id="theme-icon"></span>
       </button>
-      <a href="/logout" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
-        <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
-        Logout
-      </a>
+      <!-- A form, not a link: logging out is a state change, and as a GET it
+           was reachable from any markdown sink via `![](/logout)`. -->
+      <form action="/logout" method="post" class="inline">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <button type="submit" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
+          <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
+          Logout
+        </button>
+      </form>
     </div>
   </nav>
   {{end}}
