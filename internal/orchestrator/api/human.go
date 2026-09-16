@@ -19,7 +19,8 @@ import (
 
 // RegisterHumanRoutes adds human-input management and ticket action routes to mux.
 func (h *Handlers) RegisterHumanRoutes(mux *http.ServeMux) {
-	// Shem-facing: CRUD for human inputs (API key auth).
+	// Shem-facing: CRUD for human inputs (API key auth, scoped to the
+	// calling shem's own ticket — see writeTicketOwnership).
 	mux.Handle("POST /api/tickets/{id}/human-inputs",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.createHumanInput)))
 	mux.Handle("GET /api/tickets/{id}/human-inputs",
@@ -37,12 +38,15 @@ func (h *Handlers) RegisterHumanRoutes(mux *http.ServeMux) {
 		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.ticketAction))))
 }
 
-// createHumanInput creates a new HumanInput for a ticket.
+// createHumanInput creates a new HumanInput for the calling shem's ticket.
 // Body: {"kind": "approval"|"feedback"|"question_answer"|"blocker_ack", "prompt": "..."}
 func (h *Handlers) createHumanInput(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromPath(r)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if !h.writeTicketOwnership(w, r, id) {
 		return
 	}
 
@@ -81,6 +85,9 @@ func (h *Handlers) listHumanInputs(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid id", http.StatusBadRequest)
 		return
 	}
+	if !h.writeTicketOwnership(w, r, id) {
+		return
+	}
 
 	query := h.DB.Where("ticket_id = ?", id)
 	if kind := r.URL.Query().Get("kind"); kind != "" {
@@ -106,6 +113,9 @@ func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromPath(r)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if !h.writeTicketOwnership(w, r, id) {
 		return
 	}
 	rawInputID := r.PathValue("inputID")

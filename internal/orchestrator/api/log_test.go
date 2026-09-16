@@ -22,6 +22,7 @@ func TestPostLog_AssignsSequenceNum(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("k"), bcrypt.MinCost)
 	shem := db.Shem{Name: "s", APIKeyHash: string(hash), Repos: "[]", Status: "online"}
 	gdb.Create(&shem)
+	gdb.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Update("assigned_shem", shem.ID)
 
 	broker := sse.NewBroker()
 	h := api.NewHandlers(gdb, ws.NewHub(), broker)
@@ -67,6 +68,7 @@ func TestPostLog_CreatesHumanInput_WhenToRoleHuman(t *testing.T) {
 	hash, _ := bcrypt.GenerateFromPassword([]byte("k"), bcrypt.MinCost)
 	shem := db.Shem{Name: "s", APIKeyHash: string(hash), Repos: "[]", Status: "online"}
 	gdb.Create(&shem)
+	gdb.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Update("assigned_shem", shem.ID)
 
 	h := api.NewHandlers(gdb, ws.NewHub(), sse.NewBroker())
 	mux := http.NewServeMux()

@@ -430,6 +430,44 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 // errNotOwner signals that the ticket is not assigned to the calling shem.
 var errNotOwner = errors.New("ticket not owned by this shem")
 
+// writeTicketOwnership reports whether the ticket is assigned to the shem
+// this request authenticated as, writing the refusal response itself and
+// returning false when it is not. Callers return immediately on false.
+//
+// Finding S8: postLog, postLogDocument, createHumanInput, listHumanInputs
+// and resolveHumanInput checked that the caller was *a* shem and never that
+// it was *this ticket's* shem, so any registered shem could write into any
+// ticket's log — which is the dashboard's markdown sink — and overwrite any
+// ticket's SPEC or PLAN. That matters more on this branch than it did
+// before it, because a GitHub-sourced ticket's text is now written by
+// strangers and drives an agent that holds the shem's API key.
+//
+// 409 and this message match the convention the newer shem writes already
+// use (branch-pushed, PATCH phase, revise-claim): a request that is
+// authenticated but aimed at someone else's ticket is a conflict, not an
+// authentication failure, and the response says nothing about whether the
+// ticket exists. The shem client only ever calls these for a ticket it has
+// claimed, so no legitimate caller sees this.
+func (h *Handlers) writeTicketOwnership(w http.ResponseWriter, r *http.Request, ticketID string) bool {
+	shem := auth.ShemFromRequest(r)
+	if shem == nil {
+		http.Error(w, errNotOwner.Error(), http.StatusConflict)
+		return false
+	}
+	var count int64
+	if err := h.DB.Model(&db.Ticket{}).
+		Where("id = ? AND assigned_shem = ?", ticketID, shem.ID).
+		Count(&count).Error; err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return false
+	}
+	if count == 0 {
+		http.Error(w, errNotOwner.Error(), http.StatusConflict)
+		return false
+	}
+	return true
+}
+
 // enqueueGitHubPhase queues the label and milestone-comment writes for a phase
 // transition on a GitHub-linked ticket. Unlinked tickets (nil IssueNumber) are
 // a no-op — every ticket created through the web UI is unlinked, and those

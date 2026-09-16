@@ -40,6 +40,22 @@ func setupAPIKeyTest(t *testing.T) (*api.Handlers, *http.ServeMux, string) {
 	return h, mux, apiKey
 }
 
+// assignTicketToShem makes ticketID owned by the named shem. The shem-facing
+// log and human-input endpoints are scoped to the calling shem's own ticket
+// (finding S8), and the real flow always claims a ticket before writing to
+// it, so a test that drives those endpoints has to claim it too.
+func assignTicketToShem(t *testing.T, h *api.Handlers, ticketID, shemName string) {
+	t.Helper()
+	var shem db.Shem
+	if err := h.DB.Where("name = ?", shemName).First(&shem).Error; err != nil {
+		t.Fatalf("lookup shem %s: %v", shemName, err)
+	}
+	if err := h.DB.Model(&db.Ticket{}).Where("id = ?", ticketID).
+		Update("assigned_shem", shem.ID).Error; err != nil {
+		t.Fatalf("assign ticket to %s: %v", shemName, err)
+	}
+}
+
 func makeSessionCookie(t *testing.T, h *api.Handlers, userID uint) *http.Cookie {
 	t.Helper()
 	rec := httptest.NewRecorder()
@@ -424,6 +440,7 @@ func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	body, _ := json.Marshal(map[string]string{"kind": "approval", "prompt": "Please review the spec."})
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs", ticket.ID)
@@ -452,10 +469,14 @@ func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 
 // TestRequestApproval_EmptyPrompt verifies 400 when prompt is empty.
 func TestRequestApproval_EmptyPrompt(t *testing.T) {
-	_, mux, apiKey := setupAPIKeyTest(t)
+	h, mux, apiKey := setupAPIKeyTest(t)
+
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
+	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	body, _ := json.Marshal(map[string]string{"kind": "approval", "prompt": ""})
-	req := httptest.NewRequest(http.MethodPost, "/api/tickets/some-uuid-here/human-inputs", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/human-inputs", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("X-Shem-Name", "test-shem")
@@ -474,6 +495,7 @@ func TestPendingApproval_ReturnsPending(t *testing.T) {
 
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "Review spec"}
 	h.DB.Create(&hi)
 
@@ -885,6 +907,7 @@ func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs?kind=approval&resolved=false", ticket.ID)
 	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)

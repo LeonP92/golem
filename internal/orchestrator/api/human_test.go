@@ -45,6 +45,7 @@ func TestPendingHumanInput_ReturnsOldest(t *testing.T) {
 
 	// Seed a shem with an API key for auth.
 	seedShemForHuman(t, h, "shem-human-1", "humankey1")
+	assignTicketToShem(t, h, ticket.ID, "shem-human-1")
 
 	now := time.Now()
 	// Seed two unresolved inputs (oldest first).
@@ -99,6 +100,7 @@ func TestAckHumanInput(t *testing.T) {
 
 	// Seed a shem with an API key for auth.
 	seedShemForHuman(t, h, "shem-human-2", "humankey2")
+	assignTicketToShem(t, h, ticket.ID, "shem-human-2")
 
 	input := db.HumanInput{
 		TicketID:  ticket.ID,

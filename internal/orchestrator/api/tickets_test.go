@@ -258,6 +258,7 @@ func TestAppendLog(t *testing.T) {
 		Phase:       "in-progress",
 	}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "log-shem")
 
 	body, _ := json.Marshal(map[string]string{
 		"entry_type": "message",
