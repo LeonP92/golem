@@ -296,7 +296,7 @@ func TestCreateTicket_SetsCreatedByFromSession(t *testing.T) {
 		"description": "created by test",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -330,7 +330,7 @@ func TestCreateTicket_IgnoresClientSuppliedCreatedByUserID(t *testing.T) {
 		"created_by_user_id": user.ID + 999,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -369,7 +369,7 @@ func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 	h.DB.Create(&legacy)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/tickets", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -394,7 +394,7 @@ func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/tickets/"+owned.ID, nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -423,7 +423,7 @@ func TestCreateTicket_RequiresTitle(t *testing.T) {
 		"description": "missing title",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -443,7 +443,7 @@ func TestCreateTicket_ComputesBranchFromTitle(t *testing.T) {
 		"description": "branch computation test",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

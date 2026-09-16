@@ -49,7 +49,7 @@ func TestGitHubSettingsPage_EscapesUserSuppliedValues(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/settings/github", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -90,12 +90,64 @@ func TestMarkdownSinkIsSanitized(t *testing.T) {
 	if strings.Contains(body, "innerHTML = marked.parse(") {
 		t.Error("unsanitized marked.parse output is assigned to innerHTML")
 	}
-	if !strings.Contains(body, "DOMPurify.sanitize(") {
-		t.Error("renderMarkdown does not call DOMPurify.sanitize")
+	if !strings.Contains(body, ".sanitize(marked.parse(") {
+		t.Error("renderMarkdown does not pass marked's output through the sanitizer")
 	}
 	// Fail closed: the code must handle DOMPurify being absent.
 	if !strings.Contains(body, "typeof DOMPurify") {
 		t.Error("renderMarkdown does not guard against DOMPurify being unavailable")
+	}
+
+	// Finding S2: the guard read `typeof DOMPurify === 'object'`, but the
+	// UMD build the CDN tag above serves exports a FUNCTION. The guard was
+	// therefore always false and every .md-content element silently took the
+	// textContent fallback — markdown rendering was broken everywhere and
+	// Task 18's sanitizer mitigation had never executed in a browser.
+	// Verified in jsdom against the real CDN bytes of dompurify@3 (3.4.15):
+	// typeof DOMPurify === "function", guard false.
+	if strings.Contains(body, "typeof DOMPurify === 'object'") {
+		t.Error("the sanitizer guard tests only for 'object'; DOMPurify's UMD build is a function, " +
+			"so this guard is always false and the sanitizer never runs (finding S2)")
+	}
+	if !strings.Contains(body, "typeof purifier === 'function'") {
+		t.Error("the sanitizer guard does not accept a function-valued DOMPurify namespace")
+	}
+
+	// Finding S1: DOMPurify's DEFAULTS preserve <form action>, <button
+	// type=submit> and style=, which is a one-click same-origin intake-gate
+	// bypass once the guard above is fixed. The sanitizer must be called
+	// with an explicit deny list, not with no configuration at all.
+	forbidden := []struct {
+		kind  string
+		token string
+	}{
+		{"tag", "'form'"}, {"tag", "'input'"}, {"tag", "'button'"},
+		{"tag", "'select'"}, {"tag", "'textarea'"}, {"tag", "'option'"},
+		{"tag", "'label'"}, {"tag", "'fieldset'"}, {"tag", "'style'"},
+		{"attr", "'action'"}, {"attr", "'formaction'"}, {"attr", "'form'"},
+	}
+	cfgStart := strings.Index(body, "var MD_SANITIZE_CONFIG")
+	if cfgStart == -1 {
+		t.Fatal("renderMarkdown passes no explicit sanitizer configuration (finding S1)")
+	}
+	cfgEnd := strings.Index(body[cfgStart:], "};")
+	if cfgEnd == -1 {
+		t.Fatal("could not locate the end of the sanitizer configuration literal")
+	}
+	cfg := body[cfgStart : cfgStart+cfgEnd]
+	for _, f := range forbidden {
+		if !strings.Contains(cfg, f.token) {
+			t.Errorf("sanitizer config does not forbid the %s %s", f.kind, f.token)
+		}
+	}
+	// data-hx-* is what ALLOW_DATA_ATTR covers: FORBID_ATTR matches exact
+	// names, never patterns, and DOMPurify permits every data-* attribute by
+	// default.
+	if !strings.Contains(cfg, "ALLOW_DATA_ATTR: false") {
+		t.Error("sanitizer config leaves data-* attributes allowed, so data-hx-* survives")
+	}
+	if !strings.Contains(body, "MD_SANITIZE_CONFIG)") {
+		t.Error("the sanitizer configuration is declared but never passed to sanitize()")
 	}
 
 	// Per-element isolation: forEach has no exception isolation, so if
@@ -146,7 +198,7 @@ func TestGitHubSettingsPageListsRepos(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/settings/github", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -224,7 +276,7 @@ func TestGitHubSettingsPage_PlaceholderRepoHasNoSyncButton(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/settings/github", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -305,7 +357,7 @@ func TestGitHubSettingsSubmit(t *testing.T) {
 
 			req := httptest.NewRequest(http.MethodPost, "/settings/github", strings.NewReader(tc.formBody))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w = httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -367,7 +419,7 @@ func TestTicketDetailShowsIssueLinkAndReadOnlyTitle(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-001", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -425,7 +477,7 @@ func TestTicketDetailDescriptionIsEscapedPlainText(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-004", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -496,7 +548,7 @@ func TestTicketDetailNonLinkedTicketUnchanged(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-002", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -579,7 +631,7 @@ func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 			h.RegisterRoutes(mux)
 
 			req := httptest.NewRequest(http.MethodGet, "/tickets/"+ticket.ID, nil)
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w = httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -646,7 +698,7 @@ func TestTicketDetailSuppressesRequeueOnlyForPendingApproval(t *testing.T) {
 			h.RegisterRoutes(mux)
 
 			req := httptest.NewRequest(http.MethodGet, "/tickets/"+ticket.ID, nil)
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w = httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -702,7 +754,7 @@ func TestDashboardShowsIssueBadgeForLinkedTicket(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

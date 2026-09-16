@@ -35,7 +35,7 @@ const defaultManualSyncCooldown = time.Minute
 // holding a valid API key must not be able to drive GitHub polling.
 func (h *Handlers) RegisterGitHubRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/github/repos/{id}/sync",
-		auth.RequireSession(h.DB)(http.HandlerFunc(h.manualSync)))
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.manualSync))))
 	mux.Handle("POST /api/tickets/{id}/branch-pushed",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.branchPushed)))
 }

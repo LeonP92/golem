@@ -28,6 +28,7 @@
             <td class="font-mono text-sm">{{.Owner}}/{{.Name}}</td>
             <td>
               <form method="post" action="/settings/github">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
                 <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
                 <input type="checkbox" name="enabled" class="checkbox checkbox-sm"
                        {{if .Enabled}}checked{{end}} data-autosubmit>
@@ -35,6 +36,7 @@
             </td>
             <td>
               <form method="post" action="/settings/github" class="flex items-center gap-1">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
                 <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
                 <input type="text" name="label" value="{{.Label}}" size="10"
                        class="input input-bordered input-xs">
@@ -84,7 +86,14 @@ document.querySelectorAll('.sync-now').forEach(function (btn) {
     btn.disabled = true;
     btn.textContent = 'Syncing…';
 
-    fetch('/api/github/repos/' + id + '/sync', { method: 'POST' })
+    // The manual-sync endpoint is session-authenticated and state-changing,
+    // so it carries the same CSRF token every other such POST does. Read it
+    // from the first <meta> in document order — the server-rendered one.
+    var csrfEl = document.querySelector('meta[name="csrf-token"]');
+    fetch('/api/github/repos/' + id + '/sync', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfEl ? csrfEl.getAttribute('content') : '' }
+    })
       .then(function (r) {
         // auth.RequireSession redirects an expired/missing session to
         // /login (fetch follows that transparently), so a "successful"

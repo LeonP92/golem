@@ -33,7 +33,7 @@ func (h *Handlers) githubSettings(w http.ResponseWriter, r *http.Request) {
 			RepoRemote: remote, Owner: owner, Name: name, Label: "golem",
 		})
 	}
-	h.render(w, "github_settings", map[string]any{"Repos": repos, "Nav": "github"})
+	h.render(w, r, "github_settings", map[string]any{"Repos": repos, "Nav": "github"})
 }
 
 // githubSettingsSubmit upserts one repo's settings from the form.

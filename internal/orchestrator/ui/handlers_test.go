@@ -137,7 +137,7 @@ func TestTicketNewSubmit_SetsCreatedByFromSession(t *testing.T) {
 	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&title=Test+Ticket&description=test+ticket")
 	req := httptest.NewRequest("POST", "/tickets/new", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -178,7 +178,7 @@ func TestTicketNewSubmit_MissingTitleRerendersForm(t *testing.T) {
 	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&description=test+ticket")
 	req := httptest.NewRequest("POST", "/tickets/new", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

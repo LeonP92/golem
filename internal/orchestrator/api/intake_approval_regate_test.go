@@ -33,7 +33,7 @@ func doStart(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, ticketID str
 	body, _ := json.Marshal(map[string]string{"action": "start"})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticketID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	return w
@@ -345,7 +345,7 @@ func TestApprovedTicketEditedAfterClaimNotReclaimableViaRequeue(t *testing.T) {
 	requeueBody, _ := json.Marshal(map[string]string{"action": "requeue"})
 	requeueReq := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/actions", bytes.NewReader(requeueBody))
 	requeueReq.Header.Set("Content-Type", "application/json")
-	requeueReq.AddCookie(cookie)
+	withSession(requeueReq, cookie)
 	requeueW := httptest.NewRecorder()
 	mux.ServeHTTP(requeueW, requeueReq)
 	if requeueW.Code != http.StatusNoContent {

@@ -302,6 +302,9 @@ func (e *githubTestEnv) doAction(t *testing.T, ticketID, action string) int {
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticketID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(e.cookie)
+	// The dashboard sends this header on every htmx request (see
+	// layout.html); auth.RequireCSRF refuses the POST without it.
+	req.Header.Set(auth.CSRFHeader, auth.CSRFTokenForSession(e.cookie.Value))
 	w := httptest.NewRecorder()
 	e.mux.ServeHTTP(w, req)
 	return w.Code

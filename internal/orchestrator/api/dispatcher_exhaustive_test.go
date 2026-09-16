@@ -220,7 +220,7 @@ func TestEveryDispatcherActionOnPendingApprovalTicket(t *testing.T) {
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(raw))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 

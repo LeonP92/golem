@@ -17,6 +17,7 @@
     {{end}}
 
     <form method="POST" action="/tickets/new" class="flex flex-col gap-4">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
 
       <div class="form-control">
         <label class="label">

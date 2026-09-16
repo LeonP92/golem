@@ -105,7 +105,7 @@ func TestManualSync(t *testing.T) {
 			repo := seedSyncRepo(t, h, true, tt.lastSync)
 
 			req := httptest.NewRequest(http.MethodPost, syncURL(repo.ID), nil)
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			rec := httptest.NewRecorder()
 			mux.ServeHTTP(rec, req)
 
@@ -215,7 +215,7 @@ func TestManualSync_UnknownRepoReturns404(t *testing.T) {
 	_, cookie := seedSessionUser(t, h.DB, "sync-admin")
 
 	req := httptest.NewRequest(http.MethodPost, syncURL(999), nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -239,7 +239,7 @@ func TestManualSync_DisabledRepoReturns409(t *testing.T) {
 	repo := seedSyncRepo(t, h, false, nil)
 
 	req := httptest.NewRequest(http.MethodPost, syncURL(repo.ID), nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
@@ -272,7 +272,7 @@ func TestManualSync_NilSyncReturns503(t *testing.T) {
 	repo := seedSyncRepo(t, h, true, nil)
 
 	req := httptest.NewRequest(http.MethodPost, syncURL(repo.ID), nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 

@@ -120,7 +120,7 @@ func TestActionCloseEnqueuesGitHubCloseWrite(t *testing.T) {
 			doClose := func() int {
 				req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/actions", bytes.NewReader(body))
 				req.Header.Set("Content-Type", "application/json")
-				req.AddCookie(cookie)
+				withSession(req, cookie)
 				w := httptest.NewRecorder()
 				mux.ServeHTTP(w, req)
 				return w.Code

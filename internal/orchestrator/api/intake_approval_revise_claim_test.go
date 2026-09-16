@@ -34,7 +34,7 @@ func doRequestChanges(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, tic
 	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": feedback})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticketID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	return w

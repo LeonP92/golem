@@ -119,7 +119,7 @@ func TestApproveTicket_TransitionsPhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -156,7 +156,7 @@ func TestApproveTicket_PlanToImplement(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -182,7 +182,7 @@ func TestApproveTicket_WrongPhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -209,7 +209,7 @@ func TestAnswerHumanInput_ResolvesAndLogs(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -251,7 +251,7 @@ func TestAnswerHumanInput_MissingFields(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -273,7 +273,7 @@ func TestRequeueTicket_TransitionsToUnassigned(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -310,7 +310,7 @@ func TestRequeueTicket_WrongPhase(t *testing.T) {
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -334,7 +334,7 @@ func TestRequeueTicket_AnyActivePhase(t *testing.T) {
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -356,7 +356,7 @@ func TestCloseTicket_TransitionsToClosed(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -382,7 +382,7 @@ func TestCloseTicket_WrongPhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -402,7 +402,7 @@ func TestNeedsAttentionTicket(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -518,7 +518,7 @@ func TestActionRequestChanges_FromReadyForReview_MovesToRevisingAndPushes(t *tes
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -575,7 +575,7 @@ func TestActionRequestChanges_FromReadyForReview_NoAssignedShem_Conflict(t *test
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -606,7 +606,7 @@ func TestActionRequestChanges_AlreadyRevising_FallsThroughTo404(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -638,7 +638,7 @@ func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testin
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -734,7 +734,7 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -778,7 +778,7 @@ func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -814,7 +814,7 @@ func TestRequeueActionRejectsPendingApprovalTicket(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -846,7 +846,7 @@ func TestNeedsAttentionActionRejectsPendingApprovalTicket(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -870,7 +870,7 @@ func TestNeedsAttentionAction_MissingTicketReturns404(t *testing.T) {
 	body, _ := json.Marshal(map[string]string{"action": "needs-attention"})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/does-not-exist/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 

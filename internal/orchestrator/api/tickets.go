@@ -98,7 +98,8 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 
 // RegisterTicketRoutes adds ticket-related routes to mux.
 func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.createTicket)))
+	mux.Handle("POST /api/tickets",
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.createTicket))))
 	mux.Handle("GET /api/tickets", auth.RequireSession(h.DB)(http.HandlerFunc(h.listTickets)))
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
 	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))

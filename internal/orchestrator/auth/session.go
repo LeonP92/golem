@@ -53,6 +53,11 @@ func CreateSession(gdb *gorm.DB, w http.ResponseWriter, userID uint, secure bool
 // looks up db.Session (checking expires_at > now), loads db.User,
 // stores *db.User in request context via sessionUserKey.
 // Redirects to /login on any failure.
+//
+// It also stores this session's CSRF token (see CSRFTokenForSession) in the
+// context, which is where both RequireCSRF and the templates read it from.
+// Doing it here rather than in RequireCSRF means a GET that only renders the
+// token still gets one without being wrapped in the enforcing middleware.
 func RequireSession(gdb *gorm.DB) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,6 +80,9 @@ func RequireSession(gdb *gorm.DB) func(http.Handler) http.Handler {
 				return
 			}
 			ctx := context.WithValue(r.Context(), sessionUserKey, &user)
+			// Derived from the raw cookie value, which is HttpOnly and
+			// therefore unreadable by page content — see CSRFTokenForSession.
+			ctx = context.WithValue(ctx, csrfTokenKey, CSRFTokenForSession(cookie.Value))
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})
 	}

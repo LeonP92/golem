@@ -19,7 +19,7 @@ func doTicketAction(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, ticke
 	body, _ := json.Marshal(map[string]string{"action": action})
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/tickets/%s/actions", ticketID), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	return w

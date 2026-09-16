@@ -159,9 +159,13 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /dashboard", auth.RequireSession(h.DB)(http.HandlerFunc(h.dashboard)))
 	mux.Handle("GET /shems", auth.RequireSession(h.DB)(http.HandlerFunc(h.shems)))
 	mux.Handle("GET /settings/github", auth.RequireSession(h.DB)(http.HandlerFunc(h.githubSettings)))
-	mux.Handle("POST /settings/github", auth.RequireSession(h.DB)(http.HandlerFunc(h.githubSettingsSubmit)))
+	// State-changing and session-authenticated: same exposure as the ticket
+	// action dispatcher (finding S1), so it carries the same CSRF token.
+	mux.Handle("POST /settings/github",
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.githubSettingsSubmit))))
 	mux.Handle("GET /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewForm)))
-	mux.Handle("POST /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewSubmit)))
+	mux.Handle("POST /tickets/new",
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.ticketNewSubmit))))
 	mux.Handle("GET /tickets/{id}", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketDetail)))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -173,7 +177,13 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // render executes the named page template (wrapping in the layout).
-func (h *Handlers) render(w http.ResponseWriter, page string, data any) {
+//
+// It injects "CSRFToken" into the page data for every map-shaped payload, so
+// the layout can publish it once (as a <meta>, which every htmx request then
+// picks up) and individual forms can embed it as a hidden field, without each
+// handler having to remember. A page rendered outside a session — /login —
+// gets an empty token, which RequireCSRF rejects rather than accepts.
+func (h *Handlers) render(w http.ResponseWriter, r *http.Request, page string, data any) {
 	// Prefer the per-page map; fall back to the single legacy tmpl.
 	var t *template.Template
 	if h.tmpls != nil {
@@ -185,6 +195,9 @@ func (h *Handlers) render(w http.ResponseWriter, page string, data any) {
 		http.Error(w, "templates not loaded", http.StatusInternalServerError)
 		return
 	}
+	if m, ok := data.(map[string]any); ok {
+		m["CSRFToken"] = auth.CSRFToken(r)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
@@ -194,7 +207,7 @@ func (h *Handlers) render(w http.ResponseWriter, page string, data any) {
 // --- login ---
 
 func (h *Handlers) loginPage(w http.ResponseWriter, r *http.Request) {
-	h.render(w, "login", map[string]any{
+	h.render(w, r, "login", map[string]any{
 		"Error": r.URL.Query().Get("error") != "",
 	})
 }
@@ -291,7 +304,7 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, "dashboard", map[string]any{
+	h.render(w, r, "dashboard", map[string]any{
 		"Tickets": rows,
 		"Nav":     "dashboard",
 	})
@@ -319,7 +332,7 @@ func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	h.render(w, "shems", map[string]any{
+	h.render(w, r, "shems", map[string]any{
 		"Shems": rows,
 		"Nav":   "shems",
 	})
@@ -352,7 +365,7 @@ func (h *Handlers) shemsRepos() []string {
 }
 
 func (h *Handlers) ticketNewForm(w http.ResponseWriter, r *http.Request) {
-	h.render(w, "ticket_new", map[string]any{
+	h.render(w, r, "ticket_new", map[string]any{
 		"Form":           ticketForm{BaseBranch: "main"},
 		"Error":          "",
 		"AvailableRepos": h.shemsRepos(),
@@ -372,7 +385,7 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		Description: r.FormValue("description"),
 	}
 	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
-		h.render(w, "ticket_new", map[string]any{
+		h.render(w, r, "ticket_new", map[string]any{
 			"Form":           form,
 			"Error":          "All fields are required.",
 			"AvailableRepos": h.shemsRepos(),
@@ -395,7 +408,7 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		ticket.CreatedByUserID = &user.ID
 	}
 	if err := h.DB.Create(&ticket).Error; err != nil {
-		h.render(w, "ticket_new", map[string]any{
+		h.render(w, r, "ticket_new", map[string]any{
 			"Form":           form,
 			"Error":          "Failed to create ticket.",
 			"AvailableRepos": h.shemsRepos(),
@@ -454,7 +467,7 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 		pending = &hi
 	}
 
-	h.render(w, "ticket_detail", map[string]any{
+	h.render(w, r, "ticket_detail", map[string]any{
 		"Ticket":        ticket,
 		"CreatedByName": createdBy,
 		"LogEntries":    logEntries,

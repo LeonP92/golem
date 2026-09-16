@@ -27,9 +27,14 @@ func (h *Handlers) RegisterHumanRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/tickets/{id}/human-inputs/{inputID}",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resolveHumanInput)))
 
-	// Human-facing: single action dispatcher (session auth).
+	// Human-facing: single action dispatcher (session auth + CSRF).
+	// RequireCSRF sits INSIDE RequireSession because it reads the expected
+	// token out of the context RequireSession populates. Without it, markup
+	// injected into the dashboard's markdown sink can make the operator's
+	// own browser POST here — same origin, so SameSite=Lax does not help —
+	// and "start" is the sole writer of intake_approved (finding S1).
 	mux.Handle("POST /api/tickets/{id}/actions",
-		auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketAction)))
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.ticketAction))))
 }
 
 // createHumanInput creates a new HumanInput for a ticket.
@@ -136,6 +141,11 @@ func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// maxActionFormBytes caps the in-memory portion of a multipart action
+// submission. The dashboard only ever sends urlencoded bodies; multipart is
+// accepted for hand-written clients, and does not need to be large.
+const maxActionFormBytes = 1 << 20
+
 // ticketAction is the single dispatcher for all human-initiated ticket actions.
 // Body: {"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer"|"start",
 //
@@ -144,6 +154,8 @@ func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
 //	"response": "..."}   (answer)
 //
 // Also accepts application/x-www-form-urlencoded for browser form submissions.
+// Every parameter is read from the request BODY only; nothing is taken from
+// the URL query string (see the r.PostForm comment below).
 func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromPath(r)
 	if err != nil {
@@ -159,15 +171,37 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ct := r.Header.Get("Content-Type")
-	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") || strings.HasPrefix(ct, "multipart/form-data") {
-		if err := r.ParseForm(); err != nil {
+	isURLEncoded := strings.HasPrefix(ct, "application/x-www-form-urlencoded")
+	isMultipart := strings.HasPrefix(ct, "multipart/form-data")
+	if isURLEncoded || isMultipart {
+		// ParseForm alone does not read a multipart body into PostForm —
+		// only ParseMultipartForm does — so dispatch on the content type
+		// rather than relying on r.FormValue to do it lazily (it would also
+		// re-introduce the query-string merge described below).
+		var parseErr error
+		if isMultipart {
+			parseErr = r.ParseMultipartForm(maxActionFormBytes)
+		} else {
+			parseErr = r.ParseForm()
+		}
+		if parseErr != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		body.Action = r.FormValue("action")
-		body.Feedback = r.FormValue("feedback")
-		body.Response = r.FormValue("response")
-		if idStr := r.FormValue("input_id"); idStr != "" {
+		// r.PostForm, not r.FormValue: ParseForm merges the URL query into
+		// r.Form, so r.FormValue("action") would accept an action supplied
+		// entirely in the query string of an otherwise empty POST. That is
+		// what lets an injected <form action="/api/tickets/X/actions?action=
+		// start"> work with no form fields of its own — DOMPurify strips
+		// name= from <input> (DOM-clobbering defence), so carrying the
+		// parameters in the form's own URL is the attacker's whole trick
+		// (finding S1). The dashboard's own controls put every parameter in
+		// the body: htmx serializes hx-vals and <input name=...> into the
+		// request body for a POST.
+		body.Action = r.PostForm.Get("action")
+		body.Feedback = r.PostForm.Get("feedback")
+		body.Response = r.PostForm.Get("response")
+		if idStr := r.PostForm.Get("input_id"); idStr != "" {
 			id64, _ := strconv.ParseUint(idStr, 10, 64)
 			body.InputID = uint(id64)
 		}
