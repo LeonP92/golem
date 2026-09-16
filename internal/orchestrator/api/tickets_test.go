@@ -462,3 +462,69 @@ func TestCreateTicket_ComputesBranchFromTitle(t *testing.T) {
 		t.Errorf("expected branch=%q, got %q", want, resp.Branch)
 	}
 }
+
+// TestResumableTickets_ExcludesUnapprovedGitHubLinkedTicket pins the
+// defence-in-depth clause fix round 4 added to resumableTickets. A non-nil
+// assigned_shem is only ever set by ClaimTicket, which already requires
+// (issue_number IS NULL OR intake_approved), so this state — claimed with a
+// checkpoint, but not approved — should never arise through normal use; it
+// is constructed directly here specifically to prove the added clause
+// actually excludes it, rather than that invariant being an untested
+// assumption ("nothing else writes assigned_shem").
+func TestResumableTickets_ExcludesUnapprovedGitHubLinkedTicket(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	shem := seedShem(t, h, "resumable-shem", "resumablekey")
+
+	phase := "implement"
+	nUnapproved, nApproved := 3, 4
+	unapproved := db.Ticket{
+		RepoRemote:      "https://github.com/org/repo",
+		Branch:          "ticket/unapproved",
+		Description:     "d",
+		Phase:           phase,
+		AssignedShem:    &shem.ID,
+		CheckpointPhase: &phase,
+		IssueNumber:     &nUnapproved,
+		IntakeApproved:  false,
+	}
+	if err := h.DB.Create(&unapproved).Error; err != nil {
+		t.Fatalf("seed unapproved ticket: %v", err)
+	}
+	approved := db.Ticket{
+		RepoRemote:      "https://github.com/org/repo",
+		Branch:          "ticket/approved",
+		Description:     "d",
+		Phase:           phase,
+		AssignedShem:    &shem.ID,
+		CheckpointPhase: &phase,
+		IssueNumber:     &nApproved,
+		IntakeApproved:  true,
+	}
+	if err := h.DB.Create(&approved).Error; err != nil {
+		t.Fatalf("seed approved ticket: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tickets/resumable", nil)
+	req.Header.Set("Authorization", "Bearer resumablekey")
+	req.Header.Set("X-Shem-Name", "resumable-shem")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var claims []api.ClaimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &claims); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, c := range claims {
+		ids[c.TicketID] = true
+	}
+	if ids[unapproved.ID] {
+		t.Error("unapproved GitHub-linked ticket appeared in /api/tickets/resumable")
+	}
+	if !ids[approved.ID] {
+		t.Error("approved GitHub-linked ticket with a checkpoint did not appear in /api/tickets/resumable")
+	}
+}

@@ -128,11 +128,46 @@ func (s *Syncer) applyIssue(ctx context.Context, repo *db.GitHubRepo, issue gith
 		"description": issue.Body,
 		"issue_url":   issue.HTMLURL,
 	}
-	if issue.State == "closed" && ticket.Phase != "closed" {
-		updates["phase"] = "closed"
+
+	// logMsg, when non-empty, is appended as a STATUS log entry after the
+	// update below commits, recording a post-approval edit to the issue
+	// body (spec Amendment 1 fix round 4: an approval binds to the text a
+	// human reviewed, not merely to the ticket).
+	var logMsg string
+	switch {
+	case issue.State == "closed":
+		// Closing wins outright: it does not matter whether the body also
+		// changed, and a closed ticket is never claimable regardless of
+		// IntakeApproved, so there is nothing to re-gate.
+		if ticket.Phase != "closed" {
+			updates["phase"] = "closed"
+		}
+	case ticket.IntakeApproved && HashBody(issue.Body) != ticket.ApprovedBodyHash:
+		if ticket.AssignedShem == nil {
+			// Not yet claimed: the approval was for the old text, and
+			// nobody has started work on the strength of it yet, so pull
+			// it back for a human to re-review the new text before it can
+			// be claimed.
+			updates["intake_approved"] = false
+			updates["approved_body_hash"] = ""
+			updates["phase"] = "pending-approval"
+			logMsg = "Issue body changed after approval; a human must re-approve before this ticket can be claimed."
+		} else {
+			// Already claimed: the assigned shem already has the
+			// previously-approved text and may be mid-run. Do not yank the
+			// ticket out from under it — just make the change loudly
+			// visible in its own log instead.
+			logMsg = "Issue body changed after approval; this ticket is already claimed, so the running agent is still working from the previously approved text."
+		}
 	}
+
 	if err := s.DB.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(updates).Error; err != nil {
 		return fmt.Errorf("update ticket %s for issue #%d: %w", ticket.ID, issue.Number, err)
+	}
+	if logMsg != "" {
+		if err := appendLog(s.DB, ticket.ID, "STATUS", "system", "", logMsg); err != nil {
+			return fmt.Errorf("log post-approval edit for ticket %s: %w", ticket.ID, err)
+		}
 	}
 	return nil
 }

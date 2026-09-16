@@ -192,3 +192,95 @@ func TestWebFormTicketStillClaimableImmediately(t *testing.T) {
 		t.Errorf("phase = %q, want claimed", got.Phase)
 	}
 }
+
+// TestStartRecoversTicketStrandedOutsidePendingApproval is the fix-round-4
+// availability test: before this round, a GitHub-sourced ticket that left
+// pending-approval by any route other than start (e.g. a single misclick of
+// the dashboard's own needs-attention or close control) was permanently
+// unclaimable with no in-product recovery, since re-ingesting the same
+// issue is blocked by the unique (repo_remote, issue_number) index.
+// Widening actionStart's guard to be provenance-based (issue_number set,
+// intake_approved false, not closed) instead of phase-based makes this
+// recoverable: pending-approval -> needs-attention (no start in between) ->
+// start must still succeed and the ticket must become genuinely claimable
+// through the real endpoints.
+func TestStartRecoversTicketStrandedOutsidePendingApproval(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	seedShem(t, h, "recover-shem", "recoverkey")
+	_, cookie := seedSessionUser(t, h.DB, "recover-admin")
+
+	n := 77
+	ticket := db.Ticket{
+		RepoRemote:  "https://github.com/org/repo",
+		Branch:      "ticket/recover",
+		Description: "d",
+		Phase:       "pending-approval",
+		IssueNumber: &n,
+	}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatalf("seed ticket: %v", err)
+	}
+
+	// Strand it, with no start in between: needs-attention itself refuses a
+	// direct pending-approval -> needs-attention transition (round 2's
+	// guard), so reaching needs-attention with intake_approved still false
+	// requires going via close first — the same "close, then needs-attention"
+	// prefix of round 3's laundering chain, stopping short of requeue since
+	// this test's point is recovery via start, not via requeue.
+	if w := doTicketAction(t, mux, cookie, ticket.ID, "close"); w.Code != http.StatusNoContent {
+		t.Fatalf("close: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+	if w := doTicketAction(t, mux, cookie, ticket.ID, "needs-attention"); w.Code != http.StatusNoContent {
+		t.Fatalf("needs-attention: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+	var stranded db.Ticket
+	h.DB.First(&stranded, "id = ?", ticket.ID)
+	if stranded.Phase != "needs-attention" || stranded.IntakeApproved {
+		t.Fatalf("setup: phase=%q intake_approved=%v, want needs-attention/false",
+			stranded.Phase, stranded.IntakeApproved)
+	}
+
+	if w := doTicketAction(t, mux, cookie, ticket.ID, "start"); w.Code != http.StatusNoContent {
+		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+
+	var recovered db.Ticket
+	if err := h.DB.First(&recovered, "id = ?", ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if recovered.Phase != "unassigned" || !recovered.IntakeApproved {
+		t.Fatalf("phase=%q intake_approved=%v, want unassigned/true after start",
+			recovered.Phase, recovered.IntakeApproved)
+	}
+
+	// The property that matters: genuinely claimable through the real
+	// endpoints, not just a phase string.
+	availReq := httptest.NewRequest(http.MethodGet,
+		"/api/tickets/available?repo=https://github.com/org/repo", nil)
+	availReq.Header.Set("Authorization", "Bearer recoverkey")
+	availReq.Header.Set("X-Shem-Name", "recover-shem")
+	availW := httptest.NewRecorder()
+	mux.ServeHTTP(availW, availReq)
+	var available []db.Ticket
+	if err := json.Unmarshal(availW.Body.Bytes(), &available); err != nil {
+		t.Fatalf("decode available: %v", err)
+	}
+	found := false
+	for _, at := range available {
+		if at.ID == ticket.ID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("recovered ticket did not appear in /api/tickets/available")
+	}
+
+	claimReq := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/claim", nil)
+	claimReq.Header.Set("Authorization", "Bearer recoverkey")
+	claimReq.Header.Set("X-Shem-Name", "recover-shem")
+	claimW := httptest.NewRecorder()
+	mux.ServeHTTP(claimW, claimReq)
+	if claimW.Code != http.StatusOK {
+		t.Fatalf("claim: expected 200, got %d: %s", claimW.Code, claimW.Body.String())
+	}
+}

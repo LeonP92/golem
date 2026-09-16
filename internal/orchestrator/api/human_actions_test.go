@@ -675,25 +675,46 @@ func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testin
 // ticket to unassigned so a shem can claim it; any other phase must 409 and
 // leave the ticket's phase untouched.
 func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
+	n := 42
 	tests := []struct {
-		name       string
-		phase      string
-		wantStatus int
-		wantPhase  string
+		name           string
+		phase          string
+		issueNumber    *int
+		intakeApproved bool
+		wantStatus     int
+		wantPhase      string
 	}{
-		{name: "pending-approval releases to unassigned",
-			phase: "pending-approval", wantStatus: http.StatusNoContent, wantPhase: "unassigned"},
-		{name: "already unassigned is a conflict, phase unchanged",
-			phase: "unassigned", wantStatus: http.StatusConflict, wantPhase: "unassigned"},
-		{name: "mid-execution phase is a conflict, phase unchanged",
-			phase: "implement", wantStatus: http.StatusConflict, wantPhase: "implement"},
+		{name: "unapproved, linked, pending-approval -> released",
+			phase: "pending-approval", issueNumber: &n, intakeApproved: false,
+			wantStatus: http.StatusNoContent, wantPhase: "unassigned"},
+		// Fix round 4: the guard is provenance-based (issue_number set,
+		// intake_approved false, not closed), not phase-based, so this is
+		// the recovery path for a ticket stranded outside pending-approval
+		// by close/needs-attention/requeue — it must succeed, not 409, even
+		// though the phase here is not "pending-approval".
+		{name: "unapproved, linked, stranded in needs-attention -> recovered",
+			phase: "needs-attention", issueNumber: &n, intakeApproved: false,
+			wantStatus: http.StatusNoContent, wantPhase: "unassigned"},
+		{name: "already approved and unassigned -> conflict, unchanged",
+			phase: "unassigned", issueNumber: &n, intakeApproved: true,
+			wantStatus: http.StatusConflict, wantPhase: "unassigned"},
+		{name: "already approved mid-execution -> conflict, unchanged",
+			phase: "implement", issueNumber: &n, intakeApproved: true,
+			wantStatus: http.StatusConflict, wantPhase: "implement"},
+		{name: "not linked to a GitHub issue -> conflict, unchanged",
+			phase: "unassigned", issueNumber: nil, intakeApproved: false,
+			wantStatus: http.StatusConflict, wantPhase: "unassigned"},
+		{name: "closed -> conflict, unchanged even though unapproved",
+			phase: "closed", issueNumber: &n, intakeApproved: false,
+			wantStatus: http.StatusConflict, wantPhase: "closed"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			h, mux, cookie := setupActionTest(t)
 
-			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: tt.phase}
+			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
+				Phase: tt.phase, IssueNumber: tt.issueNumber, IntakeApproved: tt.intakeApproved}
 			h.DB.Create(&ticket)
 
 			body, _ := json.Marshal(map[string]string{"action": "start"})
@@ -718,55 +739,43 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 }
 
 // TestStartActionEnqueuesGitHubLabelWrite verifies that releasing a
-// GitHub-linked pending-approval ticket queues a label outbox row (so the
-// issue reflects "unassigned" promptly), while an unlinked ticket (created
-// through the orchestrator's own web form) queues nothing at all.
+// GitHub-linked pending-approval ticket queues a label outbox row, so the
+// issue reflects "unassigned" promptly. There is no "unlinked ticket queues
+// nothing" case here (fix round 4 removed it): actionStart's guard now
+// requires issue_number IS NOT NULL outright, so an unlinked ticket 409s
+// before ever reaching enqueueGitHubPhase — that is covered by
+// TestStartActionReleasesPendingApprovalTicket's "not linked to a GitHub
+// issue" case instead of by an empty outbox here.
 func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
-	cases := []struct {
-		name      string
-		linked    bool
-		wantLabel int
-	}{
-		{name: "linked ticket queues a label write", linked: true, wantLabel: 1},
-		{name: "unlinked ticket queues nothing", linked: false, wantLabel: 0},
+	h, mux, cookie := setupActionTest(t)
+
+	n := 7
+	ticket := db.Ticket{RepoRemote: "https://github.com/org/repo", Branch: "b",
+		Description: "d", Phase: "pending-approval", IssueNumber: &n}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatalf("seed ticket: %v", err)
 	}
 
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			h, mux, cookie := setupActionTest(t)
+	body, _ := json.Marshal(map[string]string{"action": "start"})
+	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
+	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
 
-			ticket := db.Ticket{RepoRemote: "https://github.com/org/repo", Branch: "b",
-				Description: "d", Phase: "pending-approval"}
-			if tc.linked {
-				n := 7
-				ticket.IssueNumber = &n
-			}
-			if err := h.DB.Create(&ticket).Error; err != nil {
-				t.Fatalf("seed ticket: %v", err)
-			}
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+	}
 
-			body, _ := json.Marshal(map[string]string{"action": "start"})
-			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
-
-			if w.Code != http.StatusNoContent {
-				t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
-			}
-
-			var rows []db.GitHubOutbox
-			h.DB.Where("ticket_id = ?", ticket.ID).Find(&rows)
-			kinds := map[string]int{}
-			for _, row := range rows {
-				kinds[row.Kind]++
-			}
-			if kinds[ghsync.KindLabel] != tc.wantLabel {
-				t.Errorf("label rows = %d, want %d", kinds[ghsync.KindLabel], tc.wantLabel)
-			}
-		})
+	var rows []db.GitHubOutbox
+	h.DB.Where("ticket_id = ?", ticket.ID).Find(&rows)
+	kinds := map[string]int{}
+	for _, row := range rows {
+		kinds[row.Kind]++
+	}
+	if kinds[ghsync.KindLabel] != 1 {
+		t.Errorf("label rows = %d, want 1", kinds[ghsync.KindLabel])
 	}
 }
 

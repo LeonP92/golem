@@ -117,11 +117,19 @@ func (h *Handlers) assignedTickets(w http.ResponseWriter, r *http.Request) {
 
 // resumableTickets returns tickets assigned to this shem that have a checkpoint
 // and are in an active execution phase — i.e. were mid-run when the shem died.
+//
+// The intake_approved clause is defence in depth (fix round 4), not load
+// bearing today: a non-nil assigned_shem is only ever set by ClaimTicket,
+// which already requires (issue_number IS NULL OR intake_approved), so every
+// row this query could return already satisfies it. Adding it here pins that
+// invariant explicitly rather than leaving this query's safety implicit in
+// "nothing else writes assigned_shem" — a property nothing in the test suite
+// otherwise asserts.
 func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var tickets []db.Ticket
 	h.DB.Where(
-		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ?",
+		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ? AND (issue_number IS NULL OR intake_approved)",
 		shem.ID,
 		[]string{"unassigned", "ready-for-review", "revising", "closed"},
 	).Find(&tickets)

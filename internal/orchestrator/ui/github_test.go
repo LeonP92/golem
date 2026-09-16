@@ -1,6 +1,7 @@
 package ui_test
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -466,13 +467,25 @@ func TestTicketDetailNonLinkedTicketUnchanged(t *testing.T) {
 // unassigned, which is what a released pending-approval ticket becomes.
 func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 	tests := []struct {
-		name      string
-		phase     string
-		wantStart bool
+		name           string
+		phase          string
+		intakeApproved bool
+		wantStart      bool
 	}{
-		{name: "pending-approval offers the start control", phase: "pending-approval", wantStart: true},
-		{name: "unassigned (already released) does not offer it", phase: "unassigned", wantStart: false},
-		{name: "implement (already running) does not offer it", phase: "implement", wantStart: false},
+		{name: "pending-approval, unapproved: offers it",
+			phase: "pending-approval", intakeApproved: false, wantStart: true},
+		{name: "unassigned, approved (properly released, awaiting claim): does not offer it",
+			phase: "unassigned", intakeApproved: true, wantStart: false},
+		// Fix round 4: the card is rendered on provenance+approval state, not
+		// on Phase == "pending-approval", so a ticket stranded outside that
+		// phase (e.g. by close/needs-attention/requeue) while still
+		// unapproved must still offer the recovery control here.
+		{name: "unassigned, unapproved (stranded, recovery state): offers it",
+			phase: "unassigned", intakeApproved: false, wantStart: true},
+		{name: "implement, approved (actively running): does not offer it",
+			phase: "implement", intakeApproved: true, wantStart: false},
+		{name: "closed, unapproved: does not offer it even though unapproved",
+			phase: "closed", intakeApproved: false, wantStart: false},
 	}
 
 	for _, tt := range tests {
@@ -482,9 +495,10 @@ func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 				t.Fatalf("db.Open: %v", err)
 			}
 			n := 11
-			ticket := db.Ticket{ID: "gh-issue-start-" + tt.phase, RepoRemote: "https://github.com/org/repo",
+			id := fmt.Sprintf("gh-issue-start-%s-%v", tt.phase, tt.intakeApproved)
+			ticket := db.Ticket{ID: id, RepoRemote: "https://github.com/org/repo",
 				Title: "t", Branch: "ticket/x", Description: "d",
-				Phase: tt.phase, IssueNumber: &n,
+				Phase: tt.phase, IssueNumber: &n, IntakeApproved: tt.intakeApproved,
 				IssueURL: "https://github.com/org/repo/issues/11"}
 			if err := gdb.Create(&ticket).Error; err != nil {
 				t.Fatalf("seed ticket: %v", err)

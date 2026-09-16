@@ -377,18 +377,31 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 var errAlreadyClosed = errors.New("ticket already closed")
 
 // actionStart releases an externally-ingested ticket for execution, moving it
-// from pending-approval to unassigned so a shem can claim it. This is the
-// human checkpoint required before any agent prompt is built from an issue
-// body written by a stranger (spec Amendment 1).
+// to unassigned so a shem can claim it. This is the human checkpoint required
+// before any agent prompt is built from an issue body written by a stranger
+// (spec Amendment 1).
 //
-// actionStart is the ONLY writer of intake_approved. Claimability is
-// enforced against that column, not against phase (see ClaimTicket and
-// availableTickets in tickets.go): phase is a transient UX/GitHub-label
-// concern that other handlers legitimately move a ticket through (close,
-// needs-attention, requeue, ...), so guarding phase transitions one at a
-// time cannot close this off for good — a ticket that legitimately leaves
-// pending-approval by any path still carries whatever intake_approved was
-// before that transition.
+// actionStart is the ONLY writer of intake_approved and approved_body_hash.
+// Claimability is enforced against those columns, not against phase (see
+// ClaimTicket and availableTickets in tickets.go): phase is a transient
+// UX/GitHub-label concern that other handlers legitimately move a ticket
+// through (close, needs-attention, requeue, ...), so guarding phase
+// transitions one at a time cannot close this off for good — a ticket that
+// legitimately leaves pending-approval by any path still carries whatever
+// intake_approved was before that transition.
+//
+// The guard below is deliberately provenance-based (issue_number set,
+// intake_approved false, not closed) rather than phase-based (fix round 4).
+// A GitHub-sourced ticket that leaves pending-approval by any route other
+// than start (needs-attention, requeue, ...) still has intake_approved=false
+// and is therefore still unclaimable, but under a phase-only guard it had NO
+// in-product recovery: one misclick of the dashboard's own Close or Re-queue
+// button bricked it permanently, since re-ingesting the same issue is
+// blocked by the unique (repo_remote, issue_number) index. Matching the
+// guard to the actual invariant it establishes — rather than to one
+// specific phase that invariant usually starts from — makes that
+// recoverable. A closed ticket is deliberately excluded: reopening one is a
+// separate action from starting it.
 func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string) {
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
@@ -399,19 +412,30 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 	// The release transition and its GitHub label write commit together, so a
 	// release can never be recorded without its follow-up queued.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		// approvedHash binds this approval to the exact description text a
+		// human is reviewing right now (spec Amendment 1 fix round 4):
+		// ghsync.applyIssue re-gates (clears intake_approved and this hash,
+		// and returns the ticket to pending-approval) if a later poll finds
+		// the live issue body no longer hashes to what was approved here,
+		// for any ticket that has not yet been claimed.
+		approvedHash := ghsync.HashBody(ticket.Description)
 		result := tx.Model(&db.Ticket{}).
-			Where("id = ? AND phase = 'pending-approval'", id).
-			Updates(map[string]any{"phase": "unassigned", "intake_approved": true})
+			Where("id = ? AND issue_number IS NOT NULL AND intake_approved = false AND phase != 'closed'", id).
+			Updates(map[string]any{
+				"phase":              "unassigned",
+				"intake_approved":    true,
+				"approved_body_hash": approvedHash,
+			})
 		if result.Error != nil {
 			return result.Error
 		}
 		if result.RowsAffected == 0 {
-			return errNotPendingApproval
+			return errNotStartable
 		}
 		return enqueueGitHubPhase(tx, ticket, "unassigned", h.BaseURL)
 	})
-	if errors.Is(txErr, errNotPendingApproval) {
-		http.Error(w, "ticket is not pending approval", http.StatusConflict)
+	if errors.Is(txErr, errNotStartable) {
+		http.Error(w, "ticket is already approved, not linked to a GitHub issue, or closed", http.StatusConflict)
 		return
 	}
 	if txErr != nil {
@@ -433,9 +457,10 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// errNotPendingApproval signals that a start action was attempted on a
-// ticket that is not sitting in pending-approval.
-var errNotPendingApproval = errors.New("ticket is not pending approval")
+// errNotStartable signals that a start action was attempted on a ticket that
+// is already approved (intake_approved), not linked to a GitHub issue, or
+// closed.
+var errNotStartable = errors.New("ticket is not startable")
 
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {
 	// pending-approval is excluded for the same reason requeue excludes it:

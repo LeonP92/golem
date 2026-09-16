@@ -26,22 +26,40 @@ import (
 // exactly how actionNeedsAttention's pending-approval hole (fix round 2)
 // went unnoticed.
 //
-// Two hardenings, both found by a reviewer demonstrating they make this
-// extractor pass vacuously while a real hole is open:
+// Hardenings, each found by a reviewer demonstrating it makes this extractor
+// pass vacuously while a real hole is open:
 //
-//  1. A switch is only accepted as THE dispatcher switch if its tag is the
-//     selector body.Action. Without this check, the first *ast.SwitchStmt
-//     found inside ticketAction is assumed to be the dispatcher — so
-//     nesting the real switch one level inside an unrelated outer switch
-//     (e.g. an authz check) would silently extract that outer switch's case
-//     labels instead: bogus action names, an exhaustiveness test with 0 real
-//     actions, all green.
-//  2. A case expression that isn't a plain string literal (e.g. a named
-//     constant introduced by a partial refactor) now fails the test loudly
-//     instead of being silently skipped. Skipping is exactly as dangerous as
-//     the vacuous-switch case: a partial conversion — some cases literals,
-//     some constants — would silently drop the converted ones from the
-//     enumeration while still reporting a "passing", just incomplete, run.
+//  1. (fix round 3) A switch is only accepted as THE dispatcher switch if
+//     its tag is the selector body.Action. Without this check, the first
+//     *ast.SwitchStmt found inside ticketAction is assumed to be the
+//     dispatcher — so nesting the real switch one level inside an unrelated
+//     outer switch (e.g. an authz check) would silently extract that outer
+//     switch's case labels instead: bogus action names, an exhaustiveness
+//     test with 0 real actions, all green.
+//  2. (fix round 3) A case expression that isn't a plain string literal
+//     (e.g. a named constant introduced by a partial refactor) now fails the
+//     test loudly instead of being silently skipped. Skipping is exactly as
+//     dangerous as the vacuous-switch case: a partial conversion — some
+//     cases literals, some constants — would silently drop the converted
+//     ones from the enumeration while still reporting a "passing", just
+//     incomplete, run.
+//  3. (fix round 4) Checking only sel.Sel.Name == "Action" is still not
+//     enough: a reviewer planted an outer switch on a DIFFERENT selector
+//     that also happens to end in .Action (authz.Action) and the extractor
+//     collapsed to that switch's one case again. isDispatcherSwitch below
+//     additionally requires the selector's base identifier to be exactly
+//     "body" — ticketAction's own decoded-request variable — closing that
+//     off. This is inherently name-coupled to human.go's local variable
+//     name; if that variable is ever renamed, this constant must move with
+//     it, and the "no switch on body.Action found" fatal below is what
+//     forces that to be noticed rather than silently producing zero
+//     actions.
+//  4. (fix round 4) This no longer stops at the first matching switch: it
+//     keeps scanning ticketAction's whole body and fails loudly if it finds
+//     a SECOND switch on body.Action, rather than silently picking
+//     whichever one was encountered first. Exactly one is assumed to exist;
+//     an ambiguity is a sign this parser needs a human to resolve it, not
+//     silent first-match behaviour.
 func dispatcherActions(t *testing.T) []string {
 	t.Helper()
 
@@ -58,29 +76,31 @@ func dispatcherActions(t *testing.T) []string {
 	}
 
 	var actions []string
-	var foundDispatcherSwitch bool
+	matches := 0
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, isFunc := n.(*ast.FuncDecl)
 		if !isFunc || fn.Name.Name != "ticketAction" {
 			return true
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
-			if foundDispatcherSwitch {
-				return false // already located and processed it; stop looking.
-			}
 			sw, isSwitch := n.(*ast.SwitchStmt)
 			if !isSwitch {
 				return true
 			}
-			sel, isSel := sw.Tag.(*ast.SelectorExpr)
-			if !isSel || sel.Sel == nil || sel.Sel.Name != "Action" {
+			if !isDispatcherSwitch(sw) {
 				// Not the switch on body.Action — keep descending. This is
 				// what lets a switch on body.Action nested inside some other
 				// switch still be found, instead of stopping at whichever
 				// switch is encountered first.
 				return true
 			}
-			foundDispatcherSwitch = true
+			matches++
+			if matches > 1 {
+				t.Fatal("dispatcherActions: found more than one switch on " +
+					"body.Action in ticketAction — this parser assumes exactly " +
+					"one dispatcher switch; resolve the ambiguity in human.go " +
+					"or teach dispatcherActions which one is the real one")
+			}
 			for _, stmt := range sw.Body.List {
 				clause, isCase := stmt.(*ast.CaseClause)
 				if !isCase || clause.List == nil {
@@ -103,12 +123,16 @@ func dispatcherActions(t *testing.T) []string {
 					actions = append(actions, action)
 				}
 			}
-			return false // found and processed the dispatcher switch.
+			// Already extracted this switch's own cases; no need to descend
+			// into its case bodies looking for more (e.g. nested) switches —
+			// but the outer walk still visits this switch's siblings, which
+			// is how a second, ambiguous match would still be found above.
+			return false
 		})
-		return false // found ticketAction; stop descending elsewhere.
+		return false // found ticketAction; stop descending into its siblings (other funcs).
 	})
 
-	if !foundDispatcherSwitch {
+	if matches == 0 {
 		t.Fatal("dispatcherActions: no switch on body.Action found in ticketAction " +
 			"— human.go's shape changed and this parser needs updating")
 	}
@@ -117,6 +141,18 @@ func dispatcherActions(t *testing.T) []string {
 			"clauses in it — human.go's shape changed and this parser needs updating")
 	}
 	return actions
+}
+
+// isDispatcherSwitch reports whether sw is specifically the switch on the
+// local variable selector body.Action — ticketAction's decoded request
+// struct — not merely any switch whose tag ends in a field named "Action".
+func isDispatcherSwitch(sw *ast.SwitchStmt) bool {
+	sel, isSel := sw.Tag.(*ast.SelectorExpr)
+	if !isSel || sel.Sel == nil || sel.Sel.Name != "Action" {
+		return false
+	}
+	ident, isIdent := sel.X.(*ast.Ident)
+	return isIdent && ident.Name == "body"
 }
 
 // TestEveryDispatcherActionOnPendingApprovalTicket is the durable, structural
@@ -142,11 +178,19 @@ func TestEveryDispatcherActionOnPendingApprovalTicket(t *testing.T) {
 		"close": "closed",
 	}
 
+	n := 1
 	for _, action := range dispatcherActions(t) {
 		t.Run(action, func(t *testing.T) {
 			h, mux, cookie := setupActionTest(t)
 
-			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "pending-approval"}
+			// IssueNumber is set because a real pending-approval ticket is
+			// always GitHub-linked (only createTicketFromIssue produces this
+			// phase), and actionStart's guard (fix round 4) requires
+			// issue_number IS NOT NULL — an unlinked ticket would always
+			// 409 on "start" regardless of phase, which is exercised
+			// separately in TestStartActionReleasesPendingApprovalTicket.
+			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
+				Phase: "pending-approval", IssueNumber: &n}
 			if err := h.DB.Create(&ticket).Error; err != nil {
 				t.Fatalf("seed ticket: %v", err)
 			}

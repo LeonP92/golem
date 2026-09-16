@@ -57,12 +57,23 @@ type Ticket struct {
 	// how many phase writers exist now or get added later. Tickets created
 	// through the web form (nil IssueNumber) are unaffected by construction
 	// — see the claim/available predicates in api/tickets.go.
-	IntakeApproved bool      `gorm:"not null;default:false" json:"intake_approved"`
-	PRNumber       *int      `json:"pr_number"`
-	PRURL          string    `json:"pr_url"`
-	BranchPushed   bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
+	IntakeApproved bool `gorm:"not null;default:false" json:"intake_approved"`
+	// ApprovedBodyHash is the hex-encoded SHA-256 hash of Description at the
+	// moment actionStart set IntakeApproved, binding the approval to the
+	// exact text a human reviewed (spec Amendment 1 fix round 4). Without
+	// this, "approved" meant only "a human pressed Approve on this ticket
+	// at some point", not "on this text" — ghsync overwrites Description
+	// from the live issue on every poll, so an edit after approval would
+	// otherwise reach a shem under an approval that was never given for
+	// that text. ghsync.applyIssue re-gates (clears both fields, moves the
+	// ticket back to pending-approval) when this no longer matches an
+	// unclaimed ticket's incoming issue body.
+	ApprovedBodyHash string    `gorm:"not null;default:''" json:"approved_body_hash"`
+	PRNumber         *int      `json:"pr_number"`
+	PRURL            string    `json:"pr_url"`
+	BranchPushed     bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {
