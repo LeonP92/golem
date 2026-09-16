@@ -81,6 +81,52 @@
   </div>
 </div>
 
+{{if .Parked}}
+<div class="card bg-base-100 shadow-sm mt-6">
+  <div class="card-body">
+    <h2 class="card-title text-base">
+      <span class="iconify text-error" data-icon="heroicons:exclamation-triangle"></span>
+      Stuck GitHub writes
+    </h2>
+    <p class="text-sm text-base-content/60">
+      These writes failed often enough that Golem stopped retrying them, so they
+      never reached GitHub. Until every one is retried or the underlying problem
+      is fixed, each poll of the affected repository also pays a full
+      reconciliation pass.
+    </p>
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Ticket</th>
+            <th>Write</th>
+            <th>Attempts</th>
+            <th>Last error</th>
+            <th class="w-8"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Parked}}
+          <tr>
+            <td><a class="link" href="/tickets/{{.TicketID}}">{{if .TicketTitle}}{{.TicketTitle}}{{else}}{{.TicketID}}{{end}}</a></td>
+            <td class="font-mono text-xs">{{.Kind}}</td>
+            <td>{{.Attempts}}</td>
+            <td class="text-sm text-error" title="{{.LastError}}">{{truncate 60 .LastError}}</td>
+            <td class="text-right">
+              <form method="post" action="/settings/github/outbox/{{.ID}}/retry">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <button type="submit" class="btn btn-xs">Retry</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}
+
 <script>
 document.querySelectorAll('[data-autosubmit]').forEach(function (el) {
   el.addEventListener('change', function () { el.form.submit(); });

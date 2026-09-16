@@ -6,6 +6,7 @@ package ghsync
 
 import (
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -144,4 +145,64 @@ func isDuplicateKey(err error) bool {
 	return strings.Contains(msg, "unique constraint") ||
 		strings.Contains(msg, "duplicate key") ||
 		strings.Contains(msg, "unique_violation")
+}
+
+// ParkedRow is one outbox row that has exhausted MaxAttempts: left undone,
+// no longer selected by Drain, and therefore never going to reach GitHub
+// without an operator asking for it again. TicketTitle comes from the joined
+// ticket so the settings page can name the work rather than a UUID.
+type ParkedRow struct {
+	ID          uint   `gorm:"column:id"`
+	TicketID    string `gorm:"column:ticket_id"`
+	TicketTitle string `gorm:"column:ticket_title"`
+	Kind        string `gorm:"column:kind"`
+	Attempts    int    `gorm:"column:attempts"`
+	LastError   string `gorm:"column:last_error"`
+}
+
+// ParkedRows returns every parked outbox row, oldest first.
+//
+// Finding I6: publish.go used to claim a parked row was "surfaced in the
+// dashboard", and it was not — GitHubOutbox.LastError appeared in no
+// template, handler or CLI, and nothing reset Attempts. A parked comment or
+// pull-request write was therefore lost permanently behind one log line, and
+// because hasParkedOutboxRows stayed true forever, every subsequent 304 poll
+// also paid a full reconcile (one GetIssue per linked ticket) for the life of
+// the deployment, with no way to clear it. This is the query that makes both
+// visible; RetryParkedRow is what clears them.
+func ParkedRows(gdb *gorm.DB) ([]ParkedRow, error) {
+	var rows []ParkedRow
+	err := gdb.Model(&db.GitHubOutbox{}).
+		Select("git_hub_outboxes.id, git_hub_outboxes.ticket_id, git_hub_outboxes.kind, "+
+			"git_hub_outboxes.attempts, git_hub_outboxes.last_error, tickets.title AS ticket_title").
+		Joins("LEFT JOIN tickets ON tickets.id = git_hub_outboxes.ticket_id").
+		Where("git_hub_outboxes.done_at IS NULL AND git_hub_outboxes.attempts >= ?", MaxAttempts).
+		Order("git_hub_outboxes.id asc").
+		Scan(&rows).Error
+	if err != nil {
+		return nil, fmt.Errorf("query parked outbox rows: %w", err)
+	}
+	return rows, nil
+}
+
+// RetryParkedRow returns one parked row to the queue: attempts back to zero
+// and next_attempt brought forward so the next drain pass selects it. It
+// never touches done_at — a row that was already delivered stays delivered —
+// and it only matches a row that is actually parked, so a double-submitted
+// retry cannot reset the counter of a row that is mid-backoff.
+//
+// It reports whether a row was un-parked, so the caller can tell "already
+// retried" from "no such row" without a second query.
+func RetryParkedRow(gdb *gorm.DB, id uint) (bool, error) {
+	result := gdb.Model(&db.GitHubOutbox{}).
+		Where("id = ? AND done_at IS NULL AND attempts >= ?", id, MaxAttempts).
+		Updates(map[string]any{
+			"attempts":     0,
+			"next_attempt": time.Now(),
+			"last_error":   "",
+		})
+	if result.Error != nil {
+		return false, fmt.Errorf("retry outbox row %d: %w", id, result.Error)
+	}
+	return result.RowsAffected > 0, nil
 }

@@ -14,8 +14,12 @@ import (
 	"gorm.io/gorm"
 )
 
-// MaxAttempts is the number of failed deliveries after which an outbox row is
-// parked: left undone, retried no further, and surfaced in the dashboard.
+// MaxAttempts is the number of failed deliveries after which an outbox row
+// is parked: left undone and retried no further until an operator asks for
+// it again from the GitHub settings page (see ParkedRows and
+// RetryParkedRow). Nothing else in the product resets Attempts, so a parked
+// row stays parked; before fix round 1b nothing surfaced or reset it at all,
+// which made a parked row a permanent, invisible loss.
 const MaxAttempts = 8
 
 // PhaseLabelPrefix is the namespace Golem owns on GitHub issues. Labels
@@ -279,7 +283,9 @@ func (s *Syncer) linkedIssue(ticketID string) (db.Ticket, db.GitHubRepo, error) 
 
 // recordFailure increments the attempt counter and schedules the retry. At
 // MaxAttempts the row is left undone and stops being selected by Drain's
-// query — parked, and visible in the dashboard through LastError. The update
+// query — parked. LastError is what the GitHub settings page shows for a
+// parked row, and its Retry button is the only thing that resets Attempts,
+// so a parked row that nobody retries never reaches GitHub. The update
 // itself is best-effort: a failure to persist it is logged rather than
 // swallowed, since silently dropping it would leave the row retrying with a
 // stale NextAttempt and no backoff.

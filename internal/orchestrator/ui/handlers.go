@@ -163,6 +163,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	// action dispatcher (finding S1), so it carries the same CSRF token.
 	mux.Handle("POST /settings/github",
 		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.githubSettingsSubmit))))
+	mux.Handle("POST /settings/github/outbox/{id}/retry",
+		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.retryParkedOutboxRow))))
 	mux.Handle("GET /tickets/new", auth.RequireSession(h.DB)(http.HandlerFunc(h.ticketNewForm)))
 	mux.Handle("POST /tickets/new",
 		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.ticketNewSubmit))))

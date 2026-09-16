@@ -3,7 +3,9 @@ package ui
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
@@ -43,6 +45,18 @@ func (h *Handlers) renderGitHubSettings(w http.ResponseWriter, r *http.Request, 
 			RepoRemote: remote, Owner: owner, Name: name, Label: "golem",
 		})
 	}
+	// Parked outbox rows are rendered here because this is the only page
+	// about the GitHub integration, and because until fix round 1b they were
+	// rendered nowhere at all (finding I6): a parked comment or pull-request
+	// write was lost permanently behind one log line, and the parked row
+	// also made every later 304 poll pay a full reconcile forever. A failure
+	// to load them degrades to an empty list rather than blanking the page —
+	// the repo settings above are what an operator most often comes here for.
+	parked, err := ghsync.ParkedRows(h.DB)
+	if err != nil {
+		log.Printf("ui: load parked outbox rows: %v", err)
+	}
+
 	if errMsg != "" {
 		// Content-Type must be set before WriteHeader, or render's own
 		// Set() lands after the headers have already gone out.
@@ -50,8 +64,33 @@ func (h *Handlers) renderGitHubSettings(w http.ResponseWriter, r *http.Request, 
 		w.WriteHeader(http.StatusBadRequest)
 	}
 	h.render(w, r, "github_settings", map[string]any{
-		"Repos": repos, "Nav": "github", "Error": errMsg,
+		"Repos": repos, "Parked": parked, "Nav": "github", "Error": errMsg,
 	})
+}
+
+// retryParkedOutboxRow returns one parked outbox row to the queue. Nothing
+// else in the product resets GitHubOutbox.Attempts, so without this a row
+// that exhausted MaxAttempts was undeliverable for the life of the
+// deployment (finding I6).
+//
+// An unknown or already-retried id redirects back to the page rather than
+// erroring: the button is rendered from a list that may be a few seconds
+// stale, and a double click must not look like a fault.
+func (h *Handlers) retryParkedOutboxRow(w http.ResponseWriter, r *http.Request) {
+	id64, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
+	if err != nil || id64 == 0 {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	retried, err := ghsync.RetryParkedRow(h.DB, uint(id64))
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if retried {
+		log.Printf("ui: outbox row %d un-parked by an operator", id64)
+	}
+	http.Redirect(w, r, "/settings/github", http.StatusSeeOther)
 }
 
 // validateTriggerLabel rejects a trigger label inside the golem:* namespace
