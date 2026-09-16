@@ -111,9 +111,18 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # v2 is required: the v1.64.8 this repo used to pin ships a type-checker
-      # that predates Go 1.27's export data and reports phantom "undefined
-      # method" errors instead of real findings.
-      - uses: golangci/golangci-lint-action@v6
-        with:
-          version: v2.13.2
+      # Installed directly rather than through golangci-lint-action, because
+      # the action's major version is coupled to golangci-lint's: the v6 action
+      # predates golangci-lint v2 and cannot install it. `go install` has no
+      # such coupling, pins the exact version, and is the identical command the
+      # Makefile runs — so a green CI lint and a green local `make check` are
+      # running the same binary against the same config.
+      #
+      # v2 is required at all because v1.64.8's bundled type-checker predates
+      # Go 1.27's export data and reports phantom "undefined method" errors
+      # instead of real findings.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+
+      - name: golangci-lint
+        run: golangci-lint run ./...
