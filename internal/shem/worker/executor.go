@@ -221,6 +221,19 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				finalPhase = "implement"
 			}
 			orchPhase := toOrchestratorPhase(finalPhase)
+			if orchPhase == "ready-for-review" && !cfg.NoPush {
+				worktree := filepath.Join(ticketDir, "worktree")
+				if pushErr := pushTicketBranch(ctx, worktree, claim.Branch); pushErr != nil {
+					// A failed push must not block the lifecycle: the ticket
+					// still reaches ready-for-review, just without a PR.
+					postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
+				} else {
+					postStatus(c, ticketID, "Pushed "+claim.Branch+" to origin")
+					if pErr := c.PostBranchPushed(claim.TicketID); pErr != nil {
+						log.Printf("executor: post branch-pushed: %v", pErr)
+					}
+				}
+			}
 			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
 				if errors.Is(phErr, client.ErrNotOwner) {
 					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
@@ -245,6 +258,19 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				finalPhase = "ready-for-review"
 			}
 			orchPhase := toOrchestratorPhase(finalPhase)
+			if orchPhase == "ready-for-review" && !cfg.NoPush {
+				worktree := filepath.Join(ticketDir, "worktree")
+				if pushErr := pushTicketBranch(ctx, worktree, claim.Branch); pushErr != nil {
+					// A failed push must not block the lifecycle: the ticket
+					// still reaches ready-for-review, just without a PR.
+					postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
+				} else {
+					postStatus(c, ticketID, "Pushed "+claim.Branch+" to origin")
+					if pErr := c.PostBranchPushed(claim.TicketID); pErr != nil {
+						log.Printf("executor: post branch-pushed: %v", pErr)
+					}
+				}
+			}
 			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
 				if errors.Is(phErr, client.ErrNotOwner) {
 					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
@@ -623,6 +649,19 @@ func readState(ticketDir string) (string, string, error) {
 		return "", "", err
 	}
 	return state.Phase, state.SHA, nil
+}
+
+// pushTicketBranch publishes the ticket branch to origin so the orchestrator
+// can open a pull request against it. Golem has no other code path that
+// pushes; agents remain denied `git push` by the tool-call gating policy.
+func pushTicketBranch(ctx context.Context, worktreePath, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branch)
+	cmd.Dir = worktreePath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git push %s: %w\n%s", branch, err, out)
+	}
+	return nil
 }
 
 // setPushURL sets (or clears) the git remote.origin.pushurl in the repo at path.

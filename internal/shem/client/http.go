@@ -265,6 +265,22 @@ func (c *Client) PostPhase(ticketID string, phase string) error {
 	return nil
 }
 
+// PostBranchPushed tells the orchestrator that the ticket branch now exists on
+// the remote, which is the precondition for opening a pull request.
+// Returns ErrNotOwner if the orchestrator rejects the update because this shem
+// no longer owns the ticket (409 Conflict — e.g. after a requeue).
+func (c *Client) PostBranchPushed(ticketID string) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/branch-pushed", ticketID), nil)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	return nil
+}
+
 // PostCheckpoint records a checkpoint for a ticket.
 func (c *Client) PostCheckpoint(ticketID string, phase, sha string) error {
 	body := map[string]string{
