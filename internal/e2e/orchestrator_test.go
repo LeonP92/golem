@@ -209,6 +209,7 @@ func TestLogForwarding_SSEDeliversInSequenceOrder(t *testing.T) {
 		url := fmt.Sprintf("/api/tickets/%s/log", ticket.ID)
 		req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 		req.Header.Set("Authorization", "Bearer logkey")
+		req.Header.Set("X-Shem-Name", "log-shem")
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 		mux.ServeHTTP(w, req)

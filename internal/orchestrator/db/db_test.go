@@ -29,13 +29,20 @@ func TestOpenAndMigrate(t *testing.T) {
 }
 
 // openFile opens a file-backed database in a temp dir so a second Open re-runs
-// the migration and the admin bootstrap against existing rows.
+// the migration and the admin bootstrap against existing rows. Registers a
+// Cleanup that closes the underlying *sql.DB — otherwise Windows keeps the file
+// locked and t.TempDir's RemoveAll fails.
 func openFile(t *testing.T, dir string) *gorm.DB {
 	t.Helper()
 	gdb, err := db.Open(filepath.Join(dir, "test.db"))
 	if err != nil {
 		t.Fatalf("Open: %v", err)
 	}
+	t.Cleanup(func() {
+		if sqlDB, err := gdb.DB(); err == nil {
+			sqlDB.Close()
+		}
+	})
 	return gdb
 }
 

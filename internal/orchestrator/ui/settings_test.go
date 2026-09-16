@@ -139,7 +139,6 @@ func TestLogout_RequiresPost(t *testing.T) {
 		t.Fatalf("after GET /logout, session was cleared (got %d on /settings/security)", w.Code)
 	}
 
-	// POST clears the cookie and redirects to /login.
 	w := do(mux, "POST", "/logout", cookie, "")
 	if w.Code != http.StatusFound {
 		t.Fatalf("POST /logout: got %d, want 302", w.Code)
