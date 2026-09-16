@@ -1,6 +1,7 @@
 package db
 
 import (
+	"log"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -61,5 +62,11 @@ func ensureAdmin(gdb *gorm.DB) error {
 	if len(first) == 0 {
 		return nil // empty database: nothing to promote
 	}
-	return gdb.Model(&first[0]).Update("role", "admin").Error
+	if err := gdb.Model(&first[0]).Update("role", "admin").Error; err != nil {
+		return err
+	}
+	// Log it: this is a privilege grant, and an operator who lost their last
+	// admin out-of-band should be able to see where the new one came from.
+	log.Printf("no admin user found; promoted %q (id %d) to admin", first[0].Username, first[0].ID)
+	return nil
 }

@@ -24,9 +24,14 @@ const (
 )
 
 const (
-	PermUserManage   Permission = "user:manage" // create/list/delete users, change roles
-	PermShemManage   Permission = "shem:manage" // register/remove shems (= repositories)
-	PermShemView     Permission = "shem:view"   // read the /shems page and GET /api/shems
+	PermUserManage Permission = "user:manage" // create/list/delete users, change roles
+	// PermShemManage guards registering/removing shems, which is how repositories
+	// enter the system. No HTTP route requires it yet: shems are registered via
+	// the CLI and via API key, neither of which carries a session role. It exists
+	// so the admin/developer split is expressed in the table rather than implied,
+	// and so the future "add repository" UI has a permission to check.
+	PermShemManage   Permission = "shem:manage"
+	PermShemView     Permission = "shem:view" // read the /shems page and GET /api/shems
 	PermTicketCreate Permission = "ticket:create"
 	PermTicketView   Permission = "ticket:view"
 	PermTicketManage Permission = "ticket:manage" // approve / requeue / close / answer / request-changes
