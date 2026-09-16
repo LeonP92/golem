@@ -25,6 +25,13 @@ type Fake struct {
 	PRs      []PullRequest
 	Default  string // default branch returned by DefaultBranch
 
+	// prByHead indexes PRs by head branch, so CreatePullRequest can refuse a
+	// second pull request from the same branch the way GitHub does (422) and
+	// FindPullRequest can answer for it. Without this the fake accepted
+	// every redelivery and quietly created duplicates, which is how finding
+	// I2 stayed invisible to the suite.
+	prByHead map[string]PullRequest
+
 	// ETag, when non-empty, simulates GitHub's conditional-request caching:
 	// if ListIssuesSince is called with an etag argument equal to ETag, it
 	// returns IssuePage{ETag: ETag, NotModified: true} with no issues,
@@ -48,6 +55,7 @@ func NewFake() *Fake {
 	return &Fake{
 		Issues:   map[int]Issue{},
 		Comments: map[int][]string{},
+		prByHead: map[string]PullRequest{},
 		Default:  "main",
 	}
 }
@@ -201,15 +209,35 @@ func (f *Fake) CommentsFor(number int) []string {
 	return out
 }
 
-func (f *Fake) CreatePullRequest(_ context.Context, _, _, _, _, _, _ string, _ bool) (PullRequest, error) {
+// CreatePullRequest mirrors GitHub's behaviour for a branch that already has
+// a pull request: it refuses with ErrPullRequestUnprocessable rather than
+// opening a second one. That is the 422 a redelivered outbox row provokes,
+// and modelling it here is what lets the suite see finding I2 at all.
+func (f *Fake) CreatePullRequest(_ context.Context, _, _, head, _, _, _ string, _ bool) (PullRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if err := f.record("CreatePullRequest"); err != nil {
 		return PullRequest{}, err
 	}
+	if existing, ok := f.prByHead[head]; ok {
+		return PullRequest{}, fmt.Errorf(
+			"%w: A pull request already exists for %s (#%d)",
+			ErrPullRequestUnprocessable, head, existing.Number)
+	}
 	pr := PullRequest{Number: 100 + len(f.PRs), HTMLURL: "https://example.test/pull"}
 	f.PRs = append(f.PRs, pr)
+	f.prByHead[head] = pr
 	return pr, nil
+}
+
+func (f *Fake) FindPullRequest(_ context.Context, _, _, head string) (PullRequest, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("FindPullRequest"); err != nil {
+		return PullRequest{}, false, err
+	}
+	pr, ok := f.prByHead[head]
+	return pr, ok, nil
 }
 
 func (f *Fake) DefaultBranch(_ context.Context, _, _ string) (string, error) {

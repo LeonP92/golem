@@ -59,6 +59,10 @@ type Client interface {
 	RemoveLabel(ctx context.Context, owner, repo string, number int, label string) error
 	CreateComment(ctx context.Context, owner, repo string, number int, body string) error
 	CreatePullRequest(ctx context.Context, owner, repo, head, base, title, body string, draft bool) (PullRequest, error)
+	// FindPullRequest looks up an existing pull request by its head branch.
+	// It is what makes a KindPR redelivery converge instead of parking: a
+	// pull request that already exists is reported rather than re-created.
+	FindPullRequest(ctx context.Context, owner, repo, head string) (PullRequest, bool, error)
 	DefaultBranch(ctx context.Context, owner, repo string) (string, error)
 }
 

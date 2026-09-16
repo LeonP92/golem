@@ -3,6 +3,7 @@ package ghsync
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -162,7 +163,31 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 		pr, err := s.GH.CreatePullRequest(ctx, repo.Owner, repo.Name,
 			p.Head, p.Base, p.Title, p.Body, true)
 		if err != nil {
-			return nil, fmt.Errorf("create pull request for ticket %s: %w", ticket.ID, err)
+			// Delivery is at-least-once: the GitHub call cannot be inside
+			// the transaction that records it, so a local failure between
+			// the two redelivers this row. label and close_issue survive
+			// that on their own; a second CreatePullRequest does not — real
+			// GitHub answers "422 A pull request already exists for
+			// <owner>:<branch>", which never succeeds, so the row burned
+			// MaxAttempts and parked while the pull request it had already
+			// opened stayed unrecorded forever (finding I2; reconcile
+			// deliberately never creates pull requests, and nothing
+			// un-parks a row). Converge on the pull request that exists
+			// instead.
+			//
+			// Only a 422 is treated this way, and only when the lookup
+			// actually finds a pull request for this head: any other
+			// failure, and a 422 with no matching pull request (a base
+			// branch that does not exist, say), still takes the ordinary
+			// retry-and-park path with the original error.
+			existing, found, lookupErr := s.recoverExistingPR(ctx, repo, p.Head, err)
+			if lookupErr != nil {
+				return nil, lookupErr
+			}
+			if !found {
+				return nil, fmt.Errorf("create pull request for ticket %s: %w", ticket.ID, err)
+			}
+			pr = existing
 		}
 		ticketID := ticket.ID
 		return func(tx *gorm.DB) error {
@@ -176,6 +201,32 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 	default:
 		return nil, fmt.Errorf("unknown outbox kind %q on row %d", row.Kind, row.ID)
 	}
+}
+
+// recoverExistingPR resolves a failed CreatePullRequest into the pull request
+// that already exists for head, when that is what the failure meant. It
+// returns found=false for any failure that is not a 422, and for a 422 whose
+// head has no pull request; the caller then treats createErr as an ordinary
+// delivery failure.
+//
+// A failure of the lookup itself is returned as an error rather than folded
+// into found=false: the row must be retried, not declared undeliverable on
+// the strength of a call that never answered.
+func (s *Syncer) recoverExistingPR(ctx context.Context, repo db.GitHubRepo, head string, createErr error) (github.PullRequest, bool, error) {
+	if !errors.Is(createErr, github.ErrPullRequestUnprocessable) {
+		return github.PullRequest{}, false, nil
+	}
+	existing, found, err := s.GH.FindPullRequest(ctx, repo.Owner, repo.Name, head)
+	if err != nil {
+		return github.PullRequest{}, false, fmt.Errorf(
+			"look up existing pull request for %s:%s after %v: %w", repo.RepoRemote, head, createErr, err)
+	}
+	if !found {
+		return github.PullRequest{}, false, nil
+	}
+	log.Printf("ghsync: pull request for %s:%s already existed (#%d); recording it instead of re-creating",
+		repo.RepoRemote, head, existing.Number)
+	return existing, true, nil
 }
 
 // applyPhaseLabel removes any other golem:* label from the issue and applies
