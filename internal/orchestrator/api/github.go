@@ -53,26 +53,43 @@ func (h *Handlers) RegisterGitHubRoutes(mux *http.ServeMux) {
 //
 // LastManualSync is stamped only once TriggerSync has actually been called —
 // a 404, 409, 503, or 429 response must never extend the cooldown window.
+//
+// Every refusal answers JSON, not text/plain. The only caller is the Sync now
+// button, a hand-written fetch() that (correctly) refuses to parse a non-JSON
+// body — auth.RequireSession 302-redirects an expired session to an HTML
+// login page and fetch follows it. That guard meant a text/plain 404, 409 or
+// 503 landed in the same catch as the login page and rendered the same
+// "Failed — retry?", so three distinct, separately actionable failures were
+// indistinguishable. The status codes are the contract and are unchanged;
+// only the body is, and each message says what the operator can do next.
 func (h *Handlers) manualSync(w http.ResponseWriter, r *http.Request) {
 	id64, err := strconv.ParseUint(r.PathValue("id"), 10, 64)
 	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
+		writeJSONError(w, http.StatusBadRequest, "invalid repository id")
 		return
 	}
 	repoID := uint(id64)
 
 	var repo db.GitHubRepo
 	if err := h.DB.First(&repo, repoID).Error; err != nil {
-		http.Error(w, "repo not found", http.StatusNotFound)
+		writeJSONError(w, http.StatusNotFound,
+			"repository not found — reload this page, it may have been removed since it was rendered")
 		return
 	}
 	if !repo.Enabled {
-		http.Error(w, "sync is not enabled for this repository", http.StatusConflict)
+		writeJSONError(w, http.StatusConflict,
+			"sync is not enabled for this repository — tick Enabled above first")
 		return
 	}
 
+	// After the cold-start fix in cmd/orchestrator (githubSyncPlan), the
+	// worker is built whenever a token is present, so the remaining causes of
+	// a nil Sync are an unset token or a client that failed to initialise —
+	// both fixed at startup, neither fixable from this page. Say so.
 	if h.Sync == nil {
-		http.Error(w, "github sync is not running", http.StatusServiceUnavailable)
+		writeJSONError(w, http.StatusServiceUnavailable,
+			"GitHub sync is not running on this orchestrator — GOLEM_GITHUB_TOKEN "+
+				"was unset or invalid at startup; set it and restart")
 		return
 	}
 
@@ -95,7 +112,7 @@ func (h *Handlers) manualSync(w http.ResponseWriter, r *http.Request) {
 	queued := h.Sync.TriggerSync(repoID)
 
 	if err := h.DB.Model(&repo).Updates(map[string]any{"last_manual_sync": time.Now()}).Error; err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+		writeJSONError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 
@@ -180,4 +197,11 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body) //nolint:errcheck
+}
+
+// writeJSONError answers a refusal in the one shape a fetch() caller can
+// read. The "error" key is the same one the 429 cooldown response already
+// uses, so the page has a single place to look for something to show.
+func writeJSONError(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]any{"error": msg})
 }

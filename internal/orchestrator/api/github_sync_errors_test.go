@@ -1,0 +1,125 @@
+package api_test
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+// TestManualSyncFailuresAreJSON pins every refusal manualSync can produce to
+// the one shape its only caller can read.
+//
+// The Sync now button is a hand-written fetch() that guards on content-type
+// before calling r.json(). Every failure the server answered in text/plain
+// therefore fell into the same catch and rendered the same "Failed — retry?",
+// so a 503 (sync not running), a 404 (repo removed) and a 409 (sync disabled
+// for this repo) were indistinguishable — and the two a first-time operator
+// actually hits were the two with no usable message.
+//
+// The status codes are unchanged; only the body is. Each error string must
+// also be distinct, because identical text would collapse the cases again at
+// the only place the operator can see them.
+func TestManualSyncFailuresAreJSON(t *testing.T) {
+	tests := []struct {
+		name       string
+		repoID     uint
+		enabled    bool
+		seedRepo   bool
+		syncWorker bool
+		wantStatus int
+		wantErrHas string
+	}{
+		{
+			name:       "unknown repo",
+			repoID:     999,
+			seedRepo:   false,
+			syncWorker: true,
+			wantStatus: http.StatusNotFound,
+			wantErrHas: "not found",
+		},
+		{
+			name:       "sync disabled for this repo",
+			enabled:    false,
+			seedRepo:   true,
+			syncWorker: true,
+			wantStatus: http.StatusConflict,
+			wantErrHas: "not enabled",
+		},
+		{
+			name:       "sync worker not running",
+			enabled:    true,
+			seedRepo:   true,
+			syncWorker: false,
+			wantStatus: http.StatusServiceUnavailable,
+			wantErrHas: "GOLEM_GITHUB_TOKEN",
+		},
+	}
+
+	seen := map[string]string{}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mux := setupGitHubSyncTest(t)
+			if tc.syncWorker {
+				h.Sync = &fakeTrigger{ret: true}
+			}
+			h.ManualSyncCooldown = time.Minute
+
+			_, cookie := seedSessionUser(t, h.DB, "sync-admin")
+			id := tc.repoID
+			if tc.seedRepo {
+				id = seedSyncRepo(t, h, tc.enabled, nil).ID
+			}
+
+			req := httptest.NewRequest(http.MethodPost, syncURL(id), nil)
+			withSession(req, cookie)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != tc.wantStatus {
+				t.Fatalf("status = %d, want %d: %s", rec.Code, tc.wantStatus, rec.Body.String())
+			}
+			if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+				t.Fatalf("Content-Type = %q, want application/json — the page's "+
+					"content-type guard turns anything else into a bare \"Failed — retry?\"", ct)
+			}
+			var body struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode body %q: %v", rec.Body.String(), err)
+			}
+			if body.Error == "" {
+				t.Fatal("body has no \"error\" field; the button has nothing to show")
+			}
+			if prev, ok := seen[body.Error]; ok {
+				t.Fatalf("error %q is shared with the %q case; the operator cannot tell them apart",
+					body.Error, prev)
+			}
+			seen[body.Error] = tc.name
+		})
+	}
+}
+
+// TestManualSyncInvalidIDIsJSON covers the one refusal that never reaches a
+// repo lookup.
+func TestManualSyncInvalidIDIsJSON(t *testing.T) {
+	h, mux := setupGitHubSyncTest(t)
+	h.Sync = &fakeTrigger{ret: true}
+	h.ManualSyncCooldown = time.Minute
+	_, cookie := seedSessionUser(t, h.DB, "sync-admin")
+
+	req := httptest.NewRequest(http.MethodPost, "/api/github/repos/not-a-number/sync", nil)
+	withSession(req, cookie)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+	if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, "application/json") {
+		t.Fatalf("Content-Type = %q, want application/json", ct)
+	}
+}

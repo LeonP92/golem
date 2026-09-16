@@ -58,7 +58,11 @@
             </td>
             <td class="text-right">
               {{if .ID}}
-              <button type="button" data-repo-id="{{.ID}}" class="btn btn-xs sync-now">Sync now</button>
+              <div class="flex items-center justify-end gap-2">
+                {{/* Every Sync now refusal is written here rather than into the button caption. The server answers each one as JSON with an "error" that says what to do next (enable the repo, reload, set the token and restart); a caption has no room for that, and squeezing all of them into one "Failed — retry?" is what made the 503 and the expired-session cases unactionable. */}}
+                <span class="sync-status text-xs text-error text-left whitespace-normal" role="status" aria-live="polite"></span>
+                <button type="button" data-repo-id="{{.ID}}" class="btn btn-xs sync-now">Sync now</button>
+              </div>
               {{else}}
               <span class="text-xs text-base-content/40" title="Enable this repo above to register it before it can be synced">unregistered</span>
               {{end}}
@@ -133,11 +137,25 @@ document.querySelectorAll('[data-autosubmit]').forEach(function (el) {
 });
 
 document.querySelectorAll('.sync-now').forEach(function (btn) {
+  var cell = btn.closest('td');
+  var status = cell ? cell.querySelector('.sync-status') : null;
+
+  // textContent, never innerHTML: the strings below include text the server
+  // chose, and this element must never become a second markdown sink.
+  function show(msg) { if (status) { status.textContent = msg; } }
+
   btn.addEventListener('click', function () {
     var id = btn.dataset.repoId;
     var original = btn.textContent;
     btn.disabled = true;
     btn.textContent = 'Syncing…';
+    show('');
+
+    function fail(msg) {
+      btn.textContent = original;
+      btn.disabled = false;
+      show(msg);
+    }
 
     // The manual-sync endpoint is session-authenticated and state-changing,
     // so it carries the same CSRF token every other such POST does. Read it
@@ -154,11 +172,24 @@ document.querySelectorAll('.sync-now').forEach(function (btn) {
         // Guard on content-type before ever calling r.json().
         var contentType = r.headers.get('content-type') || '';
         if (contentType.indexOf('application/json') === -1) {
-          throw new Error('non-JSON response (status ' + r.status + ')');
+          // The endpoint itself answers JSON for every status it produces,
+          // and never answers 200 at all, so a non-JSON body here is the
+          // login page the redirect landed on. Naming that is the whole
+          // point: retrying can never succeed, and logging in again is the
+          // only thing that helps. The repo-wide 302-instead-of-401
+          // convention is deliberately left alone — this only reads it.
+          if (r.status === 200 || r.redirected) {
+            return { failure: 'Session expired — reload the page and sign in again.' };
+          }
+          return { failure: 'Unexpected reply from the server (status ' + r.status + ').' };
         }
         return r.json().then(function (body) { return { status: r.status, body: body }; });
       })
       .then(function (res) {
+        if (res.failure) {
+          fail(res.failure);
+          return;
+        }
         if (res.status === 429) {
           var secs = res.body.retry_after_secs || 60;
           btn.textContent = 'Wait ' + secs + 's';
@@ -169,7 +200,8 @@ document.querySelectorAll('.sync-now').forEach(function (btn) {
           return;
         }
         if (res.status !== 202) {
-          throw new Error('unexpected status ' + res.status);
+          fail(res.body.error || ('Unexpected status ' + res.status + '.'));
+          return;
         }
         btn.textContent = res.body.queued ? 'Queued' : 'Already queued';
         setTimeout(function () {
@@ -178,8 +210,7 @@ document.querySelectorAll('.sync-now').forEach(function (btn) {
         }, 60000);
       })
       .catch(function () {
-        btn.textContent = 'Failed — retry?';
-        btn.disabled = false;
+        fail('Could not reach the orchestrator — check the connection and try again.');
       });
   });
 });
