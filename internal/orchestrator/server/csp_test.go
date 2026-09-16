@@ -327,24 +327,54 @@ func TestInlineScriptHashes_HashesRenderedBytesNotSourceBytes(t *testing.T) {
 }
 
 // TestInlineScriptHashes_RejectsScriptWithTemplateAction covers IMPORTANT 2
-// from the fix round 2 review: nothing previously stopped someone writing
-// e.g. {{.CSRFToken}} inside an inline <script>. Its rendered bytes would
-// then be request-dependent, so no startup-time hash could ever be correct,
-// and it would be silently blocked on every request with an otherwise-green
-// test suite. This must fail loudly instead.
+// from the fix round 2 review, in both places a template action could
+// appear:
+//
+//   - in the body (e.g. {{.CSRFToken}}): its rendered bytes would be
+//     request-dependent, so no startup-time hash could ever be correct,
+//     and it would be silently blocked on every request with an
+//     otherwise-green test suite.
+//   - in the opening tag's attributes (e.g. <script nonce="{{.Nonce}}">):
+//     fix round 3 found this is not just "the same bug in a different
+//     place" but sharper — renderScriptBody rebuilds its wrapper open tag
+//     from the SOURCE attrs but slices the RENDERED output at that source
+//     tag's length. A template action in attrs changes the rendered tag's
+//     length without changing the slice offset, so this doesn't just
+//     produce a request-dependent hash: it produces a wrong hash with a
+//     nil error, unless attrs are rejected before renderScriptBody is ever
+//     called with them.
+//
+// Both must fail loudly rather than silently.
 func TestInlineScriptHashes_RejectsScriptWithTemplateAction(t *testing.T) {
-	fsys := fstest.MapFS{
-		"templates/page.html": &fstest.MapFile{Data: []byte("<html><script>var csrf = '{{.CSRFToken}}';</script></html>")},
+	tests := []struct {
+		name string
+		html string
+	}{
+		{
+			name: "template action in the script body",
+			html: "<html><script>var csrf = '{{.CSRFToken}}';</script></html>",
+		},
+		{
+			name: "template action in the opening tag's attributes",
+			html: `<html><script nonce="{{.Nonce}}">doThing();</script></html>`,
+		},
 	}
-	hashes, err := server.InlineScriptHashes(fsys)
-	if err == nil {
-		t.Fatal("want error for an inline <script> containing a template action, got nil")
-	}
-	if len(hashes) != 0 {
-		t.Errorf("want no hashes alongside an error, got %v", hashes)
-	}
-	if !strings.Contains(err.Error(), "{{") {
-		t.Errorf("error should name the offending \"{{\", got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"templates/page.html": &fstest.MapFile{Data: []byte(tt.html)},
+			}
+			hashes, err := server.InlineScriptHashes(fsys)
+			if err == nil {
+				t.Fatal("want error for an inline <script> containing a template action, got nil")
+			}
+			if len(hashes) != 0 {
+				t.Errorf("want no hashes alongside an error, got %v", hashes)
+			}
+			if !strings.Contains(err.Error(), "{{") {
+				t.Errorf("error should name the offending \"{{\", got: %v", err)
+			}
+		})
 	}
 }
 
@@ -432,7 +462,7 @@ func TestBuildPolicy(t *testing.T) {
 				"default-src 'self'",
 				"script-src 'self' 'unsafe-eval'",
 				"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-				"img-src 'self' data: https://user-images.githubusercontent.com https://github.com/user-attachments/",
+				"img-src 'self' data: https:",
 				"font-src 'self' data:",
 				"connect-src 'self' https://api.iconify.design https://api.simplesvg.com https://api.unisvg.com",
 				"base-uri 'self'",

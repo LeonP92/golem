@@ -132,9 +132,18 @@ func InlineScriptHashes(fsys fs.FS) ([]string, error) {
 // Two conditions are treated as errors rather than silently producing a
 // partial or wrong result:
 //
-//   - A body containing "{{" is rejected outright: that marks a template
-//     action, whose rendered bytes depend on per-request data, so no
-//     startup-time hash could ever be correct for it.
+//   - A body OR an opening-tag attribute string containing "{{" is
+//     rejected outright: that marks a template action, whose rendered
+//     bytes depend on per-request data, so no startup-time hash could ever
+//     be correct for it. Attributes are checked for the same reason the
+//     body is, and for a second, sharper one: renderScriptBody rebuilds
+//     its wrapper open tag from the SOURCE attrs but slices the RENDERED
+//     output using that source tag's length. A template action in attrs
+//     would change the rendered tag's length without changing the slice
+//     offset, silently producing a wrong hash with no error — precisely
+//     the failure class fix round 2 exists to close. Rejecting "{{" in
+//     attrs here means renderScriptBody is never called with attrs that
+//     could trigger it.
 //   - The number of hashes produced must equal the number of <script>
 //     opening tags without a src attribute (openScriptTagRE) found in the
 //     same bytes. inlineScriptRE requires a literal "</script>" to close a
@@ -149,9 +158,9 @@ func extractInlineScriptHashes(data []byte) ([]string, error) {
 		if srcAttrRE.Match(attrs) {
 			continue
 		}
-		if bytes.Contains(body, []byte("{{")) {
-			return nil, fmt.Errorf(`inline <script> contains "{{": its rendered bytes ` +
-				`would depend on per-request data, so no startup-time hash can be correct`)
+		if bytes.Contains(attrs, []byte("{{")) || bytes.Contains(body, []byte("{{")) {
+			return nil, fmt.Errorf(`inline <script> (or its opening tag's attributes) contains "{{": ` +
+				`its rendered bytes would depend on per-request data, so no startup-time hash can be correct`)
 		}
 		rendered, err := renderScriptBody(attrs, body)
 		if err != nil {
@@ -186,9 +195,16 @@ func extractInlineScriptHashes(data []byte) ([]string, error) {
 // full-page renders for every inline script this project ships as of fix
 // round 2 (see task-19-report.md).
 //
-// The caller has already rejected any body containing "{{", so this
-// executes with nil data and no custom FuncMap: there are no actions left
-// to evaluate, only literal text for the escaper to normalize.
+// The caller has already rejected any body OR attrs containing "{{" (see
+// extractInlineScriptHashes), so this executes with nil data and no custom
+// FuncMap: there are no actions left to evaluate anywhere in the
+// reconstructed tag, only literal text for the escaper to normalize. That
+// guarantee matters here specifically: openTag below is built from the
+// SOURCE attrs, and the rendered body is recovered by slicing the
+// executed output at len(openTag) from the start — if attrs rendered to a
+// different length than its source (which a template action would cause),
+// that offset would be wrong and this would silently return the wrong
+// bytes rather than error.
 func renderScriptBody(attrs, body []byte) ([]byte, error) {
 	const closeTag = "</script>"
 	openTag := "<script" + string(attrs) + ">"
@@ -230,17 +246,32 @@ func renderScriptBody(attrs, body []byte) ([]byte, error) {
 // api.simplesvg.com / api.unisvg.com) — omitting them renders every icon
 // blank.
 //
-// img-src includes GitHub's own image hosts, targeted rather than a blanket
-// "https:": GitHub issue bodies host inline images on
-// user-images.githubusercontent.com and under github.com/user-attachments/,
-// which marked+DOMPurify turn into real <img> tags when rendering synced
-// issue content. Without these, that content renders with broken images —
-// the same "visible breakage that gets the policy switched off" class of
-// problem as the Iconify hosts above. A path-scoped source
-// (github.com/user-attachments/) is used instead of bare "https://github.com"
-// because a targeted allowlist is worth more than a permissive one here: an
-// <img> with an attacker-chosen src is a real, if minor, exfiltration
-// channel, and nothing else on github.com needs to be an image source.
+// img-src allows any HTTPS host ("https:"), not a targeted allowlist, for
+// GitHub-hosted issue images. Fix round 2 tried the targeted approach —
+// user-images.githubusercontent.com plus a path-scoped
+// github.com/user-attachments/ — but the format GitHub writes into issue
+// bodies today, github.com/user-attachments/assets/<uuid>, 302-redirects
+// to a github-production-user-asset-*.s3.amazonaws.com host. Per CSP3,
+// every hop of a redirect is matched again, and past the first hop only
+// scheme and host are checked (the path is skipped) — so that S3 host,
+// which matches nothing in a targeted list, gets the image blocked at the
+// redirect. The targeted approach produced exactly the broken images it
+// was meant to prevent. Hardcoding the S3 bucket host was rejected: it's a
+// GitHub implementation detail that can change without notice, silently
+// re-breaking images again.
+//
+// The cost is real and is accepted deliberately: an <img> in rendered
+// issue content fires on view, so a maliciously authored issue body could
+// use it as a tracking pixel — leaking the viewing operator's IP, user
+// agent, and the timing of internal review to whoever authored the issue.
+// This is judged acceptable because script-src already blocks execution
+// and DOMPurify sanitizes the markup before it's ever rendered, so the
+// residual risk is a tracking pixel, not data exfiltration: an injected
+// image's URL is fixed at authoring time and cannot carry any information
+// the attacker didn't already have. Broken images are, empirically, the
+// failure most likely to get the whole policy switched off — which would
+// forfeit the script-execution protection that actually matters — so a
+// slightly permissive img-src is the better trade.
 func BuildPolicy(scriptHashes []string) string {
 	scriptSrc := make([]string, 0, 2+len(scriptHashes)+4)
 	scriptSrc = append(scriptSrc, "'self'", "'unsafe-eval'")
@@ -256,7 +287,7 @@ func BuildPolicy(scriptHashes []string) string {
 		"default-src 'self'",
 		"script-src " + strings.Join(scriptSrc, " "),
 		"style-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net",
-		"img-src 'self' data: https://user-images.githubusercontent.com https://github.com/user-attachments/",
+		"img-src 'self' data: https:",
 		"font-src 'self' data:",
 		"connect-src 'self' https://api.iconify.design https://api.simplesvg.com https://api.unisvg.com",
 		"base-uri 'self'",
