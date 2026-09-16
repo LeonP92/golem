@@ -111,7 +111,9 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// Closed explicitly at the end rather than deferred: this file is being
+	// written, so a close error means the recovered log is incomplete and
+	// the caller must hear about it.
 	enc := json.NewEncoder(f)
 	for _, e := range claim.LogEntries {
 		entry := blogEntryJSON{
@@ -121,10 +123,11 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 			Timestamp: e.CreatedAt,
 		}
 		if err := enc.Encode(entry); err != nil {
+			_ = f.Close() // the encode error is the one worth reporting
 			return err
 		}
 	}
-	return nil
+	return f.Close()
 }
 
 // CloneIfMissing runs `git clone remote repoPath` if repoPath does not exist.

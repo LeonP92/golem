@@ -369,7 +369,11 @@ func runClaudePhase(ctx context.Context, repoPath, prompt, logPath string) error
 	if err != nil {
 		log.Printf("executor: could not create phase log %s: %v", logPath, err)
 	} else {
-		defer f.Close()
+		defer func() {
+			if cerr := f.Close(); cerr != nil {
+				log.Printf("executor: closing phase log %s: %v", logPath, cerr)
+			}
+		}()
 		cmd.Stdout = io.MultiWriter(os.Stdout, f)
 		cmd.Stderr = io.MultiWriter(os.Stderr, f)
 	}
@@ -566,7 +570,7 @@ func forwardNewLines(logPath string, ticketID string, forwarded *int, c *client.
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 
 	scanner := bufio.NewScanner(f)
 	line := 0

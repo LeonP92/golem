@@ -139,11 +139,15 @@ func TestWorker_ReviseOnPush(t *testing.T) {
 }
 
 func TestWorker_HandlesRevise409(t *testing.T) {
-	reviseAttempts := 0
+	// Buffered so the handler never blocks, and read through the channel
+	// rather than a bare counter: the handler runs on the server's goroutine
+	// and the assertion on the test's, which is a data race when the two are
+	// joined only by a sleep. This is the shape the tests above already use.
+	attempts := make(chan struct{}, 8)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/revise-claim") {
-			reviseAttempts++
+			attempts <- struct{}{}
 			http.Error(w, "conflict", http.StatusConflict)
 			return
 		}
@@ -171,10 +175,17 @@ func TestWorker_HandlesRevise409(t *testing.T) {
 
 	w.HandleMessage(ws.WSMessage{Type: "ticket_revise", TicketID: strPtr("uuid-6")})
 
-	time.Sleep(200 * time.Millisecond)
-
-	if reviseAttempts != 1 {
-		t.Errorf("expected 1 revise-claim attempt, got %d", reviseAttempts)
+	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout: no revise-claim attempt was made")
+	}
+	// A second attempt would mean the 409 was retried rather than
+	// treated as terminal, which is the whole point of the test.
+	select {
+	case <-attempts:
+		t.Error("a second revise-claim attempt was made; a 409 must not be retried")
+	case <-time.After(200 * time.Millisecond):
 	}
 }
 
@@ -219,11 +230,15 @@ func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 }
 
 func TestWorker_HandlesClaim409(t *testing.T) {
-	claimAttempts := 0
+	// Buffered so the handler never blocks, and read through the channel
+	// rather than a bare counter: the handler runs on the server's goroutine
+	// and the assertion on the test's, which is a data race when the two are
+	// joined only by a sleep. This is the shape the tests above already use.
+	attempts := make(chan struct{}, 8)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/claim") {
-			claimAttempts++
+			attempts <- struct{}{}
 			http.Error(w, "conflict", http.StatusConflict)
 			return
 		}
@@ -252,9 +267,16 @@ func TestWorker_HandlesClaim409(t *testing.T) {
 	// Trigger a claim that will get a 409
 	w.HandleMessage(ws.WSMessage{Type: "ticket_available", TicketID: strPtr("uuid-5")})
 
-	time.Sleep(200 * time.Millisecond)
-
-	if claimAttempts != 1 {
-		t.Errorf("expected 1 claim attempt, got %d", claimAttempts)
+	select {
+	case <-attempts:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout: no claim attempt was made")
+	}
+	// A second attempt would mean the 409 was retried rather than
+	// treated as terminal, which is the whole point of the test.
+	select {
+	case <-attempts:
+		t.Error("a second claim attempt was made; a 409 must not be retried")
+	case <-time.After(200 * time.Millisecond):
 	}
 }

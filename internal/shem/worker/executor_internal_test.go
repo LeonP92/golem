@@ -48,7 +48,7 @@ func TestPromptsFenceUntrustedDescription(t *testing.T) {
 			open := strings.Index(got, descriptionFenceOpen)
 			at := strings.Index(got, payload)
 			closeAt := strings.Index(got, descriptionFenceClose)
-			if !(open < at && at < closeAt) {
+			if open >= at || at >= closeAt {
 				t.Errorf("%s prompt places the description outside the fence", name)
 			}
 		})

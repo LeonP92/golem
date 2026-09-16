@@ -113,7 +113,7 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 			return resp, nil
 		}
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 
 		lastErr = err
@@ -142,7 +142,7 @@ func (c *Client) Register(name string, repos []string) (uint, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -162,7 +162,7 @@ func (c *Client) Deregister() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -179,7 +179,7 @@ func (c *Client) GetAssigned() ([]AssignedTicket, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -197,7 +197,7 @@ func (c *Client) GetResumable() ([]*ClaimResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -214,7 +214,7 @@ func (c *Client) ClaimTicket(id string) (*ClaimResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
 		return nil, ErrNotAvailable
@@ -240,7 +240,7 @@ func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
 		return nil, ErrNotAvailable
@@ -265,7 +265,7 @@ func (c *Client) PostPhase(ticketID string, phase string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	if resp.StatusCode == http.StatusConflict {
 		return ErrNotOwner
 	}
@@ -281,7 +281,7 @@ func (c *Client) PostBranchPushed(ticketID string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	if resp.StatusCode == http.StatusConflict {
 		return ErrNotOwner
 	}
@@ -298,7 +298,7 @@ func (c *Client) PostCheckpoint(ticketID string, phase, sha string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	return nil
 }
 
@@ -308,7 +308,7 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -329,7 +329,7 @@ func (c *Client) PostDocumentFile(ticketID string, entryType, fromRole, filePath
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 
 	url := fmt.Sprintf("%s/api/tickets/%s/log/document", c.baseURL, ticketID)
 	req, err := http.NewRequest("POST", url, f)
@@ -346,7 +346,7 @@ func (c *Client) PostDocumentFile(ticketID string, entryType, fromRole, filePath
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
@@ -377,7 +377,7 @@ func (c *Client) PostApprovalRequest(ticketID string, prompt string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -403,7 +403,7 @@ func (c *Client) AckInput(ticketID string, inputID uint) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	return nil
 }
 
@@ -424,7 +424,7 @@ func (c *Client) firstHumanInput(ticketID string, kind string, includeResolved b
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -451,7 +451,7 @@ func (c *Client) GetAvailable(repo string) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var tickets []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&tickets); err != nil {

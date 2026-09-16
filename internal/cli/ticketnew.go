@@ -103,7 +103,7 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "opening ticket log: %v\n", err)
 		return 1
 	}
-	defer w.Close()
+	defer closeLogWriter(w, stderr)
 	if err := w.Append(blog.NewEntry("system", blog.TypeStatus, "ticket created: "+description)); err != nil {
 		fmt.Fprintf(stderr, "writing initial log entry: %v\n", err)
 		return 1

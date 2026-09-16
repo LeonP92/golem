@@ -34,7 +34,7 @@ var commandGroups = []struct {
 
 func init() {
 	commandTable["version"] = commandEntry{
-		fn:   func(_ []string, stdout, _ io.Writer) int { fmt.Fprintln(stdout, version); return 0 },
+		fn:   func(_ []string, stdout, _ io.Writer) int { _, _ = fmt.Fprintln(stdout, version); return 0 },
 		desc: "Print the golem version.",
 	}
 	commandTable["init"] = commandEntry{fn: cli.Init, desc: "Initialise .golem in a repo."}
@@ -52,7 +52,7 @@ func init() {
 func helpCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		for _, g := range commandGroups {
-			fmt.Fprintf(stdout, "\n  %s\n", strings.ToUpper(g.label))
+			_, _ = fmt.Fprintf(stdout, "\n  %s\n", strings.ToUpper(g.label))
 			for _, name := range g.commands {
 				e, ok := commandTable[name]
 				if !ok {
@@ -61,7 +61,7 @@ func helpCommand(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "    %-12s  %s\n", name, e.desc)
 			}
 		}
-		fmt.Fprintln(stdout)
+		_, _ = fmt.Fprintln(stdout)
 		return 0
 	}
 	// help <command>: invoke with --help to trigger FlagSet usage output.
@@ -75,7 +75,7 @@ func helpCommand(args []string, stdout, stderr io.Writer) int {
 
 func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: golem ticket <new|resume|close|advance|review|set-step|check-bloat> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: golem ticket <new|resume|close|advance|review|set-step|check-bloat> [flags]")
 		return 1
 	}
 	switch args[0] {

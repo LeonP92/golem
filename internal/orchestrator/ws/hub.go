@@ -44,7 +44,7 @@ func (h *Hub) Unregister(shemID uint) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if e, ok := h.conns[shemID]; ok {
-		e.conn.Close()
+		_ = e.conn.Close() // unregistering: a close error changes nothing
 		delete(h.conns, shemID)
 	}
 }

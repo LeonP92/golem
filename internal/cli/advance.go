@@ -24,6 +24,16 @@ var knownPhases = map[string]ticket.Phase{
 	"closed":           ticket.PhaseClosed,
 }
 
+// closeLogWriter closes a blog writer and reports a failure to stderr without
+// changing the command's exit status. A failed close means a log entry that
+// the command already reported as written is not actually on disk; silently
+// dropping that error is the one thing this codebase does not do.
+func closeLogWriter(w *blog.Writer, stderr io.Writer) {
+	if err := w.Close(); err != nil {
+		fmt.Fprintf(stderr, "warning: closing log: %v\n", err)
+	}
+}
+
 func TicketAdvance(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ticket advance", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -108,11 +118,11 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	attestation := blog.NewEntry("reviewer", blog.TypeStatus, result.Output)
 	attestation.Model = result.Model
 	if err := w.Append(attestation); err != nil {
-		w.Close()
+		closeLogWriter(w, stderr)
 		fmt.Fprintf(stderr, "recording attestation: %v\n", err)
 		return 1
 	}
-	w.Close()
+	closeLogWriter(w, stderr)
 
 	gateResult, err := gate.Run(s.WorktreePath, cfg.Gate)
 	if err != nil {

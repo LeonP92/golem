@@ -111,9 +111,9 @@ func (h *Handlers) retryParkedOutboxRow(w http.ResponseWriter, r *http.Request) 
 func validateTriggerLabel(label string) error {
 	if strings.HasPrefix(label, ghsync.PhaseLabelPrefix) {
 		return fmt.Errorf("trigger label %q is inside the %s namespace Golem uses for phase labels, "+
-			"so it would be removed from the issue on its first phase change — "+
-			"un-enrolling it from its own trigger. Choose a label outside that namespace "+
-			"(the default is %q).", label, ghsync.PhaseLabelPrefix, "golem")
+			"so it would be removed from the issue on its first phase change, "+
+			"un-enrolling it from its own trigger; choose a label outside that "+
+			"namespace (the default is %q)", label, ghsync.PhaseLabelPrefix, "golem")
 	}
 	return nil
 }

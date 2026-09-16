@@ -123,27 +123,39 @@ func TestWSClient_Listen(t *testing.T) {
 		t.Fatalf("Connect failed: %v", err)
 	}
 
-	messagesReceived := 0
+	// The callback runs on Listen's goroutine and the assertions on the
+	// test's, so the message travels over a channel rather than a counter
+	// read after a sleep — that pairing is a data race, and it was one.
+	// Sending the message rather than a bare signal also moves the
+	// assertions onto the test's goroutine, where a failure is attributed
+	// to this test and cannot land after it has returned.
+	received := make(chan ws.WSMessage, 8)
+	listenErr := make(chan error, 1)
 	go func() {
-		// We expect Listen to return an error when the server closes
-		err := wc.Listen(func(msg ws.WSMessage) {
-			messagesReceived++
-			if msg.Type != "ticket_claimed" {
-				t.Errorf("expected ticket_claimed, got %s", msg.Type)
-			}
-			if msg.TicketID == nil || *msg.TicketID != wantTicketID {
-				t.Errorf("expected ticket_id %q, got %v", wantTicketID, msg.TicketID)
-			}
-		})
-		if err == nil {
-			t.Error("expected Listen to return error on disconnect")
-		}
+		// Listen is expected to return an error when the server closes.
+		listenErr <- wc.Listen(func(msg ws.WSMessage) { received <- msg })
 	}()
 
-	// Give time for Listen to receive the message
-	time.Sleep(200 * time.Millisecond)
+	select {
+	case msg := <-received:
+		if msg.Type != "ticket_claimed" {
+			t.Errorf("expected ticket_claimed, got %s", msg.Type)
+		}
+		if msg.TicketID == nil || *msg.TicketID != wantTicketID {
+			t.Errorf("expected ticket_id %q, got %v", wantTicketID, msg.TicketID)
+		}
+	case err := <-listenErr:
+		t.Fatalf("Listen returned before delivering a message: %v", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout: expected to receive at least one message")
+	}
 
-	if messagesReceived == 0 {
-		t.Error("expected to receive at least one message")
+	select {
+	case err := <-listenErr:
+		if err == nil {
+			t.Error("expected Listen to return an error on disconnect")
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("timeout: Listen did not return after the server closed")
 	}
 }

@@ -54,7 +54,7 @@ func LogEmit(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "opening log: %v\n", err)
 		return 1
 	}
-	defer w.Close()
+	defer closeLogWriter(w, stderr)
 
 	e := blog.NewEntry(*role, entryType, message)
 	e.Target = *target
@@ -110,7 +110,7 @@ func Ask(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	questionID, err := askwait.Ask(w, *from, *to, question)
-	w.Close()
+	closeLogWriter(w, stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "posting question: %v\n", err)
 		return 1
@@ -122,11 +122,20 @@ func Ask(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	if !found {
-		w, _ := blog.NewWriter(logPath)
-		timeoutEntry := blog.NewEntry("system", blog.TypeTimeout, "no answer within timeout")
-		timeoutEntry.InReplyTo = questionID
-		w.Append(timeoutEntry)
-		w.Close()
+		// Best effort on an already-failing path, but reported rather than
+		// dropped: if the timeout entry does not reach the log, the ticket's
+		// history will show a question with no outcome at all.
+		w, werr := blog.NewWriter(logPath)
+		if werr != nil {
+			fmt.Fprintf(stderr, "warning: opening log to record the timeout: %v\n", werr)
+		} else {
+			timeoutEntry := blog.NewEntry("system", blog.TypeTimeout, "no answer within timeout")
+			timeoutEntry.InReplyTo = questionID
+			if aerr := w.Append(timeoutEntry); aerr != nil {
+				fmt.Fprintf(stderr, "warning: recording the timeout: %v\n", aerr)
+			}
+			closeLogWriter(w, stderr)
+		}
 		fmt.Fprintf(stderr, "timed out waiting for an answer from %s\n", *to)
 		return 1
 	}
@@ -173,7 +182,7 @@ func Answer(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "opening log: %v\n", err)
 		return 1
 	}
-	defer w.Close()
+	defer closeLogWriter(w, stderr)
 	e := blog.NewEntry(*from, blog.TypeAnswer, message)
 	e.InReplyTo = *inReplyTo
 	e.Target = thread
