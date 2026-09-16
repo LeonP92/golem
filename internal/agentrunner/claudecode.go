@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/leonp92/golem/internal/agentenv"
 )
 
 const agentFrontmatterTemplate = `---
@@ -232,6 +234,12 @@ func (c ClaudeCode) RunAgent(role string, ctx Context) (Result, error) {
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = c.RepoRoot
 	cmd.Stdin = strings.NewReader(prompt)
+	// The prompt carries untrusted text — BuildPrompt wraps log entries and a
+	// diff, and on a repository synced from GitHub the log's first line is the
+	// issue description — so this process does not get golem's own
+	// environment. Same allow-list as the shem worker's exec site; see
+	// internal/agentenv for why it is shared rather than duplicated.
+	cmd.Env = agentenv.Environ()
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

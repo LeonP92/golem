@@ -1,4 +1,4 @@
-package worker
+package agentenv
 
 import (
 	"log"
@@ -6,6 +6,18 @@ import (
 	"strings"
 )
 
+// Package agentenv decides what an agent subprocess is allowed to see of the
+// environment Golem is running in.
+//
+// It is a package rather than a helper inside one caller because there are two
+// places that exec an agent and both need the same answer: the shem worker's
+// `claude --print` (internal/shem/worker), and the CLI-mode backend adapter
+// used by `golem observer dispatch` and `golem ticket review`
+// (internal/agentrunner). CLI mode ingests GitHub issues too — `golem issue
+// sync`, `golem ticket new --from-issue N` — so untrusted description text
+// reaches an agent on that path as well, with no approval gate in front of it
+// at all. A rule that held in one of the two would not be a rule.
+//
 // The agent subprocess runs with an allow-listed environment, not Golem's own.
 //
 // WHY. The ticket description reaches a `claude --print` prompt, and the
@@ -39,10 +51,10 @@ const (
 	// golemNamespace prefixes every environment variable that is Golem's own
 	// configuration. Nothing matching it is ever passed to an agent.
 	golemNamespace = "GOLEM_"
-	// agentEnvPassthroughVar names a comma-separated list of additional
+	// passthroughVar names a comma-separated list of additional
 	// variable names to pass through, for a toolchain the allow-list below
 	// does not anticipate. It cannot widen the deny above.
-	agentEnvPassthroughVar = "GOLEM_AGENT_ENV"
+	passthroughVar = "GOLEM_AGENT_ENV"
 )
 
 // golemOwnedNames are the variables Golem reads that do not carry the
@@ -52,8 +64,8 @@ var golemOwnedNames = map[string]bool{
 	"ORCHESTRATOR_DB": true,
 }
 
-// agentEnvNames are passed through by exact match.
-var agentEnvNames = map[string]bool{
+// envNames are passed through by exact match.
+var envNames = map[string]bool{
 	// Process basics.
 	"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "SHELL": true,
 	"PWD": true, "TMPDIR": true, "TMP": true, "TEMP": true, "TERM": true,
@@ -79,8 +91,8 @@ var agentEnvNames = map[string]bool{
 	"JAVA_HOME": true, "ANDROID_HOME": true, "ANDROID_SDK_ROOT": true,
 }
 
-// agentEnvPrefixes are passed through by prefix match.
-var agentEnvPrefixes = []string{
+// envPrefixes are passed through by prefix match.
+var envPrefixes = []string{
 	"LC_", "XDG_",
 	// The agent's own model credentials and configuration. AWS_ and GOOGLE_
 	// are here because Claude Code reaches Bedrock and Vertex through them;
@@ -99,9 +111,9 @@ var agentEnvPrefixes = []string{
 	"GEM_", "BUNDLE_",
 }
 
-// agentEnv filters parent (an os.Environ()-shaped slice) down to what an agent
+// Filter reduces parent (an os.Environ()-shaped slice) to what an agent
 // subprocess is allowed to see.
-func agentEnv(parent []string) []string {
+func Filter(parent []string) []string {
 	extra := passthroughNames(parent)
 	out := make([]string, 0, len(parent))
 	for _, kv := range parent {
@@ -115,7 +127,7 @@ func agentEnv(parent []string) []string {
 		if denied(name) {
 			continue
 		}
-		if agentEnvNames[name] || extra[name] || hasAllowedPrefix(name) {
+		if envNames[name] || extra[name] || hasAllowedPrefix(name) {
 			out = append(out, kv)
 		}
 	}
@@ -129,7 +141,7 @@ func denied(name string) bool {
 }
 
 func hasAllowedPrefix(name string) bool {
-	for _, p := range agentEnvPrefixes {
+	for _, p := range envPrefixes {
 		if strings.HasPrefix(name, p) {
 			return true
 		}
@@ -144,7 +156,7 @@ func passthroughNames(parent []string) map[string]bool {
 	names := map[string]bool{}
 	for _, kv := range parent {
 		name, value, ok := strings.Cut(kv, "=")
-		if !ok || name != agentEnvPassthroughVar {
+		if !ok || name != passthroughVar {
 			continue
 		}
 		for _, n := range strings.Split(value, ",") {
@@ -154,7 +166,7 @@ func passthroughNames(parent []string) map[string]bool {
 			}
 			if denied(n) {
 				log.Printf("shem: %s lists %q, which is golem's own configuration and is never passed to an agent; ignoring it",
-					agentEnvPassthroughVar, n)
+					passthroughVar, n)
 				continue
 			}
 			names[n] = true
@@ -163,5 +175,6 @@ func passthroughNames(parent []string) map[string]bool {
 	return names
 }
 
-// agentEnviron is agentEnv over this process's environment.
-func agentEnviron() []string { return agentEnv(os.Environ()) }
+// Environ is Filter over this process's own environment. It is what every
+// agent exec site passes to cmd.Env.
+func Environ() []string { return Filter(os.Environ()) }

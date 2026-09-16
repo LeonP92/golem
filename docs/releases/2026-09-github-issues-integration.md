@@ -204,9 +204,14 @@ anything queued while it is down is delivered when it comes back.
   repository credential only when someone has decided it needs one — the same
   moment they turn `no_push: false` on. Set it to a push-only token if you can.
 - The agent subprocess runs with an allow-listed environment rather than
-  Golem's own. It keeps its model credentials, the shell, locale, proxy and
-  TLS settings, git identity, and the language toolchains; it no longer sees
-  anything in the `GOLEM_` namespace. The shem's `git push` is unaffected.
+  Golem's own, on **both** paths — the shem's `claude --print` and CLI mode's
+  `golem observer dispatch` / `golem ticket review`. It keeps its model
+  credentials, the shell, locale, proxy and TLS settings, git identity, and the
+  language toolchains; it no longer sees anything in the `GOLEM_` namespace.
+  Golem's own subprocesses, including the shem's `git push`, are unaffected. If
+  a build in your repository needs a variable the list does not cover, name it
+  in `GOLEM_AGENT_ENV` (comma-separated); that cannot re-add the `GOLEM_`
+  namespace.
 - Logging out is a `POST`. A `GET /logout` used to be reachable from rendered
   markdown via `![](/logout)`, which logged the operator out on page load.
 - DOMPurify, the sanitizer on the markdown sink, is pinned to an exact version

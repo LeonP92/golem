@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"gopkg.in/yaml.v3"
@@ -351,10 +352,10 @@ func claudePhaseCmd(ctx context.Context, repoPath, prompt string) *exec.Cmd {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	// The prompt carries untrusted issue text, so this process must not
-	// carry golem's credentials — see agentenv.go. The golem and git
+	// carry golem's credentials — see internal/agentenv. The golem and git
 	// subprocesses around it are golem's own commands and keep the full
 	// environment, which is what leaves the shem's push credential working.
-	cmd.Env = agentEnviron()
+	cmd.Env = agentenv.Environ()
 	return cmd
 }
 
