@@ -15,6 +15,7 @@ import (
 	"testing"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 )
 
 // dispatcherActions parses ticketAction's switch statement directly out of
@@ -190,7 +191,8 @@ func TestEveryDispatcherActionOnPendingApprovalTicket(t *testing.T) {
 			// 409 on "start" regardless of phase, which is exercised
 			// separately in TestStartActionReleasesPendingApprovalTicket.
 			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
-				Phase: "pending-approval", IssueNumber: &n}
+				BodyHash: ghsync.HashBody("d"),
+				Phase:    "pending-approval", IssueNumber: &n}
 			if err := h.DB.Create(&ticket).Error; err != nil {
 				t.Fatalf("seed ticket: %v", err)
 			}
@@ -211,6 +213,14 @@ func TestEveryDispatcherActionOnPendingApprovalTicket(t *testing.T) {
 				body["response"] = "an answer"
 			case "request-changes":
 				body["feedback"] = "please fix"
+			case "start":
+				// The dashboard's approval control submits the body_hash
+				// its page was rendered from, and the dispatcher requires
+				// it (fix round 1c). Supplying the matching hash keeps this
+				// case testing what it is here to test — whether "start"
+				// may release a pending-approval ticket — rather than
+				// stopping at a 400.
+				body["reviewed_body_hash"] = ghsync.HashBody("d")
 			}
 
 			raw, err := json.Marshal(body)

@@ -65,6 +65,11 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		Feedback string `json:"feedback"`
 		InputID  uint   `json:"input_id"`
 		Response string `json:"response"`
+		// ReviewedBodyHash is the ticket's body_hash as it was when the
+		// page carrying this control was rendered — i.e. the fingerprint
+		// of the description the operator actually read. Only "start"
+		// uses it; see actionStart.
+		ReviewedBodyHash string `json:"reviewed_body_hash"`
 	}
 
 	ct := r.Header.Get("Content-Type")
@@ -98,6 +103,7 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		body.Action = r.PostForm.Get("action")
 		body.Feedback = r.PostForm.Get("feedback")
 		body.Response = r.PostForm.Get("response")
+		body.ReviewedBodyHash = r.PostForm.Get("reviewed_body_hash")
 		if idStr := r.PostForm.Get("input_id"); idStr != "" {
 			id64, _ := strconv.ParseUint(idStr, 10, 64)
 			body.InputID = uint(id64)
@@ -136,7 +142,17 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		}
 		h.actionAnswer(w, r, id, body.InputID, body.Response)
 	case "start":
-		h.actionStart(w, r, id)
+		// Validated here, alongside the dispatcher's other per-action
+		// required parameters. An absent hash is not "no opinion" — it is
+		// exactly the shape a page cached from before this check produces,
+		// and the shape any caller wanting to skip the check would use, so
+		// it is refused rather than waved through.
+		if body.ReviewedBodyHash == "" {
+			http.Error(w, "reviewed_body_hash is required for start; "+
+				"reload the ticket page and read the description again", http.StatusBadRequest)
+			return
+		}
+		h.actionStart(w, r, id, body.ReviewedBodyHash)
 	default:
 		http.Error(w, "unknown action: "+body.Action, http.StatusBadRequest)
 	}
@@ -378,7 +394,7 @@ var errNotFlaggable = errors.New("ticket is not flaggable")
 // phase check alone let a claimed-but-unapproved ticket (a state that
 // should not arise, but round 4's guard did not defend against it) get
 // double-claimed — see the comment on that clause below.
-func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string) {
+func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, reviewedBodyHash string) {
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
 		http.Error(w, "ticket not found", http.StatusNotFound)
@@ -445,6 +461,38 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 		// the live issue body no longer hashes to what was approved here,
 		// for any ticket that has not yet been claimed.
 		approvedHash := ghsync.HashBody(fresh.Description)
+
+		// ...and reviewedBodyHash binds it to the text the operator was
+		// actually SHOWN (fix round 1c). Round 1b closed the window between
+		// this handler's own read and its transaction, but the window that
+		// matters is longer and cannot be seen from inside this request at
+		// all: the time between the page being rendered and the operator
+		// clicking Approve, which is however long a human spends reading.
+		// An ingest pass landing in there leaves this transaction reading
+		// the edited text, and hashing it would certify text nobody
+		// reviewed — fail-open, on the one property this gate exists to
+		// provide. The page therefore renders the hash it displayed the
+		// description at, the control submits it, and it has to still hold
+		// here.
+		//
+		// Both comparisons are required. reviewedBodyHash == fresh.BodyHash
+		// is the actual check. approvedHash == fresh.BodyHash additionally
+		// refuses to approve a row whose two ghsync-written columns
+		// disagree — a state nothing produces today, but one where a silent
+		// 204 would strand the ticket unclaimable with no recovery (the S5
+		// shape). Failing loudly here means an approval that returns 204 has
+		// always left the ticket genuinely claimable.
+		//
+		// This check is deliberately after the UPDATE above rather than
+		// before it: the row is only held against concurrent writers once
+		// this transaction has written it, so a comparison made before that
+		// could be overtaken by the very ingest commit it is meant to catch.
+		// Refusing rolls the whole transaction back, including the phase and
+		// intake_approved writes and any outbox row.
+		if reviewedBodyHash != fresh.BodyHash || approvedHash != fresh.BodyHash {
+			return errStaleReview
+		}
+
 		if err := tx.Model(&db.Ticket{}).Where("id = ?", id).
 			Update("approved_body_hash", approvedHash).Error; err != nil {
 			return fmt.Errorf("record approved body hash for ticket %s: %w", id, err)
@@ -452,6 +500,11 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 		fresh.ApprovedBodyHash = approvedHash
 		return enqueueGitHubPhase(tx, fresh, "unassigned", h.BaseURL)
 	})
+	if errors.Is(txErr, errStaleReview) {
+		http.Error(w, "the GitHub issue changed since this page was loaded; "+
+			"reload the ticket and read the new description before approving it", http.StatusConflict)
+		return
+	}
 	if errors.Is(txErr, errNotStartable) {
 		http.Error(w, "ticket is already approved, already claimed, not linked to a GitHub issue, or closed", http.StatusConflict)
 		return
@@ -479,6 +532,13 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 // is already approved (intake_approved), already claimed (assigned_shem set),
 // not linked to a GitHub issue, or closed.
 var errNotStartable = errors.New("ticket is not startable")
+
+// errStaleReview signals that the description the operator approved is no
+// longer the description on the ticket — an ingest pass committed an edit
+// between the page being rendered and the approval arriving. Recovery is a
+// reload: nothing is written, so the operator re-reads the new text and
+// approves that.
+var errStaleReview = errors.New("ticket body changed since it was reviewed")
 
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {
 	// pending-approval is excluded for the same reason requeue excludes it:

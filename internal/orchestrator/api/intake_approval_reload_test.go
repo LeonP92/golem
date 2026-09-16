@@ -40,22 +40,31 @@ func interleaveOnceAfterTicketRead(t *testing.T, gdb *gorm.DB, apply func(gdb *g
 	})
 }
 
-// TestActionStartBindsApprovalToTheTextInItsOwnTransaction covers finding I5.
-// actionStart read the ticket with a plain, pre-transaction h.DB.First and
-// hashed that snapshot's Description inside the transaction. An ingest write
-// landing in the gap was therefore written into the approval as
-// approved_body_hash = H(old) while body_hash had already moved to H(new).
+// TestActionStartChecksTheReviewedHashInsideItsOwnTransaction is where fix
+// rounds 1b and 1c meet.
 //
-// The claim predicates require approved_body_hash = body_hash, so that failed
+// Round 1b (finding I5): actionStart read the ticket with a plain,
+// pre-transaction h.DB.First and hashed that snapshot's Description inside
+// the transaction, so an ingest write landing in the gap was written into the
+// approval as approved_body_hash = H(old) while body_hash had already moved
+// to H(new). The claim predicates require the two to be equal, so it failed
 // closed — but with no in-product recovery: the dashboard showed the ticket as
-// released, a second start 409ed because intake_approved was already true, and
-// requeue excludes unassigned. A human had to edit the GitHub issue to unstick
-// it.
+// released, a second start 409ed on intake_approved, and requeue excludes
+// unassigned. A human had to edit the GitHub issue to unstick it.
 //
-// Verified against HEAD e8a4a67 before the fix: approved_body_hash was the
-// hash of the OLD text, the ticket was not claimable, and /available returned
-// it zero times.
-func TestActionStartBindsApprovalToTheTextInItsOwnTransaction(t *testing.T) {
+// Round 1c: the approval now carries the body_hash the operator's page was
+// rendered from, and actionStart requires it to still hold. This test forces
+// the same narrow read-to-transaction interleaving and asserts the two halves
+// together: the check must be made against the row as re-read INSIDE the
+// transaction, and a mismatch must refuse cleanly and recoverably.
+//
+// That it uses the reloaded row and not the pre-transaction snapshot is the
+// whole point. Comparing against the snapshot would see the OLD hash on both
+// sides here, pass, and approve the new text — reinstating I5's defect in a
+// form that fails open. A plain-looking "optimisation" to compare
+// reviewedBodyHash against the already-loaded ticket variable does exactly
+// that, and only an interleaving inside the request catches it.
+func TestActionStartChecksTheReviewedHashInsideItsOwnTransaction(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 	h.RegisterTicketRoutes(mux)
 	shem := seedShem(t, h, "reload-shem", "reloadkey")
@@ -69,6 +78,7 @@ func TestActionStartBindsApprovalToTheTextInItsOwnTransaction(t *testing.T) {
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		t.Fatalf("seed ticket: %v", err)
 	}
+	reviewed := ticket.BodyHash // what the operator's page rendered
 
 	// An ingest pass commits new issue text in the window between
 	// actionStart's pre-transaction read and its transaction.
@@ -79,23 +89,26 @@ func TestActionStartBindsApprovalToTheTextInItsOwnTransaction(t *testing.T) {
 		})
 	})
 
-	body, _ := json.Marshal(map[string]string{"action": "start"})
+	body, _ := json.Marshal(map[string]string{
+		"action": "start", "reviewed_body_hash": reviewed,
+	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	if w.Code != http.StatusNoContent {
-		t.Fatalf("start status = %d, want 204: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusConflict {
+		t.Fatalf("start status = %d, want 409 — the text changed inside the request: %s",
+			w.Code, w.Body.String())
 	}
 
 	var got db.Ticket
 	if err := h.DB.First(&got, "id = ?", ticket.ID).Error; err != nil {
 		t.Fatalf("reload ticket: %v", err)
 	}
-	if got.ApprovedBodyHash != got.BodyHash {
-		t.Errorf("approved_body_hash = %q, body_hash = %q — approval bound to a snapshot the transaction had already superseded",
-			got.ApprovedBodyHash, got.BodyHash)
+	if got.IntakeApproved || got.ApprovedBodyHash != "" || got.Phase != "pending-approval" {
+		t.Errorf("after the refusal: intake_approved=%v approved_body_hash=%q phase=%q, want false/empty/pending-approval",
+			got.IntakeApproved, got.ApprovedBodyHash, got.Phase)
 	}
 	// body_hash is owned by ingest alone. actionStart must never write it:
 	// stamping both hashes from one read is what would make new, unreviewed
@@ -104,11 +117,31 @@ func TestActionStartBindsApprovalToTheTextInItsOwnTransaction(t *testing.T) {
 		t.Errorf("body_hash = %q, want the ingest-written hash of %q — actionStart must not write body_hash",
 			got.BodyHash, "new text")
 	}
+	if _, err := h.ClaimTicket(ticket.ID, shem.ID); err == nil {
+		t.Error("ticket is claimable after a refused approval")
+	}
 
-	// A released ticket must actually be claimable; that is the property the
-	// stale hash silently destroyed.
+	// Recovery is a reload, and the approval it produces leaves the ticket
+	// genuinely claimable — the liveness half of I5.
+	body, _ = json.Marshal(map[string]string{
+		"action": "start", "reviewed_body_hash": ghsync.HashBody("new text"),
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/actions", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	withSession(req, cookie)
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("re-approval after reload = %d, want 204: %s", w.Code, w.Body.String())
+	}
+	if err := h.DB.First(&got, "id = ?", ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if got.ApprovedBodyHash != got.BodyHash {
+		t.Errorf("approved_body_hash = %q, body_hash = %q — want them equal", got.ApprovedBodyHash, got.BodyHash)
+	}
 	if _, err := h.ClaimTicket(ticket.ID, shem.ID); err != nil {
-		t.Errorf("claim after approval: %v — the released ticket is not claimable", err)
+		t.Errorf("claim after re-approval: %v — the released ticket is not claimable", err)
 	}
 }
 

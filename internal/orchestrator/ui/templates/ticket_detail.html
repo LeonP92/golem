@@ -50,7 +50,8 @@
             </p>
             <button class="btn btn-sm btn-warning gap-1.5"
               hx-post="/api/tickets/{{.Ticket.ID}}/actions"
-              hx-vals='{"action":"start"}'
+              {{/* reviewed_body_hash is the fingerprint of the description rendered ABOVE, submitted with the approval so actionStart can refuse it if a poll edited the issue while this page sat open (fix round 1c). Without it the server cannot tell what the operator was shown, and an edit landing between render and click would be approved unread. htmx serialises hx-vals into the request BODY for a POST, which is where the dispatcher reads every parameter from (finding S1); the CSRF token travels separately as a header, added by the htmx:configRequest listener in layout.html. */}}
+              hx-vals='{"action":"start","reviewed_body_hash":"{{.Ticket.BodyHash}}"}'
               hx-confirm="Approve and start this ticket? A shem will be able to claim it immediately."
               hx-on::after-request="if(event.detail.successful) window.location.reload()">
               <span class="iconify" data-icon="heroicons:play"></span>

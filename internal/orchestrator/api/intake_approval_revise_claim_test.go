@@ -91,7 +91,7 @@ func TestReviseClaimRefusesPostApprovalEditWhileRevising(t *testing.T) {
 	}
 
 	// start: human approves the original text.
-	if w := doStart(t, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
+	if w := doStart(t, h, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
@@ -234,7 +234,7 @@ func TestReviseClaimStillSucceedsApprovedUneditedGitHubTicket(t *testing.T) {
 		t.Fatalf("ticket not created: %v", err)
 	}
 
-	if w := doStart(t, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
+	if w := doStart(t, h, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 

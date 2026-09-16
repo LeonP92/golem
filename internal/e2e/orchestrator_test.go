@@ -298,7 +298,19 @@ func newGitHubTestEnv(t *testing.T, gdb *gorm.DB) *githubTestEnv {
 // doAction POSTs a human ticket action (session-authenticated).
 func (e *githubTestEnv) doAction(t *testing.T, ticketID, action string) int {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"action": action})
+	payload := map[string]string{"action": action}
+	if action == "start" {
+		// The approval control submits the body_hash its page was rendered
+		// from, so actionStart can refuse text the operator never saw (fix
+		// round 1c). Reading it here is the ordinary case: nothing changed
+		// between the render and the click.
+		var shown db.Ticket
+		if err := e.h.DB.First(&shown, "id = ?", ticketID).Error; err != nil {
+			t.Fatalf("read ticket %s as the page would: %v", ticketID, err)
+		}
+		payload["reviewed_body_hash"] = shown.BodyHash
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticketID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(e.cookie)

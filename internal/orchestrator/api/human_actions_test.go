@@ -731,12 +731,20 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			h, mux, cookie := setupActionTest(t)
 
+			// BodyHash is what ingest writes alongside Description, and
+			// what the page renders into the approval control (fix round
+			// 1c). Every case below submits the matching hash, so each one
+			// still exercises the guard it was written for rather than
+			// stopping at the reviewed-hash check.
 			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
-				Phase: tt.phase, IssueNumber: tt.issueNumber, IntakeApproved: tt.intakeApproved,
+				BodyHash: ghsync.HashBody("d"),
+				Phase:    tt.phase, IssueNumber: tt.issueNumber, IntakeApproved: tt.intakeApproved,
 				AssignedShem: tt.assignedShem}
 			h.DB.Create(&ticket)
 
-			body, _ := json.Marshal(map[string]string{"action": "start"})
+			body, _ := json.Marshal(map[string]string{
+				"action": "start", "reviewed_body_hash": ticket.BodyHash,
+			})
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
@@ -775,12 +783,15 @@ func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
 
 	n := 7
 	ticket := db.Ticket{RepoRemote: "https://github.com/org/repo", Branch: "b",
-		Description: "d", Phase: "pending-approval", IssueNumber: &n}
+		Description: "d", BodyHash: ghsync.HashBody("d"),
+		Phase: "pending-approval", IssueNumber: &n}
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		t.Fatalf("seed ticket: %v", err)
 	}
 
-	body, _ := json.Marshal(map[string]string{"action": "start"})
+	body, _ := json.Marshal(map[string]string{
+		"action": "start", "reviewed_body_hash": ticket.BodyHash,
+	})
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

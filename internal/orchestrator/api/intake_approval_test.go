@@ -8,15 +8,28 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 )
 
 // doTicketAction posts a human action to /api/tickets/{id}/actions with
 // session auth and returns the response recorder.
-func doTicketAction(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, ticketID, action string) *httptest.ResponseRecorder {
+func doTicketAction(t *testing.T, h *api.Handlers, mux *http.ServeMux, cookie *http.Cookie, ticketID, action string) *httptest.ResponseRecorder {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"action": action})
+	payload := map[string]string{"action": action}
+	if action == "start" {
+		// The dashboard's approval control carries the body_hash the page
+		// was rendered from; actionStart refuses a start without it (fix
+		// round 1c). Read immediately before the POST, i.e. the case where
+		// nothing changed while the operator read.
+		var shown db.Ticket
+		if err := h.DB.First(&shown, "id = ?", ticketID).Error; err != nil {
+			t.Fatalf("read ticket %s as the page would: %v", ticketID, err)
+		}
+		payload["reviewed_body_hash"] = shown.BodyHash
+	}
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost, fmt.Sprintf("/api/tickets/%s/actions", ticketID), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	withSession(req, cookie)
@@ -64,7 +77,7 @@ func TestPendingApprovalTicketNeverBecomesClaimableThroughPhaseChain(t *testing.
 	// point of this test is that the end state must still not be claimable.
 	steps := []string{"close", "needs-attention", "requeue"}
 	for _, action := range steps {
-		w := doTicketAction(t, mux, cookie, ticket.ID, action)
+		w := doTicketAction(t, h, mux, cookie, ticket.ID, action)
 		if w.Code != http.StatusNoContent {
 			t.Fatalf("action=%q: expected 204, got %d: %s", action, w.Code, w.Body.String())
 		}
@@ -234,10 +247,10 @@ func TestStartRecoversTicketStrandedOutsidePendingApproval(t *testing.T) {
 	// requires going via close first — the same "close, then needs-attention"
 	// prefix of round 3's laundering chain, stopping short of requeue since
 	// this test's point is recovery via start, not via requeue.
-	if w := doTicketAction(t, mux, cookie, ticket.ID, "close"); w.Code != http.StatusNoContent {
+	if w := doTicketAction(t, h, mux, cookie, ticket.ID, "close"); w.Code != http.StatusNoContent {
 		t.Fatalf("close: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
-	if w := doTicketAction(t, mux, cookie, ticket.ID, "needs-attention"); w.Code != http.StatusNoContent {
+	if w := doTicketAction(t, h, mux, cookie, ticket.ID, "needs-attention"); w.Code != http.StatusNoContent {
 		t.Fatalf("needs-attention: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 	var stranded db.Ticket
@@ -247,7 +260,7 @@ func TestStartRecoversTicketStrandedOutsidePendingApproval(t *testing.T) {
 			stranded.Phase, stranded.IntakeApproved)
 	}
 
-	if w := doTicketAction(t, mux, cookie, ticket.ID, "start"); w.Code != http.StatusNoContent {
+	if w := doTicketAction(t, h, mux, cookie, ticket.ID, "start"); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 

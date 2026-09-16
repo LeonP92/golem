@@ -12,6 +12,7 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/leonp92/golem/internal/github"
+	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 )
@@ -27,10 +28,22 @@ func seedGitHubRepo(t *testing.T, gdb *gorm.DB, repoRemote string) *db.GitHubRep
 	return &repo
 }
 
-// doStart posts action=start to ticketID via the real HTTP action endpoint.
-func doStart(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, ticketID string) *httptest.ResponseRecorder {
+// doStart posts action=start to ticketID via the real HTTP action endpoint,
+// carrying the ticket's current body_hash as reviewed_body_hash. That models
+// the dashboard exactly: the page renders the hash alongside the description
+// it displays, and the approval submits it back so actionStart can refuse an
+// approval of text the operator never saw (fix round 1c). Reading it here,
+// immediately before the POST, is the "nothing changed while they read"
+// case.
+func doStart(t *testing.T, h *api.Handlers, mux *http.ServeMux, cookie *http.Cookie, ticketID string) *httptest.ResponseRecorder {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"action": "start"})
+	var shown db.Ticket
+	if err := h.DB.First(&shown, "id = ?", ticketID).Error; err != nil {
+		t.Fatalf("read ticket %s as the page would: %v", ticketID, err)
+	}
+	body, _ := json.Marshal(map[string]string{
+		"action": "start", "reviewed_body_hash": shown.BodyHash,
+	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticketID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	withSession(req, cookie)
@@ -78,7 +91,7 @@ func TestPostApprovalIssueEditRegatesUnclaimedTicket(t *testing.T) {
 		t.Fatalf("phase = %q, want pending-approval before approval", ticket.Phase)
 	}
 
-	if w := doStart(t, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
+	if w := doStart(t, h, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
@@ -187,7 +200,7 @@ func TestPostApprovalIssueEditDoesNotYankClaimedTicket(t *testing.T) {
 		t.Fatalf("ticket not created: %v", err)
 	}
 
-	if w := doStart(t, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
+	if w := doStart(t, h, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
@@ -303,7 +316,7 @@ func TestApprovedTicketEditedAfterClaimNotReclaimableViaRequeue(t *testing.T) {
 	}
 
 	// approve
-	if w := doStart(t, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
+	if w := doStart(t, h, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 
@@ -426,7 +439,7 @@ func TestApprovedTicketEditedAfterClaimNotReclaimableViaReap(t *testing.T) {
 		t.Fatalf("ticket not created: %v", err)
 	}
 
-	if w := doStart(t, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
+	if w := doStart(t, h, mux, cookie, ticket.ID); w.Code != http.StatusNoContent {
 		t.Fatalf("start: expected 204, got %d: %s", w.Code, w.Body.String())
 	}
 

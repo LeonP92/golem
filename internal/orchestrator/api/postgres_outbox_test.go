@@ -178,8 +178,18 @@ func TestPostgresReGatedTicketCanBeApprovedAgain(t *testing.T) {
 		t.Fatalf("ingested phase = %q, want pending-approval", ticket.Phase)
 	}
 
+	// Each call re-reads body_hash first, the way the operator's page does
+	// before rendering the approval control (fix round 1c). After the
+	// re-gate that value has moved, which is exactly the point: the operator
+	// reloads, reads the new text, and approves that.
 	start := func() int {
-		body, _ := json.Marshal(map[string]string{"action": "start"})
+		var shown db.Ticket
+		if err := gdb.First(&shown, "id = ?", ticket.ID).Error; err != nil {
+			t.Fatalf("read ticket as the page would: %v", err)
+		}
+		body, _ := json.Marshal(map[string]string{
+			"action": "start", "reviewed_body_hash": shown.BodyHash,
+		})
 		req := httptest.NewRequest(http.MethodPost,
 			fmt.Sprintf("/api/tickets/%s/actions", ticket.ID), bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
