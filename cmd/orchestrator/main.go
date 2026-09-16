@@ -29,7 +29,8 @@ func main() {
 	//   orchestrator users remove <username>
 	//   orchestrator shems add --name <name>
 	//   orchestrator shems remove <name>
-	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems") {
+	//   orchestrator backfill body-hash [--dry-run]
+	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems" || args[0] == "backfill") {
 		dsn := os.Getenv("ORCHESTRATOR_DB")
 		if dsn == "" {
 			dsn = "orchestrator.db"
@@ -88,6 +89,28 @@ func main() {
 			default:
 				log.Fatalf("unknown shems subcommand %q; expected add|remove", args[1])
 			}
+		case "backfill":
+			// One-shot repair for databases written by a deployment made
+			// partway through the GitHub Issues work, where issue_number had
+			// shipped but body_hash had not. See admin.BackfillBodyHash for
+			// exactly which rows qualify and why nothing else fixes them.
+			if args[1] != "body-hash" {
+				log.Fatalf("unknown backfill subcommand %q; expected body-hash", args[1])
+			}
+			dryRun := false
+			for _, a := range args[2:] {
+				switch a {
+				case "--dry-run":
+					dryRun = true
+				default:
+					log.Fatalf("usage: orchestrator backfill body-hash [--dry-run]")
+				}
+			}
+			res, err := admin.BackfillBodyHash(gdb, dryRun)
+			if err != nil {
+				log.Fatalf("backfill body-hash: %v", err)
+			}
+			fmt.Println(res)
 		}
 		return
 	}
