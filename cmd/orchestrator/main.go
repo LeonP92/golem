@@ -138,23 +138,24 @@ func main() {
 	broker := sse.NewBroker()
 	ws.StartHeartbeatMonitor(context.Background(), gdb, hub, 60*time.Second, 90*time.Second)
 
-	// GitHub sync: started only when at least one repo is enabled and its
-	// token is present. Required secrets are validated at startup with a loud
-	// log message, not a silent no-op — and a missing token never prevents
-	// the rest of the orchestrator from serving.
+	// GitHub sync: started whenever a token is present, whether or not any
+	// repository is enabled yet — see githubSyncPlan for why the repo count
+	// must not gate this. Required secrets are validated at startup with a
+	// loud log message, not a silent no-op, and a missing token never
+	// prevents the rest of the orchestrator from serving.
 	var ghWorker *ghsync.Worker
 	token := os.Getenv(cfg.GitHub.TokenEnv)
 	var enabledRepos int64
 	if err := gdb.Model(&db.GitHubRepo{}).Where("enabled = ?", true).Count(&enabledRepos).Error; err != nil {
-		log.Printf("ERROR github sync: count enabled repos: %v — sync DISABLED", err)
+		// The count is informational — it only chooses which message to
+		// print — so a failure here must not decide the token question. It
+		// is reported and then treated as zero.
+		log.Printf("ERROR github sync: count enabled repos: %v — continuing as if none were enabled", err)
+		enabledRepos = 0
 	}
-	switch {
-	case enabledRepos == 0:
-		log.Printf("github sync: no repos enabled, sync idle")
-	case token == "":
-		log.Printf("ERROR github sync: %d repo(s) enabled but %s is empty — "+
-			"sync DISABLED until a token is provided", enabledRepos, cfg.GitHub.TokenEnv)
-	default:
+	plan := githubSyncPlan(cfg.GitHub.TokenEnv, token, enabledRepos)
+	log.Print(plan.log)
+	if plan.start {
 		if cfg.BaseURL == "" {
 			// Not fatal — sync still runs — but every milestone comment
 			// ghsync posts to a real GitHub issue would otherwise end in a
@@ -167,17 +168,17 @@ func main() {
 		client, err := github.New(token, cfg.GitHub.APIBase)
 		if err != nil {
 			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)
-			break
+		} else {
+			ghWorker = ghsync.NewWorker(
+				ghsync.NewSyncer(gdb, client),
+				cfg.GitHub.PollIntervalDuration(),
+				cfg.GitHub.DrainIntervalDuration(),
+			)
+			ghWorker.Start(context.Background())
+			defer ghWorker.Stop()
+			log.Printf("github sync: started (ingest %v, drain %v)",
+				cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration())
 		}
-		ghWorker = ghsync.NewWorker(
-			ghsync.NewSyncer(gdb, client),
-			cfg.GitHub.PollIntervalDuration(),
-			cfg.GitHub.DrainIntervalDuration(),
-		)
-		ghWorker.Start(context.Background())
-		defer ghWorker.Stop()
-		log.Printf("github sync: started (ingest %v, drain %v)",
-			cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration())
 	}
 
 	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
