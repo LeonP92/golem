@@ -42,6 +42,22 @@ func setupOwnershipTest(t *testing.T) (*api.Handlers, *http.ServeMux, db.Shem, d
 	return h, mux, seed("shemA", "keyA"), seed("shemB", "keyB")
 }
 
+// assignTicketToShem makes ticketID owned by the named shem. The shem-facing
+// log and human-input endpoints are scoped to the calling shem's own ticket
+// (finding S8), and the real flow always claims a ticket before writing to
+// it, so a test that drives those endpoints has to claim it too.
+func assignTicketToShem(t *testing.T, h *api.Handlers, ticketID, shemName string) {
+	t.Helper()
+	var shem db.Shem
+	if err := h.DB.Where("name = ?", shemName).First(&shem).Error; err != nil {
+		t.Fatalf("lookup shem %s: %v", shemName, err)
+	}
+	if err := h.DB.Model(&db.Ticket{}).Where("id = ?", ticketID).
+		Update("assigned_shem", shem.ID).Error; err != nil {
+		t.Fatalf("assign ticket to %s: %v", shemName, err)
+	}
+}
+
 // TestShemWritesAreScopedToTheOwningTicket covers finding S8. postLog,
 // postLogDocument, createHumanInput, listHumanInputs and resolveHumanInput
 // enforced authentication but not ownership, so any registered shem could
