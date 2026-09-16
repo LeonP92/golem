@@ -428,6 +428,16 @@ func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) er
 		return fmt.Errorf("enqueue label: %w", err)
 	}
 
+	// The PR check runs for every phase transition, not just ones with a
+	// milestone comment, so it must not sit behind the !ok early return
+	// below. enqueueGitHubPhase receives ticket as it was before this
+	// transition's update, so the new phase is set on a copy first.
+	updated := ticket
+	updated.Phase = phase
+	if err := enqueuePRIfReady(tx, updated); err != nil {
+		return err
+	}
+
 	milestone, body, ok := ghsync.MilestoneComment(phase, ticket.ID, baseURL)
 	if !ok {
 		return nil

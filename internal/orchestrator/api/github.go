@@ -2,12 +2,16 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
+	"gorm.io/gorm"
 )
 
 // SyncTrigger requests an immediate ingest pass for one repository. It is
@@ -32,6 +36,8 @@ const defaultManualSyncCooldown = time.Minute
 func (h *Handlers) RegisterGitHubRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/github/repos/{id}/sync",
 		auth.RequireSession(h.DB)(http.HandlerFunc(h.manualSync)))
+	mux.Handle("POST /api/tickets/{id}/branch-pushed",
+		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.branchPushed)))
 }
 
 // manualSync triggers an out-of-band ingest pass for one repo, subject to a
@@ -98,6 +104,76 @@ func (h *Handlers) manualSync(w http.ResponseWriter, r *http.Request) {
 		// effect as this request's own trigger would have had.
 		"queued": queued,
 	})
+}
+
+// enqueuePRIfReady queues the pull-request write when both preconditions hold:
+// the ticket has reached ready-for-review, and its branch exists on the
+// remote. Whichever of the two events happens second is the one that enqueues.
+// Both call sites use ghsync.PRKey, so a race between them yields exactly one
+// pull request.
+func enqueuePRIfReady(tx *gorm.DB, ticket db.Ticket) error {
+	if ticket.IssueNumber == nil || !ticket.BranchPushed || ticket.Phase != "ready-for-review" {
+		return nil
+	}
+	base := ticket.BaseBranch
+	if base == "" {
+		base = "main"
+	}
+	payload, err := json.Marshal(ghsync.PRPayload{
+		Head:  ticket.Branch,
+		Base:  base,
+		Title: ticket.Title,
+		Body:  fmt.Sprintf("Closes #%d\n\nOpened by Golem.", *ticket.IssueNumber),
+	})
+	if err != nil {
+		return fmt.Errorf("marshal pr payload: %w", err)
+	}
+	if err := ghsync.Enqueue(tx, db.GitHubOutbox{
+		TicketID:       ticket.ID,
+		Kind:           ghsync.KindPR,
+		Payload:        string(payload),
+		IdempotencyKey: ghsync.PRKey(ticket.ID),
+	}); err != nil {
+		return fmt.Errorf("enqueue pr: %w", err)
+	}
+	return nil
+}
+
+// branchPushed records that the shem published the ticket branch, and queues
+// the pull request if the ticket is already at ready-for-review.
+func (h *Handlers) branchPushed(w http.ResponseWriter, r *http.Request) {
+	id, err := parseIDFromPath(r)
+	if err != nil {
+		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	shem := auth.ShemFromRequest(r)
+
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND assigned_shem = ?", id, shem.ID).
+			Update("branch_pushed", true)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotOwner
+		}
+		var ticket db.Ticket
+		if err := tx.First(&ticket, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueuePRIfReady(tx, ticket)
+	})
+	if errors.Is(txErr, errNotOwner) {
+		http.Error(w, "ticket not owned by this shem", http.StatusConflict)
+		return
+	}
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {
