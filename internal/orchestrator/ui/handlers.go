@@ -277,14 +277,37 @@ func (h *Handlers) render(w http.ResponseWriter, r *http.Request, page string, d
 // --- login ---
 
 func (h *Handlers) loginPage(w http.ResponseWriter, r *http.Request) {
+	// Minted here rather than by render's usual injection: render derives the
+	// token from the SESSION, and the whole point of this page is that there
+	// is not one yet. Rendered under its own key so the two can never be
+	// confused for one another.
+	token, err := auth.EnsureLoginCSRF(w, r, h.secureCookie)
+	if err != nil {
+		http.Error(w, "could not prepare the login form", http.StatusInternalServerError)
+		return
+	}
 	h.render(w, r, "login", map[string]any{
-		"Error": r.URL.Query().Get("error") != "",
+		"Error":          r.URL.Query().Get("error") != "",
+		"Expired":        r.URL.Query().Get("expired") != "",
+		"LoginCSRFToken": token,
 	})
 }
 
 func (h *Handlers) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Redirect(w, r, "/login?error=1", http.StatusFound)
+		return
+	}
+	// Checked before the credentials are even looked at. A cross-site POST
+	// carrying the attacker's username and password would otherwise sign the
+	// operator into the attacker's account, and everything they did next —
+	// tickets created, issues approved — would happen somewhere the attacker
+	// can read. Sending them back to a freshly rendered form rather than a
+	// bare 403 is deliberate: the one person who hits this legitimately is a
+	// user whose form sat open past the nonce's lifetime, and "try again" is
+	// the correct instruction for them.
+	if !auth.VerifyLoginCSRF(r) {
+		http.Redirect(w, r, "/login?expired=1", http.StatusFound)
 		return
 	}
 	username := r.FormValue("username")
@@ -303,6 +326,9 @@ func (h *Handlers) loginSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "session error", http.StatusInternalServerError)
 		return
 	}
+	// The session-derived token governs from here; the pre-session nonce has
+	// done its job and should not outlive it.
+	auth.ClearLoginCSRF(w)
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 

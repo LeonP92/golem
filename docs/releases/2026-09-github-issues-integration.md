@@ -191,6 +191,14 @@ There is no upgrade step and nothing to migrate. The token is derived from the
 session cookie rather than stored, so existing logins keep working and nobody
 is signed out.
 
+The sign-in form carries its own token now too, minted before a session exists
+(a nonce in a short-lived `golem_login_csrf` cookie, with the value derived
+from it rendered into the form). This closes login CSRF: without it, a page on
+another site could make your browser sign in as *someone else* — everything
+you did next would happen in their account, and nothing on screen would say
+so. The only visible effect is that a sign-in page left open for more than two
+hours answers "This form expired. Please sign in again." Reloading fixes it.
+
 ## 5. A repository whose default branch cannot be read now produces no tickets
 
 Golem asks GitHub for a repository's default branch when it first turns an

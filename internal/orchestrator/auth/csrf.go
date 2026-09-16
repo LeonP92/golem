@@ -1,11 +1,13 @@
 package auth
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // CSRFHeader is the request header a browser-issued, state-changing request
@@ -26,6 +28,22 @@ const CSRFFormField = "csrf_token"
 const csrfDerivationLabel = "golem-csrf-v1|"
 
 const csrfTokenKey contextKey = "csrf_token"
+
+// LoginCSRFCookie holds the pre-session nonce that the login form's token is
+// derived from. Login is the one state-changing POST that cannot use
+// CSRFTokenForSession, because the whole point of it is that no session
+// exists yet.
+const LoginCSRFCookie = "golem_login_csrf"
+
+// loginCSRFDerivationLabel domain-separates the login token from the session
+// token exactly as csrfDerivationLabel does, so a value minted before sign-in
+// can never be mistaken for one minted after it.
+const loginCSRFDerivationLabel = "golem-login-csrf-v1|"
+
+// loginCSRFTTL bounds how long a rendered login form stays submittable. Long
+// enough that a page left open over a coffee break still works, short enough
+// that a nonce captured from a shared machine is not useful tomorrow.
+const loginCSRFTTL = 2 * time.Hour
 
 // maxCSRFFormBytes caps how much of a multipart body ParseMultipartForm may
 // buffer in memory while the middleware looks for the token field. Only
@@ -138,4 +156,83 @@ func csrfTokenFromBody(r *http.Request) (string, error) {
 		return "", nil
 	}
 	return r.PostForm.Get(CSRFFormField), nil
+}
+
+// CSRFTokenForLogin derives the login form's token from the pre-session nonce
+// in LoginCSRFCookie, mirroring CSRFTokenForSession: same construction, same
+// fail-closed treatment of an empty input, different domain-separation label.
+func CSRFTokenForLogin(nonce string) string {
+	if nonce == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(loginCSRFDerivationLabel + nonce))
+	return hex.EncodeToString(sum[:])
+}
+
+// EnsureLoginCSRF returns the token to render into the login form, minting a
+// nonce and setting its cookie when the request does not already carry one.
+// Re-rendering the login page with a nonce already in hand keeps the existing
+// one, so two tabs open on /login do not invalidate each other.
+//
+// The cookie is HttpOnly: the form field is rendered server-side, so nothing
+// needs to read the nonce from JavaScript, and an attacker who can inject
+// markup into a page therefore cannot read it either. That is the whole
+// mechanism — they can make the browser SEND the cookie, but not learn what
+// value to put in the field.
+func EnsureLoginCSRF(w http.ResponseWriter, r *http.Request, secure bool) (string, error) {
+	if c, err := r.Cookie(LoginCSRFCookie); err == nil && c.Value != "" {
+		return CSRFTokenForLogin(c.Value), nil
+	}
+	raw := make([]byte, 32)
+	if _, err := rand.Read(raw); err != nil {
+		return "", err
+	}
+	nonce := hex.EncodeToString(raw)
+	http.SetCookie(w, &http.Cookie{
+		Name:     LoginCSRFCookie,
+		Value:    nonce,
+		Path:     "/",
+		Expires:  time.Now().Add(loginCSRFTTL),
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+	return CSRFTokenForLogin(nonce), nil
+}
+
+// VerifyLoginCSRF reports whether r carries a login token matching its own
+// nonce cookie. Like the session path it reads PostForm, never Form, so a
+// token supplied in the query string cannot satisfy it.
+//
+// A missing cookie is a failure, not a pass: that is the exact shape of the
+// cross-site POST this exists to refuse, since a browser following an
+// attacker's form submission sends whatever cookies it holds but the attacker
+// never caused a login page to be rendered.
+func VerifyLoginCSRF(r *http.Request) bool {
+	c, err := r.Cookie(LoginCSRFCookie)
+	if err != nil || c.Value == "" {
+		return false
+	}
+	expected := CSRFTokenForLogin(c.Value)
+	if expected == "" {
+		return false
+	}
+	presented := r.PostForm.Get(CSRFFormField)
+	if presented == "" {
+		presented = r.Header.Get(CSRFHeader)
+	}
+	return subtle.ConstantTimeCompare([]byte(presented), []byte(expected)) == 1
+}
+
+// ClearLoginCSRF expires the pre-session nonce. Called once a session exists,
+// after which the session-derived token governs every state-changing request
+// and leaving the login nonce in place would serve no purpose.
+func ClearLoginCSRF(w http.ResponseWriter) {
+	http.SetCookie(w, &http.Cookie{
+		Name:    LoginCSRFCookie,
+		Value:   "",
+		Path:    "/",
+		MaxAge:  -1,
+		Expires: time.Unix(0, 0),
+	})
 }

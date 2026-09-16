@@ -29,11 +29,7 @@ func TestLoginHandler_ValidCredentials(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := strings.NewReader("username=admin&password=pass")
-	req := httptest.NewRequest("POST", "/login", body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := signIn(t, mux, "admin", "pass")
 
 	if w.Code != http.StatusFound {
 		t.Errorf("expected redirect (302), got %d", w.Code)
