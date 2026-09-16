@@ -7,6 +7,7 @@ import (
 	"embed"
 	"fmt"
 	"html/template"
+	"io/fs"
 	"net/http"
 	"time"
 
@@ -29,6 +30,18 @@ var embeddedFS embed.FS
 // layout + the page + all partials).
 func LoadTemplates() (map[string]*template.Template, error) {
 	return loadTemplatesFromFS(embeddedFS)
+}
+
+// TemplateFS returns the embedded filesystem holding the UI template
+// sources (paths like "templates/layout.html", "templates/partials/*.html")
+// — the exact bytes LoadTemplates parses to serve the dashboard. Callers
+// that need to reason about rendered template bytes without re-parsing them
+// as templates — for example computing Content-Security-Policy script
+// hashes — should read from this, not from a path on disk: a disk copy can
+// be stale or locally modified, and a container image that ships only the
+// compiled binary has no disk copy of the templates at all.
+func TemplateFS() fs.FS {
+	return embeddedFS
 }
 
 // MakeLogEntryRenderer returns a function that renders a LogEntryEvent to HTML
@@ -96,13 +109,14 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 
 	const layoutFile = "templates/layout.html"
 	pages := map[string]string{
-		"login":         "templates/login.html",
-		"dashboard":     "templates/dashboard.html",
-		"shems":         "templates/shems.html",
-		"ticket_new":    "templates/ticket_new.html",
-		"ticket_detail": "templates/ticket_detail.html",
-		"users":         "templates/users.html",
-		"settings":      "templates/settings.html",
+		"login":           "templates/login.html",
+		"dashboard":       "templates/dashboard.html",
+		"shems":           "templates/shems.html",
+		"github_settings": "templates/github_settings.html",
+		"ticket_new":      "templates/ticket_new.html",
+		"ticket_detail":   "templates/ticket_detail.html",
+		"users":           "templates/users.html",
+		"settings":        "templates/settings.html",
 	}
 
 	out := make(map[string]*template.Template, len(pages))
@@ -144,23 +158,35 @@ func NewHandlersWithMap(gdb *gorm.DB, tmpls map[string]*template.Template, secur
 func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", h.loginPage)
 	mux.HandleFunc("POST /login", h.loginSubmit)
-	// POST-only: a GET /logout is CSRF-exploitable — any hostile <img src="/logout">
-	// on another page could sign the user out.
-	mux.HandleFunc("POST /logout", h.logout)
+	// POST, with the token (re-review finding F3). Logging out is a state
+	// change, and as a GET it was reachable from the markdown sink: <img src>
+	// survives the sanitizer by design, so `![](/logout)` in an issue body
+	// logged the operator out on every page load of any page that rendered
+	// it. RequireCSRF passes safe methods through, quite correctly — the bug
+	// was that logout was not a safe method. No permission gate: signing out
+	// is not a privilege.
+	mux.Handle("POST /logout", h.authWriteRoute(h.logout))
 	mux.Handle("GET /dashboard", h.sessionRoute(rbac.PermTicketView, h.dashboard))
 	mux.Handle("GET /shems", h.sessionRoute(rbac.PermShemView, h.shems))
+	// Viewing sync state is a developer concern; changing it is infrastructure
+	// administration, so the writes sit behind PermShemManage (admin-only)
+	// alongside the CSRF token every state-changing session route carries.
+	mux.Handle("GET /settings/github", h.sessionRoute(rbac.PermShemView, h.githubSettings))
+	mux.Handle("POST /settings/github", h.sessionWriteRoute(rbac.PermShemManage, h.githubSettingsSubmit))
+	mux.Handle("POST /settings/github/outbox/{id}/retry",
+		h.sessionWriteRoute(rbac.PermShemManage, h.retryParkedOutboxRow))
 	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
-	mux.Handle("POST /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
+	mux.Handle("POST /tickets/new", h.sessionWriteRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
 	mux.Handle("GET /tickets/{id}", h.sessionRoute(rbac.PermTicketView, h.ticketDetail))
 	mux.Handle("GET /users", h.sessionRoute(rbac.PermUserManage, h.usersPage))
-	mux.Handle("POST /users", h.sessionRoute(rbac.PermUserManage, h.usersCreate))
-	mux.Handle("POST /users/{id}/role", h.sessionRoute(rbac.PermUserManage, h.usersSetRole))
-	mux.Handle("POST /users/{id}/delete", h.sessionRoute(rbac.PermUserManage, h.usersDelete))
+	mux.Handle("POST /users", h.sessionWriteRoute(rbac.PermUserManage, h.usersCreate))
+	mux.Handle("POST /users/{id}/role", h.sessionWriteRoute(rbac.PermUserManage, h.usersSetRole))
+	mux.Handle("POST /users/{id}/delete", h.sessionWriteRoute(rbac.PermUserManage, h.usersDelete))
 	// Self-service settings — no permission gate; adding a section is a
 	// one-line route addition plus a {{define "settings_<name>"}} block.
 	mux.Handle("GET /settings", h.authRoute(h.settingsIndex))
 	mux.Handle("GET /settings/security", h.authRoute(h.settingsSecurity))
-	mux.Handle("POST /settings/security/password", h.authRoute(h.settingsChangePassword))
+	mux.Handle("POST /settings/security/password", h.authWriteRoute(h.settingsChangePassword))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -182,6 +208,20 @@ func (h *Handlers) sessionRoute(p rbac.Permission, fn http.HandlerFunc) http.Han
 // table the single audit surface for authz decisions.
 func (h *Handlers) authRoute(fn http.HandlerFunc) http.Handler {
 	return auth.RequireSession(h.DB)(fn)
+}
+
+// sessionWriteRoute is sessionRoute plus the CSRF token. Every state-changing
+// session-authenticated route goes through here: an injected same-origin form
+// in a markdown sink could otherwise make the operator's own browser perform
+// the action (finding S1), and SameSite does nothing about same-origin.
+func (h *Handlers) sessionWriteRoute(p rbac.Permission, fn http.HandlerFunc) http.Handler {
+	return auth.RequireSession(h.DB)(auth.RequireCSRF(rbac.Require(p)(fn)))
+}
+
+// authWriteRoute is sessionWriteRoute without a permission gate, for state
+// changes any signed-in user may make on their own account.
+func (h *Handlers) authWriteRoute(fn http.HandlerFunc) http.Handler {
+	return auth.RequireSession(h.DB)(auth.RequireCSRF(fn))
 }
 
 // base returns the render map every authenticated page starts from: the nav key
@@ -207,7 +247,13 @@ func (h *Handlers) base(r *http.Request, nav string) map[string]any {
 }
 
 // render executes the named page template (wrapping in the layout).
-func (h *Handlers) render(w http.ResponseWriter, page string, data any) {
+//
+// It injects "CSRFToken" into the page data for every map-shaped payload, so
+// the layout can publish it once (as a <meta>, which every htmx request then
+// picks up) and individual forms can embed it as a hidden field, without each
+// handler having to remember. A page rendered outside a session — /login —
+// gets an empty token, which RequireCSRF rejects rather than accepts.
+func (h *Handlers) render(w http.ResponseWriter, r *http.Request, page string, data any) {
 	// Prefer the per-page map; fall back to the single legacy tmpl.
 	var t *template.Template
 	if h.tmpls != nil {
@@ -219,6 +265,9 @@ func (h *Handlers) render(w http.ResponseWriter, page string, data any) {
 		http.Error(w, "templates not loaded", http.StatusInternalServerError)
 		return
 	}
+	if m, ok := data.(map[string]any); ok {
+		m["CSRFToken"] = auth.CSRFToken(r)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		http.Error(w, "template error: "+err.Error(), http.StatusInternalServerError)
@@ -228,7 +277,7 @@ func (h *Handlers) render(w http.ResponseWriter, page string, data any) {
 // --- login ---
 
 func (h *Handlers) loginPage(w http.ResponseWriter, r *http.Request) {
-	h.render(w, "login", map[string]any{
+	h.render(w, r, "login", map[string]any{
 		"Error": r.URL.Query().Get("error") != "",
 	})
 }
@@ -257,6 +306,8 @@ func (h *Handlers) loginSubmit(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/dashboard", http.StatusFound)
 }
 
+// logout clears the session cookie. It is registered for POST only and behind
+// RequireCSRF — see RegisterRoutes.
 func (h *Handlers) logout(w http.ResponseWriter, r *http.Request) {
 	http.SetCookie(w, &http.Cookie{
 		Name:    "golem_session",
@@ -327,7 +378,7 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	data := h.base(r, "dashboard")
 	data["Tickets"] = rows
-	h.render(w, "dashboard", data)
+	h.render(w, r, "dashboard", data)
 }
 
 // --- shems ---
@@ -354,7 +405,7 @@ func (h *Handlers) shems(w http.ResponseWriter, r *http.Request) {
 
 	data := h.base(r, "shems")
 	data["Shems"] = rows
-	h.render(w, "shems", data)
+	h.render(w, r, "shems", data)
 }
 
 // --- ticket new ---
@@ -390,7 +441,7 @@ func (h *Handlers) renderTicketNew(w http.ResponseWriter, r *http.Request, form 
 	data["Form"] = form
 	data["Error"] = errMsg
 	data["AvailableRepos"] = h.shemsRepos()
-	h.render(w, "ticket_new", data)
+	h.render(w, r, "ticket_new", data)
 }
 
 func (h *Handlers) ticketNewForm(w http.ResponseWriter, r *http.Request) {
@@ -489,7 +540,7 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	data["PendingInput"] = pending
 	data["Spec"] = spec
 	data["Plan"] = plan
-	h.render(w, "ticket_detail", data)
+	h.render(w, r, "ticket_detail", data)
 }
 
 // humanAge returns a short human-readable age string for the given time.

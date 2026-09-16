@@ -19,10 +19,53 @@
           </a>
           {{end}}
         </div>
+        {{if .Ticket.IssueNumber}}
+        <p class="text-base-content/70 mt-1 text-sm font-medium">{{.Ticket.Title}}</p>
+        <p class="text-base-content/50 mt-0.5 text-xs flex items-center gap-1 flex-wrap">
+          <span class="iconify shrink-0" data-icon="heroicons:arrow-path-rounded-square"></span>
+          <span>
+            Title and description are synced from GitHub
+            <a href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.IssueNumber}}</a>
+            — edit them on GitHub; changes made here would be overwritten on the next sync.
+            {{if .Ticket.PRNumber}}
+            Pull request:
+            <a href="{{.Ticket.PRURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.PRNumber}}</a>
+            {{end}}
+          </span>
+        </p>
+        <pre class="description mt-2 text-sm font-sans whitespace-pre-wrap bg-base-200 rounded p-3 max-h-64 overflow-y-auto">{{.Ticket.Description}}</pre>
+        {{/* This card lives inside the .Ticket.IssueNumber branch, so a ticket needing approval with a nil IssueNumber would have no release control at all: only createTicketFromIssue produces an externally-sourced (unapproved) ticket, and it always sets IssueNumber, but that coupling is implicit — any future path that creates one without an IssueNumber must either set one or add a release control outside this branch. */}}
+        {{/* Rendered on provenance+approval state (IssueNumber set, IntakeApproved false), not on Phase == "pending-approval" (fix round 4): a ticket can lose that phase via close/needs-attention/requeue while still being unapproved and therefore still unclaimable (spec Amendment 1), and this is its only in-product recovery path. A closed ticket is excluded — reopening is a separate action. AssignedShem must also be nil (fix round 5), mirroring actionStart's guard: a claimed-but-unapproved ticket must not be offered "start", which would double-claim it — Re-queue, not Start, is the control for a claimed ticket. */}}
+        {{if and (not .Ticket.IntakeApproved) (ne .Ticket.Phase "closed") (not .Ticket.AssignedShem)}}
+        <div class="card border-l-4 border-warning bg-warning/10 shadow-sm mt-3">
+          <div class="card-body p-4">
+            <h2 class="font-semibold text-sm text-warning flex items-center gap-1.5 mb-2">
+              <span class="iconify" data-icon="heroicons:shield-exclamation"></span>
+              Pending Approval
+            </h2>
+            <p class="text-sm text-base-content/70 mb-3">
+              This ticket is linked to GitHub issue
+              <a href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.IssueNumber}}</a>
+              and has not been approved for execution. Read the description above, then approve it so a shem can claim it.
+            </p>
+            <button class="btn btn-sm btn-warning gap-1.5"
+              hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              {{/* reviewed_body_hash is the fingerprint of the description rendered ABOVE, submitted with the approval so actionStart can refuse it if a poll edited the issue while this page sat open (fix round 1c). Without it the server cannot tell what the operator was shown, and an edit landing between render and click would be approved unread. htmx serialises hx-vals into the request BODY for a POST, which is where the dispatcher reads every parameter from (finding S1); the CSRF token travels separately as a header, added by the htmx:configRequest listener in layout.html. */}}
+              hx-vals='{"action":"start","reviewed_body_hash":"{{.Ticket.BodyHash}}"}'
+              hx-confirm="Approve and start this ticket? A shem will be able to claim it immediately."
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+              <span class="iconify" data-icon="heroicons:play"></span>
+              Approve &amp; Start
+            </button>
+          </div>
+        </div>
+        {{end}}
+        {{else}}
         <p class="text-base-content/70 mt-1 text-sm font-medium"
            title="{{.Ticket.Title}}">{{displayTitle .Ticket.Title .Ticket.Description}}</p>
         {{if .Ticket.Title}}
         <p class="text-base-content/50 mt-0.5 text-xs" title="{{.Ticket.Description}}">{{truncate 120 (firstLine .Ticket.Description)}}</p>
+        {{end}}
         {{end}}
       </div>
     </div>
@@ -63,6 +106,7 @@
         Close
       </button>
       {{end}}
+      {{if ne .Ticket.Phase "pending-approval"}}
       <button class="btn btn-sm btn-ghost gap-1.5"
         hx-post="/api/tickets/{{.Ticket.ID}}/actions"
         hx-vals='{"action":"requeue"}'
@@ -71,6 +115,7 @@
         <span class="iconify" data-icon="heroicons:arrow-path"></span>
         Re-queue
       </button>
+      {{end}}
     </div>
 
     {{if eq .Ticket.Phase "ready-for-review"}}

@@ -27,6 +27,7 @@ var commandGroups = []struct {
 	{"ticket", []string{"ticket", "tickets"}},
 	{"graph", []string{"graph"}},
 	{"wiki", []string{"wiki"}},
+	{"issue", []string{"issue"}},
 	{"log", []string{"log"}},
 	{"misc", []string{"ask", "answer", "observer", "version"}},
 }
@@ -45,6 +46,7 @@ func init() {
 	commandTable["log"] = commandEntry{fn: logDispatch, desc: "Log commands: emit."}
 	commandTable["observer"] = commandEntry{fn: observerDispatch, desc: "Observer commands: dispatch."}
 	commandTable["graph"] = commandEntry{fn: graphDispatch, desc: "Graph commands: build, update, status, who-imports, check-boundary, deps."}
+	commandTable["issue"] = commandEntry{fn: issueDispatch, desc: "GitHub issue commands: list, sync."}
 }
 
 func helpCommand(args []string, stdout, stderr io.Writer) int {
@@ -149,6 +151,22 @@ func graphDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.GraphDeps(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown graph subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func issueDispatch(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: golem issue <list|sync> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "list":
+		return cli.IssueListCmd(args[1:], stdout, stderr)
+	case "sync":
+		return cli.IssueSyncCmd(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown issue subcommand %q\n", args[0])
 		return 1
 	}
 }

@@ -15,8 +15,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"gopkg.in/yaml.v3"
 )
 
 // GolemExecutor runs tickets phase by phase with human approval gates.
@@ -222,6 +224,19 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				finalPhase = "implement"
 			}
 			orchPhase := toOrchestratorPhase(finalPhase)
+			if orchPhase == "ready-for-review" && !cfg.NoPush {
+				worktree := filepath.Join(ticketDir, "worktree")
+				if pushErr := pushTicketBranch(ctx, worktree, claim.Branch); pushErr != nil {
+					// A failed push must not block the lifecycle: the ticket
+					// still reaches ready-for-review, just without a PR.
+					postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
+				} else {
+					postStatus(c, ticketID, "Pushed "+claim.Branch+" to origin")
+					if pErr := c.PostBranchPushed(claim.TicketID); pErr != nil {
+						log.Printf("executor: post branch-pushed: %v", pErr)
+					}
+				}
+			}
 			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
 				if errors.Is(phErr, client.ErrNotOwner) {
 					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
@@ -246,6 +261,19 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				finalPhase = "ready-for-review"
 			}
 			orchPhase := toOrchestratorPhase(finalPhase)
+			if orchPhase == "ready-for-review" && !cfg.NoPush {
+				worktree := filepath.Join(ticketDir, "worktree")
+				if pushErr := pushTicketBranch(ctx, worktree, claim.Branch); pushErr != nil {
+					// A failed push must not block the lifecycle: the ticket
+					// still reaches ready-for-review, just without a PR.
+					postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
+				} else {
+					postStatus(c, ticketID, "Pushed "+claim.Branch+" to origin")
+					if pErr := c.PostBranchPushed(claim.TicketID); pErr != nil {
+						log.Printf("executor: post branch-pushed: %v", pErr)
+					}
+				}
+			}
 			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
 				if errors.Is(phErr, client.ErrNotOwner) {
 					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
@@ -265,10 +293,36 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	}
 }
 
+// golemTicketNewArgs builds the argv for `golem ticket new`.
+//
+// The "--" before the description is load-bearing, not cosmetic. The
+// description is a GitHub issue body an untrusted third party wrote, and
+// TicketNew hands its arguments to a flag.FlagSet, which treats anything
+// starting with "-" as a flag. Without the separator:
+//
+//   - Any ordinary markdown body opening with a bullet, a "- [ ]" checklist,
+//     a "---" rule or a "---" front-matter block fails to parse ("flag
+//     provided but not defined" / "bad flag syntax"), the worker posts
+//     needs-attention, and a human requeue fails identically — a permanent
+//     loop that anyone who can open an issue on a watched repo can trigger.
+//   - A body of exactly "--from-issue=N" parses as that flag and takes the
+//     GitHub-fetch branch, so on a co-located orchestrator+shem box (where
+//     GOLEM_GITHUB_TOKEN is in the environment) the shem would fetch an
+//     arbitrary, never-approved issue and use it as the description.
+//
+// Go's flag package stops parsing flags at a bare "--" and returns
+// everything after it from fs.Args(), which is what makes one argument close
+// both cases. See TestGolemTicketNewArgs_SeparatesDescription here and
+// TestTicketNew_DescriptionStartingWithDash in internal/cli, which proves
+// the real FlagSet honours it.
+func golemTicketNewArgs(ticketID, branch, description string) []string {
+	return []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch, "--", description}
+}
+
 // runGolemTicketNew creates the local ticket scaffold (worktree + branch) without
 // invoking Claude. Claude's role starts at brainstorm, after the scaffold exists.
 func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "new", "--ticket-id", ticketID, "--branch", branch, description)
+	cmd := exec.CommandContext(ctx, "golem", golemTicketNewArgs(ticketID, branch, description)...)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -289,18 +343,31 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 	return nil
 }
 
-// runClaudePhase runs a single `claude --print` session with the given prompt.
-// Output is written to os.Stdout and also teed to logPath for post-mortem inspection.
-func runClaudePhase(ctx context.Context, repoPath, prompt, logPath string) error {
+// claudePhaseCmd builds the agent subprocess. It is separate from
+// runClaudePhase only so a test can inspect what is handed to the agent
+// without executing it — see TestClaudePhaseCmdDoesNotLeakGolemSecrets.
+func claudePhaseCmd(ctx context.Context, repoPath, prompt string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "claude", "--print")
 	cmd.Dir = repoPath
 	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	// The prompt carries untrusted issue text, so this process must not
+	// carry golem's credentials — see internal/agentenv. The golem and git
+	// subprocesses around it are golem's own commands and keep the full
+	// environment, which is what leaves the shem's push credential working.
+	cmd.Env = agentenv.Environ()
+	return cmd
+}
+
+// runClaudePhase runs a single `claude --print` session with the given prompt.
+// Output is written to os.Stdout and also teed to logPath for post-mortem inspection.
+func runClaudePhase(ctx context.Context, repoPath, prompt, logPath string) error {
+	cmd := claudePhaseCmd(ctx, repoPath, prompt)
 
 	f, err := os.Create(logPath) //nolint:gosec
 	if err != nil {
 		log.Printf("executor: could not create phase log %s: %v", logPath, err)
-		cmd.Stdout = os.Stdout
-		cmd.Stderr = os.Stderr
 	} else {
 		defer f.Close()
 		cmd.Stdout = io.MultiWriter(os.Stdout, f)
@@ -388,148 +455,6 @@ func nextPhaseAfterCheckpoint(phase string) string {
 	}
 }
 
-// buildBrainstormPrompt returns the prompt for the brainstorm Claude session.
-// Claude writes a spec and stops — it does NOT advance the phase.
-// If feedback is non-empty the spec must address that feedback.
-func buildBrainstormPrompt(ticketID, description, feedback string) string {
-	feedbackSection := ""
-	if feedback != "" {
-		feedbackSection = fmt.Sprintf(`
-HUMAN FEEDBACK ON PREVIOUS SPEC (you MUST address all points):
-%s
-
-`, feedback)
-	}
-	return fmt.Sprintf(`You are a Golem developer running autonomously.
-The ticket has been created. Complete the BRAINSTORM phase only.
-
-Ticket ID: %s
-Description: %s
-Ticket directory: .golem/tickets/%s/
-%s
-Instructions:
-1. Read .golem/roles/spec-adherence.md for spec guidelines.
-2. Write a clear spec to .golem/tickets/%s/spec.md.
-   Use markdown. Cover: goal, scope (what is and isn't included),
-   key design decisions, data model / API shape if relevant, and
-   acceptance criteria. Be specific enough that an implementer has
-   no ambiguity.
-3. Log the completion:
-   golem log emit --ticket %s --role developer --type STATUS "Brainstorm complete: <one-line summary of spec>"
-
-STOP after step 3. Do NOT run golem ticket advance or any other ticket lifecycle commands.
-A human will review your spec in the orchestrator UI and approve before planning begins.`,
-		ticketID, description, ticketID, feedbackSection, ticketID, ticketID)
-}
-
-// buildPlanPrompt returns the prompt for the plan Claude session.
-// Claude writes an implementation plan and stops — it does NOT advance the phase.
-// If feedback is non-empty the plan must address that feedback.
-func buildPlanPrompt(ticketID, description, feedback string) string {
-	feedbackSection := ""
-	if feedback != "" {
-		feedbackSection = fmt.Sprintf(`
-HUMAN FEEDBACK ON PREVIOUS PLAN (you MUST address all points):
-%s
-
-`, feedback)
-	}
-	return fmt.Sprintf(`You are a Golem developer running autonomously.
-The brainstorm spec has been approved. Complete the PLAN phase only.
-
-Ticket ID: %s
-Description: %s
-Spec: .golem/tickets/%s/spec.md
-%s
-Instructions:
-1. Read .golem/roles/developer.md for planning guidelines.
-2. Read the spec: cat .golem/tickets/%s/spec.md
-3. Write an ordered implementation plan to .golem/tickets/%s/plan.md.
-   The plan must be detailed enough for autonomous implementation.
-   Each step must include:
-   - What to do (clear description)
-   - Exact commands or code snippets to run/write (shell blocks, language-appropriate code snippets)
-   - Expected diff line count
-   Format: use markdown with ## headings per step and fenced code blocks.
-4. Log the completion:
-   golem log emit --ticket %s --role developer --type STATUS "Plan complete: <one-line summary>"
-
-STOP after step 4. Do NOT run golem ticket advance or begin any implementation.
-A human will review your plan in the orchestrator UI and approve before implementation begins.`,
-		ticketID, description, ticketID, feedbackSection, ticketID, ticketID, ticketID)
-}
-
-// buildImplementPrompt returns the prompt for the implement Claude session.
-// Claude implements the plan and runs review — it does NOT close the ticket.
-func buildImplementPrompt(ticketID, description string) string {
-	return fmt.Sprintf(`You are a Golem developer running autonomously.
-The plan has been approved. IMPLEMENT this ticket fully.
-
-Ticket ID: %s
-Description: %s
-Worktree: .golem/tickets/%s/worktree/  (checked out on branch ticket/%s)
-Plan: .golem/tickets/%s/plan.md
-Spec: .golem/tickets/%s/spec.md
-
-Instructions:
-1. Read .golem/roles/developer.md and follow the developer identity precisely.
-2. Read the plan: cat .golem/tickets/%s/plan.md
-3. For each plan step:
-   a. Set the step: golem ticket set-step --ticket %s --expected-lines <n>
-   b. Implement changes in the worktree directory.
-   c. Commit at each logical unit (use git -C .golem/tickets/%s/worktree or cd into it).
-   d. After each commit: golem ticket check-bloat (cheap, no LLM). Address any BLOCKER before the next commit.
-4. After the LAST plan-step commit — not per commit — run the observers
-   and graph update ONCE against the ticket's final state, per
-   .golem/roles/developer.md. If either observer emits BLOCKER entries,
-   address them and re-run the failing observer.
-5. When observers pass: golem ticket review --ticket %s
-
-STOP after the review. Do NOT run golem ticket close.
-A human will review the work in the orchestrator UI and close the ticket.`,
-		ticketID, description,
-		ticketID, ticketID, ticketID, ticketID,
-		ticketID, ticketID, ticketID, ticketID)
-}
-
-// buildRevisePrompt returns the prompt for a revise session: the ticket
-// was already implemented and reviewed once; this addresses human
-// feedback given on that review in the same worktree/branch, then
-// re-runs the review gate. Unlike buildImplementPrompt it forbids
-// golem ticket close (the ticket returns to ready-for-review, not closed)
-// and does not restate the plan — feedback is scoped to fixes, not a
-// re-implementation.
-func buildRevisePrompt(ticketID, description, feedback string) string {
-	return fmt.Sprintf(`You are a Golem developer addressing review feedback.
-This ticket was already implemented and reviewed once. A human reviewed
-the work and requested changes. Address ALL of the feedback below in the
-existing worktree, on the existing branch — do NOT start over.
-
-Ticket ID: %s
-Description: %s
-Worktree: .golem/tickets/%s/worktree/  (checked out on branch ticket/%s)
-
-Human feedback on the review:
-%s
-
-Instructions:
-1. Read .golem/roles/developer.md and follow the developer identity precisely.
-2. Address every point in the feedback above. Commit at each logical unit
-   (use git -C .golem/tickets/%s/worktree or cd into it).
-3. After each commit: golem ticket check-bloat (cheap, no LLM). Address any BLOCKER before the next commit.
-4. After the LAST commit — not per commit — run the observers and graph
-   update ONCE against the ticket's final state, per
-   .golem/roles/developer.md. If either observer emits BLOCKER entries,
-   address them and re-run the failing observer.
-5. When observers pass: golem ticket review --ticket %s
-
-STOP after the review. Do NOT run golem ticket close.
-A human will review the new changes in the orchestrator UI.`,
-		ticketID, description, ticketID, ticketID,
-		feedback,
-		ticketID, ticketID)
-}
-
 // ensureRepoReady verifies the repo has a .golem setup and a code graph.
 func ensureRepoReady(ctx context.Context, repoPath string) error {
 	configPath := filepath.Join(repoPath, ".golem", "config.yaml")
@@ -539,6 +464,15 @@ func ensureRepoReady(ctx context.Context, repoPath string) error {
 			return fmt.Errorf("golem init: %w\n%s", err, out)
 		}
 		log.Printf("executor: ran golem init in %s", repoPath)
+	}
+
+	// This repo is orchestrator-managed: the orchestrator is the only writer
+	// to GitHub. Two writers would post duplicate comments and fight over
+	// labels. Pin this on every pre-flight (not only right after golem
+	// init) so a config that predates this feature, or one a human edited
+	// by hand, is also brought back in line.
+	if err := setGitHubWrite(configPath, false); err != nil {
+		log.Printf("executor: could not pin github.write=false in %s: %v", configPath, err)
 	}
 
 	indexPath := filepath.Join(repoPath, ".golem", "index")
@@ -560,6 +494,39 @@ func ensureRepoReady(ctx context.Context, repoPath string) error {
 		} else {
 			log.Printf("executor: updated graph in %s", repoPath)
 		}
+	}
+	return nil
+}
+
+// setGitHubWrite rewrites the github.write key in the YAML config at path to
+// write, preserving every other key (gate.commands, role_models, etc.) by
+// round-tripping through a generic map rather than the typed Config struct,
+// which would silently drop any key it doesn't know about.
+func setGitHubWrite(path string, write bool) error {
+	data, err := os.ReadFile(path) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	githubBlock, _ := doc["github"].(map[string]any)
+	if githubBlock == nil {
+		githubBlock = map[string]any{}
+	}
+	githubBlock["write"] = write
+	doc["github"] = githubBlock
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshaling %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil { //nolint:gosec
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
 }
@@ -639,6 +606,25 @@ func readState(ticketDir string) (string, string, error) {
 		return "", "", err
 	}
 	return state.Phase, state.SHA, nil
+}
+
+// pushTicketBranch publishes the ticket branch to origin so the orchestrator
+// can open a pull request against it. Golem has no other code path that
+// pushes; agents remain denied `git push` by the tool-call gating policy.
+//
+// This is one of Golem's own subprocesses and deliberately inherits the whole
+// environment, unlike the agent (see agentenv.go). That is what leaves
+// deploy/shem-entrypoint.sh's credential helper working: the helper expands
+// GOLEM_GITHUB_TOKEN at use time, so this push gets the token and a `git
+// credential fill` run by the agent gets an empty password.
+func pushTicketBranch(ctx context.Context, worktreePath, branch string) error {
+	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branch)
+	cmd.Dir = worktreePath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("git push %s: %w\n%s", branch, err, out)
+	}
+	return nil
 }
 
 // setPushURL sets (or clears) the git remote.origin.pushurl in the repo at path.

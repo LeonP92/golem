@@ -184,4 +184,3 @@ func staleModules(changed []string, meta *graph.Meta) map[string]bool {
 	}
 	return stale
 }
-

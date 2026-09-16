@@ -31,10 +31,17 @@ type LogPayload struct {
 }
 
 // ClaimResponse is the response from claiming a ticket.
+//
+// There is deliberately no Title field. The orchestrator still sends one, and
+// this struct ignores it: the issue title is already composed into Description
+// (github.Issue.TicketDescription), and it is Description that the approval
+// hash covers and that every prompt builder interpolates. Decoding the title
+// separately is not merely redundant — in this file it reads like a second
+// path from issue text to an agent prompt, one the operator's approval hash
+// would not cover. Nothing in internal/shem ever read it.
 type ClaimResponse struct {
 	TicketID        string        `json:"ticket_id"`
 	Branch          string        `json:"branch"`
-	Title           string        `json:"title"`
 	RepoRemote      string        `json:"repo_remote"`
 	Description     string        `json:"description"`
 	CheckpointPhase *string       `json:"checkpoint_phase"`
@@ -255,6 +262,22 @@ func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
 func (c *Client) PostPhase(ticketID string, phase string) error {
 	body := map[string]string{"phase": phase}
 	resp, err := c.do("PATCH", fmt.Sprintf("/api/tickets/%s/phase", ticketID), body)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	return nil
+}
+
+// PostBranchPushed tells the orchestrator that the ticket branch now exists on
+// the remote, which is the precondition for opening a pull request.
+// Returns ErrNotOwner if the orchestrator rejects the update because this shem
+// no longer owns the ticket (409 Conflict — e.g. after a requeue).
+func (c *Client) PostBranchPushed(ticketID string) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/branch-pushed", ticketID), nil)
 	if err != nil {
 		return err
 	}

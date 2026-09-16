@@ -6,6 +6,32 @@ name: shem-local
 # no_push: true routes git push to the local repo instead of a remote.
 # Ideal for local testing — the ticket branch is visible via git log --all
 # in the mounted repo volume without any network call.
+#
+# It stays true in the shipped stack deliberately, even though the GitHub
+# integration's draft pull request needs a real push. Two reasons, both about
+# this file's own defaults rather than about the feature:
+#
+#   1. The first repo below is local://test, which has no remote at all. A
+#      push there can never succeed.
+#   2. The second is mounted from GOLEM_REPO_PATH, which DEFAULTS TO THE
+#      CURRENT DIRECTORY. Shipping no_push: false would mean the very first
+#      ticket anyone runs from the quick start pushes a branch to whatever
+#      remote their working copy happens to point at.
+#
+# To get the pull-request half of the GitHub integration, set no_push: false
+# and make sure the shem can authenticate: set GOLEM_SHEM_GITHUB_TOKEN in .env
+# (the entrypoint installs it as an HTTPS credential helper for github.com),
+# or give the container your own SSH key. Without one of those the push fails
+# and the pull request is never opened — the ticket still reaches
+# ready-for-review, so the failure shows up as a missing PR, not as an error
+# on the ticket.
+#
+# GOLEM_SHEM_GITHUB_TOKEN is a different variable from the orchestrator's
+# GOLEM_GITHUB_TOKEN on purpose, and it is empty by default. This container
+# runs the agent on issue text a stranger can write, so it is handed a
+# repository credential only when someone has decided it needs one — i.e. here,
+# at the same moment they turn this setting off. A push-only token is better
+# than reusing the orchestrator's.
 no_push: true
 max_concurrent: 3
 

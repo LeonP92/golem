@@ -12,6 +12,13 @@
   <td class="max-w-sm">
     <a href="/tickets/{{.Ticket.ID}}" class="link link-hover font-medium truncate block"
        title="{{.Ticket.Title}}">{{truncate 80 (displayTitle .Ticket.Title .Ticket.Description)}}</a>
+    {{if .Ticket.IssueNumber}}
+    <a class="badge badge-sm badge-outline gap-1 font-mono" href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener"
+       title="Synced from GitHub issue #{{.Ticket.IssueNumber}}">
+      <span class="iconify text-xs" data-icon="heroicons:link"></span>
+      #{{.Ticket.IssueNumber}}
+    </a>
+    {{end}}
     <div class="text-xs text-base-content/40 font-mono truncate mt-0.5" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</div>
   </td>
   <td>

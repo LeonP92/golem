@@ -18,7 +18,7 @@ func (h *Handlers) renderSettings(w http.ResponseWriter, r *http.Request, sectio
 	data["Error"] = errMsg
 	data["Success"] = okMsg
 	data["MinPasswordLen"] = admin.MinPasswordLen
-	h.render(w, "settings", data)
+	h.render(w, r, "settings", data)
 }
 
 // settingsIndex redirects the bare /settings URL to the default section, so a

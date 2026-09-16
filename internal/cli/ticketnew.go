@@ -21,6 +21,7 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	ticketID := fs.String("ticket-id", "", "ticket id assigned by orchestrator (alternative to --id)")
 	branch := fs.String("branch", "", "working branch name (optional; defaults to ticket/<id> for standalone use)")
 	trivial := fs.Bool("trivial", false, "skip brainstorm, go straight to plan with developer+reviewer only")
+	fromIssue := fs.Int("from-issue", 0, "create the ticket from GitHub issue <n>, using its title and body as the description")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -28,10 +29,11 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		*id = *ticketID
 	}
 	description := strings.Join(fs.Args(), " ")
-	if *id == "" || description == "" {
-		fmt.Fprintln(stderr, "usage: golem ticket new (--id | --ticket-id) <id> <description>")
+	if *id == "" || (description == "" && *fromIssue == 0) {
+		fmt.Fprintln(stderr, "usage: golem ticket new (--id | --ticket-id) <id> (<description> | --from-issue <n>)")
 		fmt.Fprintln(stderr, "  --id: ticket id (can be omitted for human users, required for orchestrator)")
 		fmt.Fprintln(stderr, "  --ticket-id: alias for --id used by Shem workers; if both provided, --ticket-id wins")
+		fmt.Fprintln(stderr, "  --from-issue: fetch the description from GitHub issue <n> instead of a positional argument")
 		return 1
 	}
 
@@ -40,6 +42,29 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
 		return 1
 	}
+
+	var issueNumber int
+	var issueURL string
+	if *fromIssue > 0 {
+		gh, err := newGitHubClient()
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		desc, n, url, err := resolveFromIssue(gh, cfg, *fromIssue)
+		if err != nil {
+			fmt.Fprintf(stderr, "resolving --from-issue %d: %v\n", *fromIssue, err)
+			return 1
+		}
+		description = desc
+		issueNumber = n
+		issueURL = url
+	}
+	if description == "" {
+		fmt.Fprintf(stderr, "issue #%d has no title or body, cannot use it as the ticket description\n", *fromIssue)
+		return 1
+	}
+
 	runner, err := NewRunner(cfg, *repo)
 	if err != nil {
 		fmt.Fprintf(stderr, "initialising runner: %v\n", err)
@@ -51,6 +76,10 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		workingBranch = "ticket/" + *id
 	}
 	s := ticket.New(*id, description, *trivial)
+	if issueNumber != 0 {
+		s.IssueNumber = issueNumber
+		s.IssueURL = issueURL
+	}
 	worktreePath, err := workspace.Create(*repo, *id, workingBranch, "HEAD")
 	if err != nil {
 		fmt.Fprintf(stderr, "creating worktree: %v\n", err)

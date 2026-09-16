@@ -8,9 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/admin"
 	"github.com/leonp92/golem/internal/orchestrator/config"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/server"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
@@ -30,7 +32,8 @@ func main() {
 	//   orchestrator users remove <username>
 	//   orchestrator shems add --name <name>
 	//   orchestrator shems remove <name>
-	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems") {
+	//   orchestrator backfill body-hash [--dry-run]
+	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems" || args[0] == "backfill") {
 		dsn := os.Getenv("ORCHESTRATOR_DB")
 		if dsn == "" {
 			dsn = "orchestrator.db"
@@ -112,6 +115,28 @@ func main() {
 			default:
 				log.Fatalf("unknown shems subcommand %q; expected add|remove", args[1])
 			}
+		case "backfill":
+			// One-shot repair for databases written by a deployment made
+			// partway through the GitHub Issues work, where issue_number had
+			// shipped but body_hash had not. See admin.BackfillBodyHash for
+			// exactly which rows qualify and why nothing else fixes them.
+			if args[1] != "body-hash" {
+				log.Fatalf("unknown backfill subcommand %q; expected body-hash", args[1])
+			}
+			dryRun := false
+			for _, a := range args[2:] {
+				switch a {
+				case "--dry-run":
+					dryRun = true
+				default:
+					log.Fatalf("usage: orchestrator backfill body-hash [--dry-run]")
+				}
+			}
+			res, err := admin.BackfillBodyHash(gdb, dryRun)
+			if err != nil {
+				log.Fatalf("backfill body-hash: %v", err)
+			}
+			fmt.Println(res)
 		}
 		return
 	}
@@ -161,8 +186,64 @@ func main() {
 	hub := ws.NewHub()
 	broker := sse.NewBroker()
 	ws.StartHeartbeatMonitor(context.Background(), gdb, hub, 60*time.Second, 90*time.Second)
+
+	// GitHub sync: started whenever a token is present, whether or not any
+	// repository is enabled yet — see githubSyncPlan for why the repo count
+	// must not gate this. Required secrets are validated at startup with a
+	// loud log message, not a silent no-op, and a missing token never
+	// prevents the rest of the orchestrator from serving.
+	var ghWorker *ghsync.Worker
+	token := os.Getenv(cfg.GitHub.TokenEnv)
+	var enabledRepos int64
+	if err := gdb.Model(&db.GitHubRepo{}).Where("enabled = ?", true).Count(&enabledRepos).Error; err != nil {
+		// The count is informational — it only chooses which message to
+		// print — so a failure here must not decide the token question. It
+		// is reported and then treated as zero.
+		log.Printf("ERROR github sync: count enabled repos: %v — continuing as if none were enabled", err)
+		enabledRepos = 0
+	}
+	plan := githubSyncPlan(cfg.GitHub.TokenEnv, token, enabledRepos)
+	log.Print(plan.log)
+	if plan.start {
+		if cfg.BaseURL == "" {
+			// Not fatal — sync still runs — but every milestone comment
+			// ghsync posts to a real GitHub issue would otherwise end in a
+			// bare "/tickets/<id>" with no host, a silently broken link.
+			log.Printf("WARNING github sync: base_url is empty — milestone " +
+				"comments will link to a relative /tickets/<id> path; set " +
+				"base_url in the config to the orchestrator's externally " +
+				"reachable URL")
+		}
+		client, err := github.New(token, cfg.GitHub.APIBase)
+		if err != nil {
+			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)
+		} else {
+			ghWorker = ghsync.NewWorker(
+				ghsync.NewSyncer(gdb, client),
+				cfg.GitHub.PollIntervalDuration(),
+				cfg.GitHub.DrainIntervalDuration(),
+			)
+			ghWorker.Start(context.Background())
+			defer ghWorker.Stop()
+			log.Printf("github sync: started (ingest %v, drain %v)",
+				cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration())
+		}
+	}
+
 	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
-	srv := server.New(gdb, hub, broker, secureCookie)
+	srv := server.New(gdb, hub, broker, secureCookie, cfg.BaseURL)
+	srv.ManualSyncCooldown = cfg.GitHub.ManualSyncCooldownDuration()
+	srv.CSPMode = cfg.CSP.Mode
+	srv.GitHubTokenEnv = cfg.GitHub.TokenEnv
+	// Only assign Sync when the worker was actually started. ghWorker is a
+	// *ghsync.Worker; assigning a nil *ghsync.Worker to the api.SyncTrigger
+	// interface field would produce a non-nil interface holding a nil
+	// pointer, so h.Sync == nil in the handler would be false and the first
+	// call into it would panic instead of returning 503. Guarding here keeps
+	// the interface itself nil whenever sync isn't running.
+	if ghWorker != nil {
+		srv.Sync = ghWorker
+	}
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	if secureCookie {
 		log.Printf("listening on %s (TLS)", addr)

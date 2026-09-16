@@ -26,8 +26,8 @@ type Match struct {
 // credentials — pure Go, no cgo.
 type Index struct {
 	Docs    []Doc
-	Vocab   map[string]int   // term -> index into each vector
-	Vectors [][]float64      // one vector per Doc, same order as Docs
+	Vocab   map[string]int      // term -> index into each vector
+	Vectors [][]float64         // one vector per Doc, same order as Docs
 	Links   map[string][]string // extracted co-mention edges: path -> paths mentioned by that doc
 }
 

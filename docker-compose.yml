@@ -16,6 +16,12 @@ services:
       # Auto-register the shem. Override with GOLEM_SHEM_NAME.
       - GOLEM_SHEM_API_KEY=${GOLEM_SHEM_API_KEY:-changeme-set-golem-shem-api-key-in-env}
       - GOLEM_SHEM_NAME=${GOLEM_SHEM_NAME:-default}
+      # GitHub Issues sync. Named by github.token_env in orchestrator.yaml.
+      # Empty is a supported state: the orchestrator serves normally and only
+      # logs an ERROR once a repository has actually been enabled. There is no
+      # env_file here on purpose — .env also holds the Claude credentials, and
+      # only the two variables below belong in a container.
+      - GOLEM_GITHUB_TOKEN=${GOLEM_GITHUB_TOKEN:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
@@ -87,6 +93,18 @@ services:
       # Must match what the orchestrator was started with.
       - GOLEM_SHEM_API_KEY=${GOLEM_SHEM_API_KEY:-changeme-set-golem-shem-api-key-in-env}
       - GOLEM_SHEM_NAME=${GOLEM_SHEM_NAME:-default}
+      # Push credential for the ticket branch a pull request is opened from.
+      # The entrypoint installs it as an HTTPS git credential helper for
+      # github.com when it is set, and only then.
+      #
+      # Deliberately NOT ${GOLEM_GITHUB_TOKEN}. This container runs the agent
+      # on text a stranger wrote, and the shipped deploy/shem.yaml sets
+      # no_push: true, so by default there is nothing here for a credential to
+      # do. Shipping the orchestrator's repo-write PAT in anyway would widen
+      # what a successful prompt injection gets its hands on for no benefit.
+      # Set GOLEM_SHEM_GITHUB_TOKEN in .env at the same time you turn no_push
+      # off — ideally to a second, push-only token rather than the same one.
+      - GOLEM_GITHUB_TOKEN=${GOLEM_SHEM_GITHUB_TOKEN:-}
 
 volumes:
   orchestrator-data:

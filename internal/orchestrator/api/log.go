@@ -23,12 +23,15 @@ func (h *Handlers) RegisterLogRoutes(mux *http.ServeMux) {
 		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.sseLog))))
 }
 
-// postLog inserts a LogEntry with a server-assigned sequence_num. Any
-// authenticated shem may post to any ticket; ownership is not enforced here.
+// postLog inserts a LogEntry with a server-assigned sequence_num, for the
+// calling shem's own ticket only.
 func (h *Handlers) postLog(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromPath(r)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if !h.writeTicketOwnership(w, r, id) {
 		return
 	}
 	var body struct {
@@ -116,10 +119,14 @@ func (h *Handlers) postLog(w http.ResponseWriter, r *http.Request) {
 //	X-From-Role:  developer (or other role)
 //
 // The raw request body is read as the document content — no JSON wrapping.
+// The ticket must be assigned to the calling shem.
 func (h *Handlers) postLogDocument(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromPath(r)
 	if err != nil {
 		http.Error(w, "invalid id", http.StatusBadRequest)
+		return
+	}
+	if !h.writeTicketOwnership(w, r, id) {
 		return
 	}
 

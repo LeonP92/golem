@@ -17,10 +17,27 @@ import (
 
 // Handlers holds the shared dependencies for all API handlers.
 type Handlers struct {
-	DB            *gorm.DB
-	Hub           *ws.Hub
-	Broker        *sse.Broker
-	LogEntryHTML  func(sse.LogEntryEvent) string // renders a log entry to HTML for SSE; nil = send JSON
+	DB           *gorm.DB
+	Hub          *ws.Hub
+	Broker       *sse.Broker
+	LogEntryHTML func(sse.LogEntryEvent) string // renders a log entry to HTML for SSE; nil = send JSON
+	// BaseURL is the orchestrator's externally reachable base URL, used to
+	// build ticket links in GitHub comments. Empty renders a relative link.
+	BaseURL string
+	// Sync triggers an immediate manual GitHub ingest pass. It is nil
+	// whenever GitHub sync is not running (no repos enabled, or the token is
+	// missing) — the default install. Handlers must check for nil before
+	// calling it and respond 503, never let it reach a nil-pointer panic.
+	Sync SyncTrigger
+	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
+	ManualSyncCooldown time.Duration
+	// GitHubTokenEnv is the NAME of the environment variable the GitHub token
+	// is read from — config.github.token_env, which a deployment may rename.
+	// It is used only to tell an operator which variable to set when sync is
+	// not running; the value is never read here. Empty falls back to the
+	// documented default, so a handler built without wiring still gives an
+	// answer that is right for almost every deployment.
+	GitHubTokenEnv string
 }
 
 // NewHandlers creates a Handlers with the given dependencies.

@@ -14,6 +14,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
@@ -260,6 +261,7 @@ func TestAppendLog(t *testing.T) {
 		Phase:       "in-progress",
 	}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "log-shem")
 
 	body, _ := json.Marshal(map[string]string{
 		"entry_type": "message",
@@ -298,7 +300,7 @@ func TestCreateTicket_SetsCreatedByFromSession(t *testing.T) {
 		"description": "created by test",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -332,7 +334,7 @@ func TestCreateTicket_IgnoresClientSuppliedCreatedByUserID(t *testing.T) {
 		"created_by_user_id": user.ID + 999,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -371,7 +373,7 @@ func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 	h.DB.Create(&legacy)
 
 	req := httptest.NewRequest(http.MethodGet, "/api/tickets", nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -396,7 +398,7 @@ func TestListAndGetTicket_ReturnsCreatedBy(t *testing.T) {
 	}
 
 	req = httptest.NewRequest(http.MethodGet, "/api/tickets/"+owned.ID, nil)
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -425,7 +427,7 @@ func TestCreateTicket_RequiresTitle(t *testing.T) {
 		"description": "missing title",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -445,7 +447,7 @@ func TestCreateTicket_ComputesBranchFromTitle(t *testing.T) {
 		"description": "branch computation test",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/api/tickets", bytes.NewReader(body))
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -482,5 +484,82 @@ func TestSessionRoutes_UnknownRoleForbidden(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Errorf("got %d, want 403", w.Code)
+	}
+}
+
+// TestResumableTickets_ExcludesUnapprovedGitHubLinkedTicket pins the
+// defence-in-depth clause fix round 4 added to resumableTickets. A non-nil
+// assigned_shem is only ever set by ClaimTicket, which already requires
+// (issue_number IS NULL OR intake_approved), so this state — claimed with a
+// checkpoint, but not approved — should never arise through normal use; it
+// is constructed directly here specifically to prove the added clause
+// actually excludes it, rather than that invariant being an untested
+// assumption ("nothing else writes assigned_shem").
+func TestResumableTickets_ExcludesUnapprovedGitHubLinkedTicket(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	shem := seedShem(t, h, "resumable-shem", "resumablekey")
+
+	phase := "implement"
+	nUnapproved, nApproved := 3, 4
+	unapproved := db.Ticket{
+		RepoRemote:      "https://github.com/org/repo",
+		Branch:          "ticket/unapproved",
+		Description:     "d",
+		Phase:           phase,
+		AssignedShem:    &shem.ID,
+		CheckpointPhase: &phase,
+		IssueNumber:     &nUnapproved,
+		IntakeApproved:  false,
+	}
+	if err := h.DB.Create(&unapproved).Error; err != nil {
+		t.Fatalf("seed unapproved ticket: %v", err)
+	}
+	// A REAL approval, i.e. what actionStart leaves behind: intake_approved
+	// set AND approved_body_hash stamped from the description on the row.
+	// This fixture predates body_hash and used to leave both hash columns
+	// at '', which is the migrated shape re-review finding F1 is about —
+	// the predicate's new approved_body_hash <> '' clause refuses it, quite
+	// correctly. Stamping the hashes keeps the test asserting what it was
+	// written to assert (an approved, checkpointed ticket resumes) instead
+	// of accidentally asserting that empty hashes count as approval.
+	approvedDesc := "d"
+	approved := db.Ticket{
+		RepoRemote:       "https://github.com/org/repo",
+		Branch:           "ticket/approved",
+		Description:      approvedDesc,
+		Phase:            phase,
+		AssignedShem:     &shem.ID,
+		CheckpointPhase:  &phase,
+		IssueNumber:      &nApproved,
+		IntakeApproved:   true,
+		BodyHash:         ghsync.HashDescription(approvedDesc),
+		ApprovedBodyHash: ghsync.HashDescription(approvedDesc),
+	}
+	if err := h.DB.Create(&approved).Error; err != nil {
+		t.Fatalf("seed approved ticket: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tickets/resumable", nil)
+	req.Header.Set("Authorization", "Bearer resumablekey")
+	req.Header.Set("X-Shem-Name", "resumable-shem")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var claims []api.ClaimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &claims); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	ids := map[string]bool{}
+	for _, c := range claims {
+		ids[c.TicketID] = true
+	}
+	if ids[unapproved.ID] {
+		t.Error("unapproved GitHub-linked ticket appeared in /api/tickets/resumable")
+	}
+	if !ids[approved.ID] {
+		t.Error("approved GitHub-linked ticket with a checkpoint did not appear in /api/tickets/resumable")
 	}
 }

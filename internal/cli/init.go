@@ -15,6 +15,21 @@ import (
 
 var supportedBackends = []string{"claude-code"}
 
+// The github: block emits the two keys that are actually REQUIRED (repo and
+// label) alongside write, which is not. It used to emit write alone, which
+// was backwards: nothing reads write, while `golem issue list` straight after
+// `golem init` failed on the missing repo with no hint from the generated
+// file that the key existed at all.
+//
+// repo is empty rather than a placeholder org/repo: an empty value produces
+// the same clear, fail-fast "github.repo must be set" error as a missing one,
+// whereas a plausible-looking placeholder would be sent to GitHub and come
+// back a 404.
+//
+// github.write defaults to true here: a standalone `golem init` repo has no
+// orchestrator, so the CLI is the only possible GitHub writer. The shem
+// flips this to false for any repo it manages (see
+// internal/shem/worker/executor.go's setGitHubWrite) so the two never race.
 const defaultConfigTemplate = `backend: %s
 gate:
   commands: []
@@ -24,6 +39,19 @@ tool_policy:
 ask_and_wait_timeout:
   %s: 5m
 role_models: {}
+github:
+  # Required by golem issue list, golem issue sync, and
+  # golem ticket new --from-issue. Set it to "org/repo"; it is never inferred
+  # from the git remote.
+  repo: ""
+  # Trigger label those commands filter issues by.
+  label: golem
+  # Records which side owns GitHub write access for this repo: true for
+  # standalone use, and the shem sets it false for any repo it manages so the
+  # CLI and the orchestrator never both write. Nothing enforces it today
+  # because no CLI command writes to GitHub at all; a future write-capable
+  # command has to check it itself.
+  write: true
 `
 
 const golemGitignore = "index/\ntickets/\n"

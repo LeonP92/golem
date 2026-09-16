@@ -149,7 +149,6 @@ func isSafeRemote(remote string) bool {
 	return false
 }
 
-
 // gitRun runs a git sub-command in dir (empty string means no Dir override).
 func gitRun(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec
