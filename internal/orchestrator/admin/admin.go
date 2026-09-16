@@ -23,6 +23,26 @@ var ErrLastAdmin = errors.New("refusing to leave the orchestrator with no admin 
 // ErrUnknownRole is returned when a role string is not a known rbac role.
 var ErrUnknownRole = errors.New("unknown role")
 
+// ErrWeakPassword is returned when a password fails ValidatePassword.
+var ErrWeakPassword = errors.New("password too weak")
+
+// ErrWrongPassword is returned when a change-password call presents an old
+// password that does not match the stored hash.
+var ErrWrongPassword = errors.New("current password is incorrect")
+
+// MinPasswordLen is the minimum accepted password length, enforced at every
+// entry point (CLI, HTTP form, GOLEM_ADMIN_PASSWORD env var).
+const MinPasswordLen = 8
+
+// ValidatePassword returns ErrWeakPassword if pass is unacceptable. Keep this
+// the single source of truth so the UI, CLI, and env-var seed can't drift.
+func ValidatePassword(pass string) error {
+	if len(pass) < MinPasswordLen {
+		return fmt.Errorf("%w: must be at least %d characters", ErrWeakPassword, MinPasswordLen)
+	}
+	return nil
+}
+
 // wouldOrphanAdmins reports whether removing or demoting user u would leave the
 // orchestrator with zero admins.
 func wouldOrphanAdmins(gdb *gorm.DB, u db.User) (bool, error) {
@@ -62,6 +82,9 @@ func UsersAdd(gdb *gorm.DB, username, role string) error {
 			return err
 		}
 		fmt.Println()
+	}
+	if err := ValidatePassword(string(pass)); err != nil {
+		return err
 	}
 	hash, err := bcrypt.GenerateFromPassword(pass, bcrypt.DefaultCost)
 	if err != nil {
@@ -165,6 +188,9 @@ func UsersAddOrUpdate(gdb *gorm.DB, username, password, role string) error {
 	if !ok {
 		return fmt.Errorf("%w %q (valid: %s)", ErrUnknownRole, role, roleList())
 	}
+	if err := ValidatePassword(password); err != nil {
+		return err
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
 	if err != nil {
 		return err
@@ -186,4 +212,27 @@ func UsersAddOrUpdate(gdb *gorm.DB, username, password, role string) error {
 // ShemsRemove hard-deletes the shem with the given name.
 func ShemsRemove(gdb *gorm.DB, name string) error {
 	return gdb.Where("name = ?", name).Delete(&db.Shem{}).Error
+}
+
+// ChangePassword replaces the given user's password hash after verifying the
+// old password. Sessions are not revoked so the caller stays signed in on the
+// device they used to change it; a separate "sign out everywhere" is a future
+// feature. Returns ErrWrongPassword if oldPass does not match, or
+// ErrWeakPassword if newPass fails ValidatePassword.
+func ChangePassword(gdb *gorm.DB, userID uint, oldPass, newPass string) error {
+	var user db.User
+	if err := gdb.First(&user, userID).Error; err != nil {
+		return err
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(oldPass)); err != nil {
+		return ErrWrongPassword
+	}
+	if err := ValidatePassword(newPass); err != nil {
+		return err
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPass), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
+	return gdb.Model(&user).Update("password_hash", string(hash)).Error
 }

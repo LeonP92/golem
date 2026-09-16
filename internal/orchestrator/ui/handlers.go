@@ -102,6 +102,7 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 		"ticket_new":    "templates/ticket_new.html",
 		"ticket_detail": "templates/ticket_detail.html",
 		"users":         "templates/users.html",
+		"settings":      "templates/settings.html",
 	}
 
 	out := make(map[string]*template.Template, len(pages))
@@ -153,6 +154,13 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /users", h.sessionRoute(rbac.PermUserManage, h.usersCreate))
 	mux.Handle("POST /users/{id}/role", h.sessionRoute(rbac.PermUserManage, h.usersSetRole))
 	mux.Handle("POST /users/{id}/delete", h.sessionRoute(rbac.PermUserManage, h.usersDelete))
+	// /settings is available to any signed-in user (no permission gate) — every
+	// account can manage their own settings without needing user:manage. Each
+	// section is its own URL so the sidebar is bookmarkable and adding a section
+	// is a one-line route addition.
+	mux.Handle("GET /settings", auth.RequireSession(h.DB)(http.HandlerFunc(h.settingsIndex)))
+	mux.Handle("GET /settings/security", auth.RequireSession(h.DB)(http.HandlerFunc(h.settingsSecurity)))
+	mux.Handle("POST /settings/security/password", auth.RequireSession(h.DB)(http.HandlerFunc(h.settingsChangePassword)))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -178,12 +186,14 @@ func (h *Handlers) base(r *http.Request, nav string) map[string]any {
 	m := map[string]any{
 		"Nav":             nav,
 		"CurrentUser":     "",
+		"CurrentUserID":   uint(0),
 		"CurrentRole":     "",
 		"CanManageUsers":  rbac.Can(u, rbac.PermUserManage),
 		"CanCreateTicket": rbac.Can(u, rbac.PermTicketCreate),
 	}
 	if u != nil {
 		m["CurrentUser"] = u.Username
+		m["CurrentUserID"] = u.ID
 		m["CurrentRole"] = u.Role
 	}
 	return m

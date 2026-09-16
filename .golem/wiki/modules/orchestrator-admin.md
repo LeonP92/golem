@@ -9,6 +9,8 @@ Package `internal/orchestrator/admin` provides the admin operations that work di
 - `UsersRemove(gdb, username)` — deletes the user *and their `db.Session` rows*, so access is revoked immediately. Returns `ErrLastAdmin` rather than removing the last admin, and errors if the user does not exist.
 - `ShemsAdd(gdb, name)` — generates a random 64-char hex API key, stores its bcrypt hash in a new `db.Shem` row (status `offline`, repos `[]`), and prints the raw key once to stdout.
 - `ShemsRemove(gdb, name)` — hard-deletes the shem by name.
+- `ChangePassword(gdb, userID, oldPass, newPass)` — verifies `oldPass` against the stored hash (returns `ErrWrongPassword` on mismatch), runs `ValidatePassword(newPass)` (returns `ErrWeakPassword` if short), and writes the new hash. Existing sessions are intentionally not revoked so the caller stays signed in on the device they used to change it.
+- `ValidatePassword(pass)` — length rule (`>= MinPasswordLen`, currently `8`), returns `ErrWeakPassword`. Called by `UsersAdd`, `UsersAddOrUpdate`, and `ChangePassword` so the CLI, `GOLEM_ADMIN_PASSWORD` env-var bootstrap, and the HTTP form share one rule instead of drifting.
 
 These are wired into `cmd/orchestrator/main.go` as CLI subcommands:
 

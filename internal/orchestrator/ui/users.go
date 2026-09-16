@@ -5,16 +5,12 @@ import (
 	"net/http"
 	"strconv"
 
-	"golang.org/x/crypto/bcrypt"
-
 	"github.com/leonp92/golem/internal/orchestrator/admin"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 )
 
-// renderUsers renders the /users page with the current user list, the role
-// options for the dropdowns, and an optional validation error.
 func (h *Handlers) renderUsers(w http.ResponseWriter, r *http.Request, errMsg string) {
 	users, err := admin.UsersList(h.DB)
 	if err != nil {
@@ -36,7 +32,6 @@ func (h *Handlers) usersPage(w http.ResponseWriter, r *http.Request) {
 	h.renderUsers(w, r, "")
 }
 
-// usersCreate validates and creates a user from the /users form.
 func (h *Handlers) usersCreate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -44,35 +39,29 @@ func (h *Handlers) usersCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	username := r.FormValue("username")
 	password := r.FormValue("password")
-	role, roleOK := rbac.ParseRole(r.FormValue("role"))
-	switch {
-	case username == "":
+	role := r.FormValue("role")
+	if username == "" {
 		h.renderUsers(w, r, "Username is required.")
 		return
-	case len(password) < 8:
-		h.renderUsers(w, r, "Password must be at least 8 characters.")
-		return
-	case !roleOK:
-		h.renderUsers(w, r, "Invalid role.")
-		return
 	}
+	// Existence check up front so a subsequent UsersAddOrUpdate call cannot
+	// silently overwrite an existing user's password from the create form.
 	var existing db.User
 	if h.DB.Where("username = ?", username).First(&existing).Error == nil {
 		h.renderUsers(w, r, "Username already exists.")
 		return
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
-	if err != nil {
+	err := admin.UsersAddOrUpdate(h.DB, username, password, role)
+	switch {
+	case err == nil:
+		http.Redirect(w, r, "/users", http.StatusFound)
+	case errors.Is(err, admin.ErrWeakPassword):
+		h.renderUsers(w, r, "Password must be at least 8 characters.")
+	case errors.Is(err, admin.ErrUnknownRole):
+		h.renderUsers(w, r, "Invalid role.")
+	default:
 		h.renderUsers(w, r, "Failed to create user.")
-		return
 	}
-	if err := h.DB.Create(&db.User{
-		Username: username, PasswordHash: string(hash), Role: string(role),
-	}).Error; err != nil {
-		h.renderUsers(w, r, "Failed to create user.")
-		return
-	}
-	http.Redirect(w, r, "/users", http.StatusFound)
 }
 
 // usersSetRole changes a user's role, refusing to demote the last admin.

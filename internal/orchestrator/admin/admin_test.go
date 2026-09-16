@@ -167,3 +167,89 @@ func TestUsersRemove_UnknownUser(t *testing.T) {
 		t.Fatal("expected an error for a user that does not exist")
 	}
 }
+
+func TestValidatePassword_LengthRule(t *testing.T) {
+	cases := []struct {
+		in      string
+		wantErr bool
+	}{
+		{"", true},
+		{"short", true},
+		{"1234567", true},
+		{"12345678", false},
+		{"longerpassphrase", false},
+	}
+	for _, tc := range cases {
+		err := admin.ValidatePassword(tc.in)
+		if (err != nil) != tc.wantErr {
+			t.Errorf("ValidatePassword(%q) err=%v, wantErr=%v", tc.in, err, tc.wantErr)
+		}
+		if tc.wantErr && err != nil && !errors.Is(err, admin.ErrWeakPassword) {
+			t.Errorf("ValidatePassword(%q) = %v, want ErrWeakPassword", tc.in, err)
+		}
+	}
+}
+
+func TestUsersAddOrUpdate_RejectsWeakPassword(t *testing.T) {
+	gdb := openTestDB(t)
+	err := admin.UsersAddOrUpdate(gdb, "shorty", "abc", string(rbac.RoleAdmin))
+	if !errors.Is(err, admin.ErrWeakPassword) {
+		t.Fatalf("got %v, want ErrWeakPassword", err)
+	}
+	var count int64
+	gdb.Model(&db.User{}).Count(&count)
+	if count != 0 {
+		t.Errorf("got %d users, want 0 (weak password must not persist)", count)
+	}
+}
+
+func TestChangePassword_HappyPath(t *testing.T) {
+	gdb := openTestDB(t)
+	if err := admin.UsersAddOrUpdate(gdb, "leon", "originalpass", string(rbac.RoleAdmin)); err != nil {
+		t.Fatalf("UsersAddOrUpdate: %v", err)
+	}
+	var u db.User
+	if err := gdb.Where("username = ?", "leon").First(&u).Error; err != nil {
+		t.Fatalf("find user: %v", err)
+	}
+
+	if err := admin.ChangePassword(gdb, u.ID, "originalpass", "newerpassword"); err != nil {
+		t.Fatalf("ChangePassword: %v", err)
+	}
+
+	// Confirm the old password no longer works and the new one does.
+	if err := admin.ChangePassword(gdb, u.ID, "originalpass", "irrelevantxxx"); !errors.Is(err, admin.ErrWrongPassword) {
+		t.Errorf("old password still accepted; got %v", err)
+	}
+	if err := admin.ChangePassword(gdb, u.ID, "newerpassword", "thirdpassword"); err != nil {
+		t.Errorf("new password should be accepted; got %v", err)
+	}
+}
+
+func TestChangePassword_RejectsWrongOld(t *testing.T) {
+	gdb := openTestDB(t)
+	if err := admin.UsersAddOrUpdate(gdb, "leon", "originalpass", string(rbac.RoleAdmin)); err != nil {
+		t.Fatalf("UsersAddOrUpdate: %v", err)
+	}
+	var u db.User
+	gdb.Where("username = ?", "leon").First(&u)
+
+	err := admin.ChangePassword(gdb, u.ID, "wrongguess", "somethinglong")
+	if !errors.Is(err, admin.ErrWrongPassword) {
+		t.Fatalf("got %v, want ErrWrongPassword", err)
+	}
+}
+
+func TestChangePassword_RejectsWeakNew(t *testing.T) {
+	gdb := openTestDB(t)
+	if err := admin.UsersAddOrUpdate(gdb, "leon", "originalpass", string(rbac.RoleAdmin)); err != nil {
+		t.Fatalf("UsersAddOrUpdate: %v", err)
+	}
+	var u db.User
+	gdb.Where("username = ?", "leon").First(&u)
+
+	err := admin.ChangePassword(gdb, u.ID, "originalpass", "abc")
+	if !errors.Is(err, admin.ErrWeakPassword) {
+		t.Fatalf("got %v, want ErrWeakPassword", err)
+	}
+}

@@ -101,7 +101,12 @@
         <span class="iconify text-lg" data-icon="heroicons:moon" id="theme-icon"></span>
       </button>
       {{if .CurrentUser}}
-      <span class="text-sm opacity-75 hidden sm:inline">{{.CurrentUser}} · {{.CurrentRole}}</span>
+      <a href="/settings"
+         class="btn btn-sm gap-1.5 {{if eq .Nav `settings`}}btn-active text-white{{else}}btn-ghost text-neutral-content opacity-75 hover:opacity-100{{end}}"
+         title="Account settings">
+        <span class="iconify" data-icon="heroicons:user-circle"></span>
+        <span class="hidden sm:inline">{{.CurrentUser}} · {{.CurrentRole}}</span>
+      </a>
       {{end}}
       <a href="/logout" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
         <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
