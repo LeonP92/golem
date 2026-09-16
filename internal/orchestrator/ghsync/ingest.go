@@ -103,6 +103,24 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 	if err := s.DB.Model(repo).Updates(updates).Error; err != nil {
 		return fmt.Errorf("record poll result for %s: %w", repo.RepoRemote, err)
 	}
+
+	// Reconciliation runs even when this page had a partial failure
+	// (failure != nil above). It does not defeat the partial-failure guard:
+	// ReconcileRepo never writes last_issue_sync, etag, or last_error — those
+	// were already committed above, cursor/etag untouched — so nothing here
+	// can un-freeze the retry the guard set up. Skipping reconcile whenever
+	// any single issue in the page failed would instead defeat a different
+	// guarantee (see the risk notes on ReconcileRepo): one bad issue must not
+	// abandon reconciliation of every other ticket in the repo, which may
+	// have synced cleanly. Reconcile also only ever reads a ticket's current,
+	// already-committed row, so a ticket whose own write just failed is
+	// reconciled against its last known-good state, not against anything the
+	// failed write would have changed — there is nothing "half-applied" for
+	// reconcile to see. Rides the slow ingest ticker: drift from downtime, a
+	// parked outbox row, or a hand-edited label self-heals within one cycle.
+	if err := s.ReconcileRepo(ctx, repo); err != nil {
+		return fmt.Errorf("reconcile %s: %w", repo.RepoRemote, err)
+	}
 	return nil
 }
 
