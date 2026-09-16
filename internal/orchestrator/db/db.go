@@ -1,7 +1,6 @@
 package db
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/glebarez/sqlite"
@@ -53,12 +52,14 @@ func ensureAdmin(gdb *gorm.DB) error {
 	if admins > 0 {
 		return nil
 	}
-	var first User
-	if err := gdb.Order("id asc").First(&first).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil // empty database: nothing to promote
-		}
+	// Find rather than First: an empty users table is the normal first-run case,
+	// and First would log a spurious "record not found" on every startup.
+	var first []User
+	if err := gdb.Order("id asc").Limit(1).Find(&first).Error; err != nil {
 		return err
 	}
-	return gdb.Model(&first).Update("role", "admin").Error
+	if len(first) == 0 {
+		return nil // empty database: nothing to promote
+	}
+	return gdb.Model(&first[0]).Update("role", "admin").Error
 }
