@@ -58,6 +58,21 @@ func Backoff(attempts int) time.Duration {
 // later with exponential backoff; after MaxAttempts it is parked. Delivery
 // errors never abort the pass — one stuck row must not block the queue.
 //
+// SINGLE DRAINER ONLY. The select below takes no lock and writes no claim:
+// no FOR UPDATE, no SKIP LOCKED, no claim column, no lease. Two processes
+// running this concurrently both select the same rows and both deliver them
+// — verified on PostgreSQL with a barrier: three concurrent passes posted
+// three identical comments to one issue and all three marked the row done,
+// with no error recorded. Today exactly one drainLoop goroutine exists and
+// cmd/orchestrator/main.go wires exactly one worker, so this is latent, not
+// live. But the branch adds PostgreSQL support, which is what you add when
+// you intend to run more than one process, so: running a second orchestrator
+// against the same database requires this to be fixed first. The fix is
+// either FOR UPDATE SKIP LOCKED on the select, or a claim column updated
+// with a RowsAffected == 1 check before delivery. Note also that the test
+// suite structurally cannot see this — db.Open(":memory:") pins the pool to
+// one connection, so every test serialises at the driver.
+//
 // A row's post-delivery local write (if any — see deliver's postWrite) and
 // the done_at commit that finalises it happen in one transaction, via
 // commitSuccess. This matters because the GitHub call has already

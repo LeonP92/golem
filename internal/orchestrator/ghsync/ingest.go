@@ -267,9 +267,34 @@ func (s *Syncer) applyIssue(ctx context.Context, repo *db.GitHubRepo, issue gith
 // before any shem can claim it through the existing /api/tickets/available
 // path.
 func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo, issue github.Issue) error {
+	// The default-branch lookup is allowed to fail the whole create
+	// (carry-forward item 5). It used to fall back to "main" and discard the
+	// error, which meant one transient 403 or secondary rate limit at the
+	// moment an issue was first ingested permanently pinned that ticket's
+	// BaseBranch to "main" — not logged, not recorded on the repo row, not
+	// retried, not surfaced. enqueuePRIfReady takes BaseBranch verbatim into
+	// the pull request, so on a repository whose default is master, develop
+	// or trunk that is either a 422 on every attempt until the outbox row
+	// parks, or a pull request opened into a non-default branch where
+	// "Closes #N" silently never fires.
+	//
+	// Returning the error instead puts the issue through IngestRepo's
+	// existing partial-failure guard: the rest of the page still applies,
+	// the cursor and the ETag stay put, repo.LastError says what happened,
+	// and the next poll retries this issue. That costs one poll interval for
+	// one issue, which is the right price for a transient API error and far
+	// cheaper than an unnoticed wrong base branch.
+	//
+	// An empty name from a successful call is treated the same way rather
+	// than falling back: guessing there has exactly the failure mode this
+	// change exists to remove.
 	base, err := s.GH.DefaultBranch(ctx, repo.Owner, repo.Name)
-	if err != nil || base == "" {
-		base = "main"
+	if err != nil {
+		return fmt.Errorf("default branch for %s (issue #%d): %w", repo.RepoRemote, issue.Number, err)
+	}
+	if base == "" {
+		return fmt.Errorf("default branch for %s (issue #%d): GitHub returned an empty branch name",
+			repo.RepoRemote, issue.Number)
 	}
 	id := uuid.NewString()
 	number := issue.Number
