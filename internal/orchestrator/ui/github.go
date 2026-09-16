@@ -2,10 +2,12 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	"gorm.io/gorm"
 )
@@ -17,6 +19,14 @@ import (
 // disabled placeholder with ID 0; see the template for how that placeholder
 // is kept from offering a "Sync now" action (POST .../0/sync would 404).
 func (h *Handlers) githubSettings(w http.ResponseWriter, r *http.Request) {
+	h.renderGitHubSettings(w, r, "")
+}
+
+// renderGitHubSettings renders the settings page, optionally with a visible
+// error banner. errMsg != "" also switches the response to 400: a rejected
+// submission must not look like a successful one to anything that reads the
+// status code.
+func (h *Handlers) renderGitHubSettings(w http.ResponseWriter, r *http.Request, errMsg string) {
 	var repos []db.GitHubRepo
 	h.DB.Order("repo_remote asc").Find(&repos)
 
@@ -33,7 +43,40 @@ func (h *Handlers) githubSettings(w http.ResponseWriter, r *http.Request) {
 			RepoRemote: remote, Owner: owner, Name: name, Label: "golem",
 		})
 	}
-	h.render(w, r, "github_settings", map[string]any{"Repos": repos, "Nav": "github"})
+	if errMsg != "" {
+		// Content-Type must be set before WriteHeader, or render's own
+		// Set() lands after the headers have already gone out.
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusBadRequest)
+	}
+	h.render(w, r, "github_settings", map[string]any{
+		"Repos": repos, "Nav": "github", "Error": errMsg,
+	})
+}
+
+// validateTriggerLabel rejects a trigger label inside the golem:* namespace
+// Golem owns for phase labels.
+//
+// applyPhaseLabel removes every golem:* label from an issue except the one
+// it is about to apply, deliberately leaving the no-colon default "golem"
+// and every human label alone. A trigger label that is itself inside that
+// namespace — "golem:triage", say — is therefore stripped on the issue's
+// first phase transition, silently un-enrolling it from the very filter that
+// brought it in. Verified against the real Drain + applyPhaseLabel:
+// trigger="golem:triage" on labels [golem:triage bug golem:brainstorm] left
+// [bug golem:implement].
+//
+// Only that exact prefix is rejected. The default "golem" and near-misses
+// like "golem-adjacent", "golemite", "Golem" and "team:golem" are outside the
+// namespace, work correctly today, and must keep working.
+func validateTriggerLabel(label string) error {
+	if strings.HasPrefix(label, ghsync.PhaseLabelPrefix) {
+		return fmt.Errorf("trigger label %q is inside the %s namespace Golem uses for phase labels, "+
+			"so it would be removed from the issue on its first phase change — "+
+			"un-enrolling it from its own trigger. Choose a label outside that namespace "+
+			"(the default is %q).", label, ghsync.PhaseLabelPrefix, "golem")
+	}
+	return nil
 }
 
 // githubSettingsSubmit upserts one repo's settings from the form.
@@ -42,10 +85,20 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	remote := urlnorm.Normalize(r.FormValue("repo_remote"))
+	// r.PostForm, not r.FormValue: ParseForm merges the URL query into
+	// r.Form for a POST, and nothing about this endpoint should be settable
+	// from a link.
+	remote := urlnorm.Normalize(r.PostForm.Get("repo_remote"))
 	if remote == "" {
 		http.Error(w, "repo_remote is required", http.StatusBadRequest)
 		return
+	}
+	label := strings.TrimSpace(r.PostForm.Get("label"))
+	if label != "" {
+		if err := validateTriggerLabel(label); err != nil {
+			h.renderGitHubSettings(w, r, err.Error())
+			return
+		}
 	}
 	owner, name := splitRemote(remote)
 
@@ -60,8 +113,8 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// A checkbox that is off is simply absent from the form body.
-	repo.Enabled = r.FormValue("enabled") != ""
-	if label := strings.TrimSpace(r.FormValue("label")); label != "" {
+	repo.Enabled = r.PostForm.Get("enabled") != ""
+	if label != "" {
 		repo.Label = label
 	}
 	if err := h.DB.Save(&repo).Error; err != nil {

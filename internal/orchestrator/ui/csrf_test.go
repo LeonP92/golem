@@ -3,6 +3,7 @@ package ui_test
 import (
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -155,6 +156,92 @@ func TestGitHubSettingsSubmit_RequiresCSRFToken(t *testing.T) {
 			}
 			if count != wantRows {
 				t.Errorf("github_repos rows = %d, want %d", count, wantRows)
+			}
+		})
+	}
+}
+
+// TestGitHubSettingsSubmit_RejectsTriggerLabelInGolemNamespace covers finding
+// S7. applyPhaseLabel strips every golem:* label from an issue except the one
+// it is applying, so a trigger label inside that namespace is removed on the
+// first phase transition and the issue silently leaves its own opt-in filter.
+// Verified against the real Drain + applyPhaseLabel at 51d9526:
+// trigger="golem:triage" on [golem:triage bug golem:brainstorm] left
+// [bug golem:implement]. githubSettingsSubmit validated nothing.
+//
+// The default "golem" and every near-miss outside the namespace are correct
+// today and must keep working, so they are in the same table.
+func TestGitHubSettingsSubmit_RejectsTriggerLabelInGolemNamespace(t *testing.T) {
+	tests := []struct {
+		name       string
+		label      string
+		wantCode   int
+		wantStored string
+	}{
+		{name: "default label", label: "golem", wantCode: http.StatusSeeOther, wantStored: "golem"},
+		{name: "hyphen near-miss", label: "golem-adjacent", wantCode: http.StatusSeeOther, wantStored: "golem-adjacent"},
+		{name: "suffix near-miss", label: "golemite", wantCode: http.StatusSeeOther, wantStored: "golemite"},
+		{name: "case near-miss", label: "Golem", wantCode: http.StatusSeeOther, wantStored: "Golem"},
+		{name: "colon but not a prefix", label: "team:golem", wantCode: http.StatusSeeOther, wantStored: "team:golem"},
+		{name: "unrelated label", label: "needs-triage", wantCode: http.StatusSeeOther, wantStored: "needs-triage"},
+		{name: "owned namespace", label: "golem:triage", wantCode: http.StatusBadRequest},
+		{name: "owned namespace, a real phase", label: "golem:implement", wantCode: http.StatusBadRequest},
+		{name: "owned namespace, bare prefix", label: "golem:", wantCode: http.StatusBadRequest},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			gdb, err := db.Open(":memory:")
+			if err != nil {
+				t.Fatalf("db.Open: %v", err)
+			}
+			user := db.User{Username: "leon", PasswordHash: "x"}
+			gdb.Create(&user)
+			rec := httptest.NewRecorder()
+			if err := auth.CreateSession(gdb, rec, user.ID, false); err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			cookie := rec.Result().Cookies()[0]
+
+			tmpls, err := ui.LoadTemplates()
+			if err != nil {
+				t.Fatalf("LoadTemplates: %v", err)
+			}
+			h := ui.NewHandlersWithMap(gdb, tmpls, false)
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+
+			form := url.Values{}
+			form.Set("repo_remote", "https://github.com/org/repo")
+			form.Set("enabled", "on")
+			form.Set("label", tc.label)
+			req := httptest.NewRequest(http.MethodPost, "/settings/github",
+				strings.NewReader(form.Encode()))
+			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, withSession(req, cookie))
+
+			if w.Code != tc.wantCode {
+				t.Fatalf("status = %d, want %d: %s", w.Code, tc.wantCode, w.Body.String())
+			}
+
+			var repos []db.GitHubRepo
+			gdb.Find(&repos)
+			if tc.wantCode == http.StatusBadRequest {
+				if len(repos) != 0 {
+					t.Errorf("a rejected label was still persisted: %+v", repos)
+				}
+				// The operator has to be able to see why.
+				if !strings.Contains(w.Body.String(), "namespace Golem uses for phase labels") {
+					t.Error("rejection gives the operator no visible explanation")
+				}
+				return
+			}
+			if len(repos) != 1 {
+				t.Fatalf("expected exactly one repo row, got %d", len(repos))
+			}
+			if repos[0].Label != tc.wantStored {
+				t.Errorf("Label = %q, want %q", repos[0].Label, tc.wantStored)
 			}
 		})
 	}

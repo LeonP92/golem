@@ -3,6 +3,13 @@
   <h1 class="text-2xl font-bold">GitHub Issues</h1>
 </div>
 
+{{if .Error}}
+<div class="alert alert-error mb-4" role="alert">
+  <span class="iconify" data-icon="heroicons:x-circle"></span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
 <p class="text-sm text-base-content/60 mb-4">
   Issues carrying the trigger label become tickets automatically. Golem polls
   every 15 minutes; use <strong>Sync now</strong> to pull issues in immediately.

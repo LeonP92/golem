@@ -25,9 +25,13 @@ type Session struct {
 
 // Shem represents a registered Shem worker.
 type Shem struct {
-	ID            uint   `gorm:"primaryKey"`
-	Name          string `gorm:"uniqueIndex;not null"`
-	APIKeyHash    string `gorm:"not null"`
+	ID   uint   `gorm:"primaryKey"`
+	Name string `gorm:"uniqueIndex;not null"`
+	// json:"-" — GET /api/shems serializes this struct straight to the
+	// dashboard, and there is no reason to ship credential material to a
+	// browser. It is a bcrypt hash of 32 random bytes, so exposure was not
+	// exploitable, but it is still the secret's only stored form.
+	APIKeyHash    string `gorm:"not null" json:"-"`
 	Repos         string `gorm:"not null"` // JSON: []string of normalized URLs
 	LastHeartbeat *time.Time
 	Status        string  `gorm:"not null;default:'offline'"` // online | offline
