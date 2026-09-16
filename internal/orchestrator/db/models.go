@@ -81,7 +81,10 @@ type Ticket struct {
 	// every byte of it reaches an agent prompt. See ghsync.HashDescription.
 	// The claim-adjacent predicates in
 	// api/tickets.go (ClaimTicket, availableTickets, resumableTickets)
-	// require ApprovedBodyHash = BodyHash, not merely IntakeApproved: a
+	// require ApprovedBodyHash to be non-empty AND equal to BodyHash, not
+	// merely IntakeApproved (the non-empty half is re-review finding F1: a
+	// pre-body_hash database migrates to two empty strings, which compare
+	// equal and would otherwise read as an approval): a
 	// ticket that is claimed while approved deliberately keeps
 	// IntakeApproved=true and its now-stale ApprovedBodyHash if the issue is
 	// edited afterward (the running shem is not yanked), but BodyHash keeps

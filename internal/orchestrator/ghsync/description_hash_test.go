@@ -183,7 +183,7 @@ func TestTitleOnlyEditRegatesAnApprovedTicket(t *testing.T) {
 	// it: this row is not claimable.
 	var claimable int64
 	gdb.Model(&db.Ticket{}).
-		Where("id = ? AND (issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))", after.ID).
+		Where("id = ? AND (issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))", after.ID).
 		Count(&claimable)
 	if claimable != 0 {
 		t.Error("the ticket still satisfies the claim predicate after an unreviewed title edit")

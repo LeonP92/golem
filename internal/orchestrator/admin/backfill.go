@@ -16,6 +16,11 @@ type BackfillResult struct {
 	// Repaired is the number whose body_hash was written (or, in a dry
 	// run, would have been written).
 	Repaired int
+	// Regated is the number of GitHub-linked, unclaimed, non-closed
+	// tickets carrying intake_approved with an EMPTY approved_body_hash —
+	// the re-review F1 shape — that were returned to pending-approval (or,
+	// in a dry run, would have been).
+	Regated int
 	// DryRun records which of those two the caller asked for.
 	DryRun bool
 }
@@ -26,26 +31,47 @@ func (r BackfillResult) String() string {
 	if r.DryRun {
 		verb = "would repair"
 	}
-	return fmt.Sprintf("backfill body_hash: scanned %d ticket(s), %s %d", r.Scanned, verb, r.Repaired)
+	return fmt.Sprintf("backfill body_hash: scanned %d ticket(s), %s %d, %s %d unbound approval(s) for re-review",
+		r.Scanned, verb, r.Repaired, map[bool]string{true: "would return", false: "returned"}[r.DryRun], r.Regated)
 }
 
-// BackfillBodyHash repairs GitHub-linked tickets whose body_hash is empty.
+// BackfillBodyHash repairs GitHub-linked tickets left half-migrated by a
+// deployment made partway through the GitHub integration work.
 //
 // WHO NEEDS IT. Upgrades from before the GitHub integration are unaffected:
 // issue_number did not exist, so every migrated row has issue_number NULL and
-// short-circuits the claim predicate. The rows this repairs come from a
-// deployment made partway THROUGH that work, when issue_number had shipped
-// and body_hash had not — AutoMigrate gave those tickets
-// body_hash = "" with a DB-level default, and nothing else ever fills it in.
-// A backup restored from such a deployment has the same rows.
+// short-circuits the claim predicate. Three narrower windows do need it, and
+// they fail in two different directions. AutoMigrate adds each missing column
+// at its zero value, so the shape a row lands in depends on which columns its
+// last writer knew about:
 //
-// WHY THEY DO NOT HEAL THEMSELVES. The claim predicates require
-// approved_body_hash = body_hash, so an approved ticket with an empty
-// body_hash is unclaimable. Ingest rewrites body_hash only for issues that
-// come back from a label-filtered, cursor-bounded list query, and reconcile
-// deliberately never writes the ticket row at all, so a quiet issue — one
-// nobody edits — is never visited again. The ticket sits in the dashboard
-// looking released and no shem can ever take it.
+//	[094e3f8, f9e87e0)  issue_number only.
+//	                    -> intake_approved=0, both hashes ''.
+//	                    Fail-CLOSED: unclaimable, and un-approvable too,
+//	                    because actionStart refuses a row whose description
+//	                    does not hash to its body_hash.
+//	[f9e87e0, fef123b)  + intake_approved.
+//	                    -> an approved ticket lands intake_approved=1 with
+//	                    both hashes ''. Before re-review finding F1 the claim
+//	                    predicate read that as approval, because the empty
+//	                    string equals itself: fail-OPEN, claimable with no
+//	                    hash binding at all, and that build's applyIssue had
+//	                    no re-gate either, so the stored text may never have
+//	                    been read by anyone. The predicate now refuses it;
+//	                    regateUnboundApprovals below is how it gets un-stuck.
+//	[fef123b, c2fe234)  + approved_body_hash.
+//	                    -> intake_approved=1, approved_body_hash=H(text the
+//	                    operator approved), body_hash ''. Fail-CLOSED, and
+//	                    the one shape the body_hash write below makes
+//	                    claimable again immediately.
+//
+// A backup restored from any such deployment has the same rows.
+//
+// WHY THEY DO NOT HEAL THEMSELVES. Ingest rewrites body_hash only for issues
+// that come back from a label-filtered, cursor-bounded list query, and
+// reconcile deliberately never writes the ticket row at all, so a quiet issue
+// — one nobody edits — is never visited again. The ticket sits in the
+// dashboard looking released and no shem can ever take it.
 //
 // WHAT IT WRITES, AND WHAT IT MUST NEVER WRITE. body_hash and nothing else.
 // body_hash is ghsync's column: it is the record of what the live issue
@@ -60,11 +86,14 @@ func (r BackfillResult) String() string {
 // format did) would write a value the gate then compares against and rejects,
 // stranding the very rows this exists to rescue.
 //
-// intake_approved and approved_body_hash belong to actionStart alone and are
-// never touched here — writing either would let this tool approve text no
-// human read. For the same reason this must never be wired into actionStart:
-// stamping body_hash from an approval path would make the approval certify
-// itself, which is exactly the gate spec Amendment 1 exists to build.
+// GRANTING approval is not this tool's business and never will be: nothing
+// here sets intake_approved or writes a non-empty approved_body_hash, because
+// either would let it release text no human read. The one approval column it
+// touches it only ever CLEARS — see regateUnboundApprovals — which moves a
+// ticket away from claimability, not toward it. For the same reason this must
+// never be wired into actionStart: stamping body_hash from an approval path
+// would make the approval certify itself, which is exactly the gate spec
+// Amendment 1 exists to build.
 //
 // Rows that already carry a body_hash are skipped, never recomputed: a
 // non-empty value came from ingest and is the truth about the live issue,
@@ -73,8 +102,9 @@ func (r BackfillResult) String() string {
 // A NOTE ON THE DESCRIPTION FORMAT. A row written by a mid-upgrade build
 // holds a body-only description, because the title was not composed into it
 // yet. This repair hashes that stored text as it stands, which is the right
-// thing: it matches the approved_body_hash the operator's approval left
-// behind, so the ticket becomes claimable again immediately. The next poll
+// thing: for the [fef123b, c2fe234) shape it matches the approved_body_hash
+// the operator's approval left behind, so the ticket becomes claimable again
+// immediately. The next poll
 // then re-composes the description with the title and re-hashes it, which
 // re-gates the ticket for one re-read like every other linked ticket in the
 // deployment. Both steps are correct and the order does not matter.
@@ -110,5 +140,54 @@ func BackfillBodyHash(gdb *gorm.DB, dryRun bool) (BackfillResult, error) {
 			res.Repaired++
 		}
 	}
+
+	regated, err := regateUnboundApprovals(gdb, dryRun)
+	if err != nil {
+		return res, err
+	}
+	res.Regated = regated
 	return res, nil
+}
+
+// regateUnboundApprovals returns to pending-approval every GitHub-linked,
+// unclaimed, non-closed ticket that carries intake_approved with an empty
+// approved_body_hash — the re-review F1 shape, an approval that was recorded
+// before there was anything to bind it to.
+//
+// This is the recovery half of the F1 fix. The claim predicates now require a
+// non-empty approved_body_hash, so such a row is correctly refused; but on its
+// own that leaves it with no way forward either, because actionStart only
+// starts a ticket whose intake_approved is still false and nothing a human can
+// press in the dashboard clears that column. The one thing that would —
+// ghsync.applyIssue's re-gate branch — runs only when GitHub actually returns
+// the issue, and a stored ETag on a repo nobody edits can suppress that
+// indefinitely. Without this, a correct predicate would strand real work.
+//
+// It performs exactly applyIssue's re-gate, with applyIssue's own conditions:
+// assigned_shem IS NULL so a shem mid-run is never yanked, and phase <>
+// 'closed' because closing wins outright there too. It clears approval; it
+// never grants it, so like the rest of this file it cannot release text no
+// human has read. The body_hash loop above has already stamped these rows, so
+// after this pass the ticket is in precisely the state the dashboard's Approve
+// control expects.
+func regateUnboundApprovals(gdb *gorm.DB, dryRun bool) (int, error) {
+	scope := gdb.Model(&db.Ticket{}).
+		Where("issue_number IS NOT NULL AND intake_approved AND approved_body_hash = ? "+
+			"AND assigned_shem IS NULL AND phase <> ?", "", "closed")
+	if dryRun {
+		var n int64
+		if err := scope.Count(&n).Error; err != nil {
+			return 0, fmt.Errorf("count approvals needing re-review: %w", err)
+		}
+		return int(n), nil
+	}
+	result := scope.Updates(map[string]any{
+		"intake_approved":    false,
+		"approved_body_hash": "",
+		"phase":              "pending-approval",
+	})
+	if result.Error != nil {
+		return 0, fmt.Errorf("return unbound approvals for re-review: %w", result.Error)
+	}
+	return int(result.RowsAffected), nil
 }

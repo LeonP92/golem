@@ -10,7 +10,7 @@ deployment*.
 
 ---
 
-## 1. Run the `body_hash` backfill — required for some upgrades
+## 1. Run the `body_hash` backfill — before you start the new binary
 
 ```sh
 # rehearse first; this writes nothing
@@ -23,34 +23,79 @@ docker compose run --rm orchestrator backfill body-hash
 ```
 
 It reads `ORCHESTRATOR_DB` for the database path, like the `users` and `shems`
-subcommands. It is idempotent, safe to run more than once, and safe to run
-while the orchestrator is up.
+subcommands, and it is idempotent — running it twice changes nothing the
+second time.
 
 **Who needs it.** If your database was last written by a release from *before*
 this feature, you do not: those tickets have no linked issue and are
 unaffected. You need it if you ever ran a build from partway through this
-work — one where tickets already carried an issue number but the approval
-gate's `body_hash` column did not exist yet — or if you restore a backup from
-one.
+work — one where tickets already carried an issue number but one or both of
+the approval gate's hash columns did not exist yet — or if you restore a
+backup from one.
 
-**What happens without it.** Those tickets are permanently unclaimable. A
-ticket can be approved in the dashboard and still never be picked up by any
-shem, because claiming requires the approved text and the current issue text
-to hash to the same value and one of them is blank. Approving again is
-refused. Nothing heals it on its own: polling only revisits issues that have
-actually been edited, and the reconciliation pass deliberately never writes
-the ticket row.
+**What happens without it depends on how far through you were, and one of the
+two cases is not a safe one.** A schema migration adds each missing column at
+its zero value, so which shape your rows land in depends on which columns the
+build that last wrote them knew about:
 
-**How it interacts with the re-hash below.** The backfill restores the hash
-for the text each ticket currently holds, which is what its recorded approval
-was given for, so those tickets become claimable again immediately. The first
-poll then re-composes their descriptions with the title and re-gates them once,
-along with every other linked ticket (see section 2). Both steps are correct
-and the order does not matter.
+| Your last build had | Approved tickets land as | Consequence |
+|---|---|---|
+| `issue_number` only | `intake_approved=0`, both hashes blank | **Unclaimable.** Fail-closed. |
+| `+ intake_approved` | `intake_approved=1`, both hashes blank | **Was claimable with no binding at all.** Fail-open. |
+| `+ approved_body_hash` | `intake_approved=1`, approved hash set, `body_hash` blank | **Unclaimable.** Fail-closed. |
 
-**What it changes.** `body_hash`, on GitHub-linked tickets that have none, and
-nothing else. It never marks anything approved, so it cannot release work no
-human has read. A dry run prints exactly how many rows it would touch.
+The two fail-closed rows are an annoyance: a ticket can be approved in the
+dashboard and still never be picked up by any shem, because claiming requires
+the approved text and the current issue text to hash to the same value and one
+of them is blank. Approving again is refused. Nothing heals it on its own —
+polling only revisits issues that have actually been edited, and the
+reconciliation pass deliberately never writes the ticket row.
+
+The middle row is the one that matters, and it is the opposite problem.
+An earlier version of this note described every affected ticket as
+"permanently unclaimable". For that shape it was backwards. Both hashes were
+blank, the claim predicate compared them for equality, and the empty string
+equals itself — so the ticket was **immediately claimable by any shem, with no
+hash binding whatsoever**. Worse, the build that produced those rows had no
+re-gate on its polling either, so if the issue was edited after the approval,
+the text sitting on that ticket is text no human has ever read.
+
+**This release closes that hole in the predicate itself**: claiming now
+requires a non-blank approved hash as well as a matching one, so a blank-hash
+row is refused no matter how it got there. You do not have to win a race with
+your own shems. But run the backfill **before you start the new binary
+anyway**, for two reasons: it is what makes those tickets usable again, and if
+you ever roll back to an intermediate build the hole is open again for as long
+as that build is serving.
+
+**What the backfill does.**
+
+1. It writes `body_hash` on GitHub-linked tickets that have none, hashing that
+   row's own stored description with the same function ingest uses. It never
+   recomputes a hash that is already there.
+2. It returns to `pending-approval` any GitHub-linked ticket that is marked
+   approved but carries a blank approved hash — the middle row above. Those
+   approvals were recorded before there was anything to bind them to, so they
+   are not approvals of any particular text and cannot be honoured. This step
+   is what un-sticks them: without it the new predicate refuses the ticket and
+   the dashboard cannot re-approve it either, because approval is a one-way
+   column that only the polling loop would otherwise clear. Tickets a shem is
+   already working on, and closed tickets, are left alone.
+
+It only ever **clears** approval, never grants it, so it cannot release work no
+human has read. A dry run prints exactly how many rows each step would touch.
+
+**What you will see afterwards.** The tickets from step 2 are back in
+`pending-approval` with their current issue text, waiting for one human read
+each. That is the correct end state: it is the re-approval you would have been
+asked for at the time, if the build you were running had had anything to
+record it against. Tickets repaired by step 1 alone become claimable again
+immediately, on exactly the text their recorded approval was given for.
+
+**How it interacts with the re-hash below.** The first poll after upgrading
+re-composes every linked ticket's description with its title and re-gates them
+once (see section 2). Both steps are correct and the order does not matter;
+a ticket already sent back by step 2 simply stays there.
 
 ## 2. Approved tickets go back to "pending approval" once, after the first poll
 

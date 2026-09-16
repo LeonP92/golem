@@ -14,6 +14,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
@@ -491,15 +492,26 @@ func TestResumableTickets_ExcludesUnapprovedGitHubLinkedTicket(t *testing.T) {
 	if err := h.DB.Create(&unapproved).Error; err != nil {
 		t.Fatalf("seed unapproved ticket: %v", err)
 	}
+	// A REAL approval, i.e. what actionStart leaves behind: intake_approved
+	// set AND approved_body_hash stamped from the description on the row.
+	// This fixture predates body_hash and used to leave both hash columns
+	// at '', which is the migrated shape re-review finding F1 is about —
+	// the predicate's new approved_body_hash <> '' clause refuses it, quite
+	// correctly. Stamping the hashes keeps the test asserting what it was
+	// written to assert (an approved, checkpointed ticket resumes) instead
+	// of accidentally asserting that empty hashes count as approval.
+	approvedDesc := "d"
 	approved := db.Ticket{
-		RepoRemote:      "https://github.com/org/repo",
-		Branch:          "ticket/approved",
-		Description:     "d",
-		Phase:           phase,
-		AssignedShem:    &shem.ID,
-		CheckpointPhase: &phase,
-		IssueNumber:     &nApproved,
-		IntakeApproved:  true,
+		RepoRemote:       "https://github.com/org/repo",
+		Branch:           "ticket/approved",
+		Description:      approvedDesc,
+		Phase:            phase,
+		AssignedShem:     &shem.ID,
+		CheckpointPhase:  &phase,
+		IssueNumber:      &nApproved,
+		IntakeApproved:   true,
+		BodyHash:         ghsync.HashDescription(approvedDesc),
+		ApprovedBodyHash: ghsync.HashDescription(approvedDesc),
 	}
 	if err := h.DB.Create(&approved).Error; err != nil {
 		t.Fatalf("seed approved ticket: %v", err)

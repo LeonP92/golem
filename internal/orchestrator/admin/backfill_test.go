@@ -203,7 +203,7 @@ func TestBackfillBodyHashMakesTheS5TicketClaimableAgain(t *testing.T) {
 
 	var before int64
 	gdb.Model(&db.Ticket{}).
-		Where("issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash)").
+		Where("issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)").
 		Count(&before)
 	if before != 0 {
 		t.Fatalf("the stuck ticket already satisfies the claim predicate (%d); nothing to prove", before)
@@ -215,7 +215,7 @@ func TestBackfillBodyHashMakesTheS5TicketClaimableAgain(t *testing.T) {
 
 	var after int64
 	gdb.Model(&db.Ticket{}).
-		Where("issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash)").
+		Where("issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)").
 		Count(&after)
 	if after != 1 {
 		t.Fatalf("ticket still fails the claim predicate after the backfill (%d), want 1", after)
@@ -301,5 +301,165 @@ func TestBackfillWritesExactlyWhatIngestWouldHave(t *testing.T) {
 				t.Error("backfilled body_hash does not hash the row's own description")
 			}
 		})
+	}
+}
+
+// TestBackfillRegatesTheMigratedApprovalWithNoHash covers the other upgrade
+// shape, the one re-review finding F1 named (see BackfillBodyHash's doc
+// comment for the three windows side by side).
+//
+// A build in [f9e87e0, fef123b) had intake_approved but neither hash column,
+// so an approved ticket migrates forward as
+//
+//	intake_approved = 1, approved_body_hash = '', body_hash = ''
+//
+// Until F1 the claim predicate read that as an approval, because the empty
+// string equals itself. It no longer does — and that on its own would strand
+// the row: the predicate refuses it, and actionStart refuses it too, because
+// actionStart only starts a ticket whose intake_approved is still false. No
+// human action in the product clears intake_approved, and the poll that would
+// (applyIssue's re-gate branch) only runs if GitHub returns the issue, which
+// a stored ETag on a quiet repo can suppress indefinitely.
+//
+// So the backfill performs that same re-gate, with applyIssue's own
+// semantics: unclaimed and not closed, clear both approval columns, back to
+// pending-approval for one human re-read. It approves nothing.
+func TestBackfillRegatesTheMigratedApprovalWithNoHash(t *testing.T) {
+	const desc = "TEXT NOBODY BOUND AN APPROVAL TO"
+	shemID := uint(7)
+
+	tests := []struct {
+		name    string
+		ticket  db.Ticket
+		wantRe  bool
+		wantPh  string
+		wantApp bool
+	}{
+		{
+			name: "unclaimed F1 shape is re-gated",
+			ticket: db.Ticket{
+				ID: "f1-unclaimed", RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "b", Description: desc,
+				Phase: "unassigned", IssueNumber: intPtr(77), IntakeApproved: true,
+			},
+			wantRe: true, wantPh: "pending-approval", wantApp: false,
+		},
+		{
+			name: "claimed F1 shape is left to the running shem",
+			ticket: db.Ticket{
+				ID: "f1-claimed", RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "b", Description: desc,
+				Phase: "implement", IssueNumber: intPtr(78), IntakeApproved: true,
+				AssignedShem: &shemID,
+			},
+			wantRe: false, wantPh: "implement", wantApp: true,
+		},
+		{
+			name: "closed F1 shape stays closed",
+			ticket: db.Ticket{
+				ID: "f1-closed", RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "b", Description: desc,
+				Phase: "closed", IssueNumber: intPtr(79), IntakeApproved: true,
+			},
+			wantRe: false, wantPh: "closed", wantApp: true,
+		},
+		{
+			name: "a real approval is not disturbed",
+			ticket: db.Ticket{
+				ID: "f1-real", RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "b", Description: desc,
+				Phase: "unassigned", IssueNumber: intPtr(80), IntakeApproved: true,
+				ApprovedBodyHash: ghsync.HashDescription(desc),
+				BodyHash:         ghsync.HashDescription(desc),
+			},
+			wantRe: false, wantPh: "unassigned", wantApp: true,
+		},
+		{
+			name: "a web-form ticket has no provenance to re-gate",
+			ticket: db.Ticket{
+				ID: "f1-webform", RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "b", Description: desc,
+				Phase: "unassigned", IntakeApproved: true,
+			},
+			wantRe: false, wantPh: "unassigned", wantApp: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gdb := openTestDB(t)
+			if err := gdb.Create(&tt.ticket).Error; err != nil {
+				t.Fatalf("seed: %v", err)
+			}
+			res, err := admin.BackfillBodyHash(gdb, false)
+			if err != nil {
+				t.Fatalf("backfill: %v", err)
+			}
+			wantRegated := 0
+			if tt.wantRe {
+				wantRegated = 1
+			}
+			if res.Regated != wantRegated {
+				t.Errorf("Regated = %d, want %d", res.Regated, wantRegated)
+			}
+			var got db.Ticket
+			if err := gdb.First(&got, "id = ?", tt.ticket.ID).Error; err != nil {
+				t.Fatalf("re-read: %v", err)
+			}
+			if got.Phase != tt.wantPh {
+				t.Errorf("phase = %q, want %q", got.Phase, tt.wantPh)
+			}
+			if got.IntakeApproved != tt.wantApp {
+				t.Errorf("intake_approved = %v, want %v", got.IntakeApproved, tt.wantApp)
+			}
+			if tt.wantRe && got.ApprovedBodyHash != "" {
+				t.Errorf("approved_body_hash = %q, want cleared", got.ApprovedBodyHash)
+			}
+		})
+	}
+}
+
+// TestBackfillRegateLeavesTheTicketApprovableAgain is the end of the recovery
+// story: after the backfill, the stranded row is not merely refused, it is
+// back in the state the dashboard's Approve control can act on — body_hash
+// stamped from its own description (so actionStart's
+// HashDescription(Description) == BodyHash check passes) and intake_approved
+// false (so actionStart's WHERE matches at all).
+func TestBackfillRegateLeavesTheTicketApprovableAgain(t *testing.T) {
+	gdb := openTestDB(t)
+	const desc = "text the F1 upgrade left unbound"
+	if err := gdb.Create(&db.Ticket{
+		ID: "f1-recover", RepoRemote: "https://github.com/org/repo",
+		Title: "t", Branch: "b", Description: desc, Phase: "unassigned",
+		IssueNumber: intPtr(81), IntakeApproved: true,
+	}).Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	var claimable int64
+	gdb.Model(&db.Ticket{}).
+		Where("id = ? AND (issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))", "f1-recover").
+		Count(&claimable)
+	if claimable != 0 {
+		t.Fatalf("the migrated row satisfies the claim predicate before the repair; nothing to prove")
+	}
+
+	if _, err := admin.BackfillBodyHash(gdb, false); err != nil {
+		t.Fatalf("backfill: %v", err)
+	}
+
+	var got db.Ticket
+	if err := gdb.First(&got, "id = ?", "f1-recover").Error; err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.IntakeApproved {
+		t.Error("intake_approved still true; actionStart will refuse with errNotStartable")
+	}
+	if got.Phase != "pending-approval" {
+		t.Errorf("phase = %q, want pending-approval", got.Phase)
+	}
+	if got.BodyHash != ghsync.HashDescription(got.Description) {
+		t.Errorf("body_hash = %q, want H(description) = %q; actionStart would refuse with errStaleReview",
+			got.BodyHash, ghsync.HashDescription(got.Description))
 	}
 }

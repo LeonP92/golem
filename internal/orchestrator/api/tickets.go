@@ -66,10 +66,29 @@ type ClaimResponse struct {
 // equality here means approval means "a human approved THIS text", checked
 // at the one place it matters, regardless of how many paths return a
 // ticket to the pool now or later.
+//
+// The non-empty test is not redundant with the equality (re-review finding
+// F1). A database last written by a build in the window [f9e87e0, fef123b)
+// — after intake_approved shipped, before the two hash columns did —
+// migrates forward with AutoMigrate adding both columns at their zero
+// value, so a ticket a human approved under that build arrives as
+//
+//	intake_approved = 1, approved_body_hash = '', body_hash = ''
+//
+// and the equality alone evaluates to TRUE, because the empty string equals
+// itself. That row was claimable with no hash binding at all — and that
+// build's applyIssue had no re-gate either, so its stored description may be
+// text edited after the approval and read by nobody. Emptiness is not
+// approval. Requiring a non-empty approved_body_hash costs one comparison
+// and makes the whole class unreachable regardless of migration history.
+// issue_number IS NULL still short-circuits ahead of it, so web-form
+// tickets — which carry two empty hashes for their whole life — are
+// unaffected. admin.BackfillBodyHash repairs such rows;
+// TestEmptyHashesAreNotAnApproval pins all four predicates.
 func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, error) {
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'unassigned' AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))", ticketID).
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))", ticketID).
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
 	if result.Error != nil {
 		return nil, result.Error
@@ -149,7 +168,7 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 	var tickets []db.Ticket
 	h.DB.Where(
 		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ? AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))",
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
 		shem.ID,
 		[]string{"unassigned", "ready-for-review", "revising", "closed"},
 	).Find(&tickets)
@@ -256,7 +275,7 @@ func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
 func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 	query := h.DB.Where("phase = 'unassigned' AND " +
-		"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))")
+		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))")
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
 	}
@@ -311,7 +330,7 @@ func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, er
 	var ticket db.Ticket
 	result := h.DB.
 		Where("id = ? AND phase = 'revising' AND assigned_shem = ? AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))",
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
 			ticketID, shemID).
 		First(&ticket)
 	if result.Error != nil {

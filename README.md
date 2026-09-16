@@ -316,6 +316,11 @@ Upgrading an existing deployment to the GitHub Issues release has one required
 step for some databases and three behaviour changes worth knowing about. See
 [docs/releases/2026-09-github-issues-integration.md](docs/releases/2026-09-github-issues-integration.md).
 
+**Run this before you start the new binary**, not after. If your database was
+last written by a build from partway through this work, some of its
+GitHub-linked tickets carry a blank approval hash, and the release note
+explains which of those shapes were claimable without one:
+
 ```sh
 golem-orchestrator backfill body-hash --dry-run   # rehearse; writes nothing
 golem-orchestrator backfill body-hash
