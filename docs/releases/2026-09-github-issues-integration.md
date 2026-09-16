@@ -126,7 +126,50 @@ an approved ticket stayed approved, and — now that the title reaches the agent
 — it would have carried text no human had read. Editing a title now re-gates
 exactly as editing a body does.
 
-## 3. Dashboard pages left open across the upgrade fail once
+## 3. If you run `no_push: false`, set `GOLEM_SHEM_GITHUB_TOKEN` before upgrading
+
+**The symptom you will see first is a missing pull request.** The ticket
+reaches `ready-for-review` exactly as before, the dashboard looks entirely
+normal, and no pull request appears on the issue. The failure is in the shem's
+`git push`, and it is reported in the shem's log rather than on the ticket.
+
+**Who this affects.** Only deployments that turned `no_push: false` on in
+`deploy/shem.yaml` and relied on `GOLEM_GITHUB_TOKEN` from `.env` for the push
+credential. If you are on the shipped `no_push: true`, nothing pushes today and
+nothing changes.
+
+**What to do.** Add one line to `.env` before you bring the stack up:
+
+```sh
+GOLEM_SHEM_GITHUB_TOKEN=ghp_...
+```
+
+It can be the same PAT you already use, and then behaviour is identical to
+before. A push-only token is better: `Contents: Read and write` on the target
+repository is all the shem needs. The orchestrator keeps reading
+`GOLEM_GITHUB_TOKEN`, which is unchanged.
+
+Nothing changes inside the container: the entrypoint still installs the
+credential helper from an environment variable named `GOLEM_GITHUB_TOKEN`,
+still scoped to `github.com`, still expanded at use time so it is never written
+to `~/.gitconfig`. Only which host-side variable compose reads it from moved.
+
+**Why it is a separate variable rather than the one you already set.** The shem
+container is where the agent runs, and it runs on issue text that anyone able
+to open an issue on the watched repository can write. The approval gate makes a
+successful prompt injection unlikely; it does not make it impossible, and what
+the agent process is holding when one succeeds is a separate question. Before
+this release the compose file handed the shem the orchestrator's repo-write PAT
+unconditionally — including on the shipped `no_push: true`, where there is
+nothing for a credential to do. Now the token arrives only when someone has
+decided it should, which is the same decision as turning `no_push` off.
+
+The agent subprocess never sees either token regardless: Golem execs `claude`
+with an allow-listed environment that excludes everything in the `GOLEM_`
+namespace, so the credential helper answers Golem's own `git push` and returns
+an empty password to anything the agent runs.
+
+## 4. Dashboard pages left open across the upgrade fail once
 
 State-changing requests from the dashboard now carry a CSRF token. A page that
 was rendered by the old version does not have one, so the first button pressed
@@ -137,7 +180,7 @@ There is no upgrade step and nothing to migrate. The token is derived from the
 session cookie rather than stored, so existing logins keep working and nobody
 is signed out.
 
-## 4. A repository whose default branch cannot be read now produces no tickets
+## 5. A repository whose default branch cannot be read now produces no tickets
 
 Golem asks GitHub for a repository's default branch when it first turns an
 issue into a ticket, and uses it as the pull request's base. That lookup used
@@ -155,7 +198,7 @@ It can be experienced as "Golem stopped working", so check the **Status**
 column on `/settings/github` first. The reason is recorded there on the
 repository's row.
 
-## 5. Some issues get a milestone comment for work that already finished
+## 6. Some issues get a milestone comment for work that already finished
 
 Milestone comments ("Golem wrote a spec for this issue", and so on) are
 delivered through an outbox whose delivered rows are kept forever, so anything
@@ -166,7 +209,7 @@ comment about a milestone its work passed some time ago.
 One-off, cosmetic, and limited to tickets that were already in flight. New
 tickets are unaffected.
 
-## 6. Run exactly one orchestrator process against any one database
+## 7. Run exactly one orchestrator process against any one database
 
 This has always been true and has never been written down outside a Go comment,
 which is the wrong place for it: the person who would violate it reads the
@@ -203,6 +246,8 @@ anything queued while it is down is delivered when it comes back.
   where the agent runs, on issue text anyone can write, so it is handed a
   repository credential only when someone has decided it needs one — the same
   moment they turn `no_push: false` on. Set it to a push-only token if you can.
+  **If you already run `no_push: false`, this is an upgrade action — see
+  section 3.**
 - The agent subprocess runs with an allow-listed environment rather than
   Golem's own, on **both** paths — the shem's `claude --print` and CLI mode's
   `golem observer dispatch` / `golem ticket review`. It keeps its model
