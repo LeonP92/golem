@@ -114,12 +114,18 @@
       // html/template escaping, so the sanitizer is the only thing between
       // untrusted document content and the DOM. If DOMPurify failed to load,
       // degrade to plain text rather than injecting unsanitized HTML.
-      var safe = typeof DOMPurify !== 'undefined' && DOMPurify.sanitize;
+      var safe = typeof DOMPurify === 'object' && DOMPurify !== null &&
+                 typeof DOMPurify.sanitize === 'function';
       (root || document).querySelectorAll('.md-content').forEach(el => {
         if (el.dataset.rendered) return;
         var source = el.textContent;
         if (safe) {
-          el.innerHTML = DOMPurify.sanitize(marked.parse(source));
+          try {
+            el.innerHTML = DOMPurify.sanitize(marked.parse(source));
+          } catch (e) {
+            // One malformed body must not stop the rest of the page rendering.
+            el.textContent = source;
+          }
         } else {
           el.textContent = source;
         }

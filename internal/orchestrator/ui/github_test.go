@@ -97,6 +97,25 @@ func TestMarkdownSinkIsSanitized(t *testing.T) {
 	if !strings.Contains(body, "typeof DOMPurify") {
 		t.Error("renderMarkdown does not guard against DOMPurify being unavailable")
 	}
+
+	// Per-element isolation: forEach has no exception isolation, so if
+	// marked.parse throws on one pathological .md-content body (marked has
+	// known failure modes on deeply nested input), the exception must not
+	// escape and abort rendering for every subsequent element in the batch.
+	// Scope the check to renderMarkdown's body specifically, not the whole
+	// file, so an unrelated try/catch elsewhere can't satisfy it.
+	fnStart := strings.Index(body, "function renderMarkdown(root)")
+	if fnStart == -1 {
+		t.Fatal("could not locate renderMarkdown function body")
+	}
+	fnEnd := strings.Index(body[fnStart:], "document.addEventListener('DOMContentLoaded'")
+	if fnEnd == -1 {
+		t.Fatal("could not locate end of renderMarkdown function body")
+	}
+	fnBody := body[fnStart : fnStart+fnEnd]
+	if !strings.Contains(fnBody, "try {") || !strings.Contains(fnBody, "catch") {
+		t.Error("renderMarkdown does not isolate a single element's parse/sanitize failure with try/catch")
+	}
 }
 
 func TestGitHubSettingsPageListsRepos(t *testing.T) {
