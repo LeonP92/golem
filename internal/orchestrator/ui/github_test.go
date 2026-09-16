@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -66,6 +68,34 @@ func TestGitHubSettingsPage_EscapesUserSuppliedValues(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;img") {
 		t.Error("expected LastError to appear HTML-escaped")
+	}
+}
+
+// TestMarkdownSinkIsSanitized guards the client-side markdown pipeline.
+// renderMarkdown reads el.textContent — which DECODES html/template's escaping
+// — and assigns the result of marked.parse to innerHTML. marked does not
+// sanitize. Without DOMPurify, any field routed through .md-content is an XSS
+// sink, including .Spec.Message and .Plan.Message, which derive from a GitHub
+// issue body by way of an LLM prompt.
+func TestMarkdownSinkIsSanitized(t *testing.T) {
+	src, err := os.ReadFile(filepath.Join("templates", "layout.html"))
+	if err != nil {
+		t.Fatalf("read layout.html: %v", err)
+	}
+	body := string(src)
+
+	if !strings.Contains(body, "dompurify") && !strings.Contains(body, "purify.min.js") {
+		t.Error("layout.html does not load DOMPurify")
+	}
+	if strings.Contains(body, "innerHTML = marked.parse(") {
+		t.Error("unsanitized marked.parse output is assigned to innerHTML")
+	}
+	if !strings.Contains(body, "DOMPurify.sanitize(") {
+		t.Error("renderMarkdown does not call DOMPurify.sanitize")
+	}
+	// Fail closed: the code must handle DOMPurify being absent.
+	if !strings.Contains(body, "typeof DOMPurify") {
+		t.Error("renderMarkdown does not guard against DOMPurify being unavailable")
 	}
 }
 
