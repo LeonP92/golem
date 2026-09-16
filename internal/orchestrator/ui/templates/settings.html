@@ -52,15 +52,15 @@
       <div class="form-control">
         <label class="label">
           <span class="label-text font-medium">New password</span>
-          <span class="label-text-alt text-base-content/50">At least 8 characters</span>
+          <span class="label-text-alt text-base-content/50">At least {{.MinPasswordLen}} characters</span>
         </label>
-        <input type="password" name="new_password" class="input input-bordered" required minlength="8" autocomplete="new-password">
+        <input type="password" name="new_password" class="input input-bordered" required minlength="{{.MinPasswordLen}}" autocomplete="new-password">
       </div>
       <div class="form-control">
         <label class="label">
           <span class="label-text font-medium">Confirm new password</span>
         </label>
-        <input type="password" name="confirm_password" class="input input-bordered" required minlength="8" autocomplete="new-password">
+        <input type="password" name="confirm_password" class="input input-bordered" required minlength="{{.MinPasswordLen}}" autocomplete="new-password">
       </div>
       <div class="flex gap-2 mt-2">
         <button type="submit" class="btn btn-primary gap-1.5">

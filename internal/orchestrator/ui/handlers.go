@@ -154,13 +154,11 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /users", h.sessionRoute(rbac.PermUserManage, h.usersCreate))
 	mux.Handle("POST /users/{id}/role", h.sessionRoute(rbac.PermUserManage, h.usersSetRole))
 	mux.Handle("POST /users/{id}/delete", h.sessionRoute(rbac.PermUserManage, h.usersDelete))
-	// /settings is available to any signed-in user (no permission gate) — every
-	// account can manage their own settings without needing user:manage. Each
-	// section is its own URL so the sidebar is bookmarkable and adding a section
-	// is a one-line route addition.
-	mux.Handle("GET /settings", auth.RequireSession(h.DB)(http.HandlerFunc(h.settingsIndex)))
-	mux.Handle("GET /settings/security", auth.RequireSession(h.DB)(http.HandlerFunc(h.settingsSecurity)))
-	mux.Handle("POST /settings/security/password", auth.RequireSession(h.DB)(http.HandlerFunc(h.settingsChangePassword)))
+	// Self-service settings — no permission gate; adding a section is a
+	// one-line route addition plus a {{define "settings_<name>"}} block.
+	mux.Handle("GET /settings", h.authRoute(h.settingsIndex))
+	mux.Handle("GET /settings/security", h.authRoute(h.settingsSecurity))
+	mux.Handle("POST /settings/security/password", h.authRoute(h.settingsChangePassword))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/dashboard", http.StatusFound)
@@ -171,10 +169,17 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 }
 
 // sessionRoute wraps fn in session auth plus the permission check for p. Every
-// authenticated UI route goes through here, so the route table doubles as the
-// audit list of who may call what.
+// permission-gated UI route goes through here, so the route table doubles as
+// the audit list of who may call what.
 func (h *Handlers) sessionRoute(p rbac.Permission, fn http.HandlerFunc) http.Handler {
 	return auth.RequireSession(h.DB)(rbac.Require(p)(fn))
+}
+
+// authRoute is sessionRoute without a permission gate — use it for routes any
+// signed-in user is allowed on (e.g. self-service settings). Keeps the route
+// table the single audit surface for authz decisions.
+func (h *Handlers) authRoute(fn http.HandlerFunc) http.Handler {
+	return auth.RequireSession(h.DB)(fn)
 }
 
 // base returns the render map every authenticated page starts from: the nav key

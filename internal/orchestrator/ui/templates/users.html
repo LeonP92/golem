@@ -33,8 +33,8 @@
                class="input input-sm input-bordered" placeholder="jane">
       </div>
       <div class="form-control flex-1 min-w-[12rem]">
-        <label class="label py-1"><span class="label-text text-xs">Password (8+ chars)</span></label>
-        <input name="password" type="password" required minlength="8"
+        <label class="label py-1"><span class="label-text text-xs">Password ({{.MinPasswordLen}}+ chars)</span></label>
+        <input name="password" type="password" required minlength="{{.MinPasswordLen}}"
                class="input input-sm input-bordered" autocomplete="new-password">
       </div>
       <div class="form-control min-w-[9rem]">

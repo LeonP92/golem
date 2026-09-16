@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 )
 
+// renderUsers is the single re-entry point every /users handler uses on
+// failure so validation errors surface in an Error banner instead of a 4xx.
 func (h *Handlers) renderUsers(w http.ResponseWriter, r *http.Request, errMsg string) {
 	users, err := admin.UsersList(h.DB)
 	if err != nil {
@@ -25,6 +28,7 @@ func (h *Handlers) renderUsers(w http.ResponseWriter, r *http.Request, errMsg st
 	data["Users"] = users
 	data["Roles"] = roles
 	data["Error"] = errMsg
+	data["MinPasswordLen"] = admin.MinPasswordLen
 	h.render(w, "users", data)
 }
 
@@ -32,6 +36,9 @@ func (h *Handlers) usersPage(w http.ResponseWriter, r *http.Request) {
 	h.renderUsers(w, r, "")
 }
 
+// usersCreate delegates to admin.UsersAddOrUpdate after a manual uniqueness
+// check — the upsert would otherwise silently overwrite an existing user's
+// password when the operator meant to create a new account.
 func (h *Handlers) usersCreate(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -56,7 +63,7 @@ func (h *Handlers) usersCreate(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		http.Redirect(w, r, "/users", http.StatusFound)
 	case errors.Is(err, admin.ErrWeakPassword):
-		h.renderUsers(w, r, "Password must be at least 8 characters.")
+		h.renderUsers(w, r, fmt.Sprintf("Password must be at least %d characters.", admin.MinPasswordLen))
 	case errors.Is(err, admin.ErrUnknownRole):
 		h.renderUsers(w, r, "Invalid role.")
 	default:

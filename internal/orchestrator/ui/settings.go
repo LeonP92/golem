@@ -2,6 +2,7 @@ package ui
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/leonp92/golem/internal/orchestrator/admin"
@@ -9,12 +10,14 @@ import (
 )
 
 // renderSettings is the single entry into the settings shell so the sidebar
-// active-state and banner rendering stay consistent across sections.
+// active-state, banner rendering, and shared render-map keys (like
+// MinPasswordLen) stay consistent across sections.
 func (h *Handlers) renderSettings(w http.ResponseWriter, r *http.Request, section, errMsg, okMsg string) {
 	data := h.base(r, "settings")
 	data["Section"] = section
 	data["Error"] = errMsg
 	data["Success"] = okMsg
+	data["MinPasswordLen"] = admin.MinPasswordLen
 	h.render(w, "settings", data)
 }
 
@@ -29,18 +32,14 @@ func (h *Handlers) settingsSecurity(w http.ResponseWriter, r *http.Request) {
 }
 
 // settingsChangePassword processes the change-password form. The current
-// password is required so that a hijacked session cannot silently rotate the
+// password is required so a hijacked session cannot silently rotate the
 // credential and lock the real user out.
 func (h *Handlers) settingsChangePassword(w http.ResponseWriter, r *http.Request) {
-	u := auth.SessionUser(r)
-	if u == nil {
-		http.Error(w, "unauthorized", http.StatusUnauthorized)
-		return
-	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	u := auth.SessionUser(r) // guaranteed non-nil by authRoute → auth.RequireSession
 	oldPass := r.FormValue("current_password")
 	newPass := r.FormValue("new_password")
 	confirm := r.FormValue("confirm_password")
@@ -54,7 +53,7 @@ func (h *Handlers) settingsChangePassword(w http.ResponseWriter, r *http.Request
 	case errors.Is(err, admin.ErrWrongPassword):
 		h.renderSettings(w, r, "security", "Current password is incorrect.", "")
 	case errors.Is(err, admin.ErrWeakPassword):
-		h.renderSettings(w, r, "security", "New password must be at least 8 characters.", "")
+		h.renderSettings(w, r, "security", fmt.Sprintf("New password must be at least %d characters.", admin.MinPasswordLen), "")
 	default:
 		h.renderSettings(w, r, "security", "Failed to update password.", "")
 	}
