@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"log"
 	"os"
 	"time"
@@ -60,25 +61,65 @@ func (g GitHubConfig) ManualSyncCooldownDuration() time.Duration {
 }
 
 // parseDurationOr parses raw as a duration, falling back to fallback when raw
-// is empty, unparseable, or non-positive. An empty raw is the documented way
-// to ask for the default and is silent; an actually-invalid value (e.g. a
-// typo like "15mn") is not silently discarded — it is logged, naming the
-// config key, the bad value, and the fallback applied, so a startup typo is
-// visible in the logs instead of just quietly behaving like it was never set.
+// is empty, unparseable, or non-positive.
+//
+// It does NOT log. Load reports every bad value once, eagerly — see
+// reportBadDurations — so these accessors are safe to call from anywhere and
+// as often as a caller likes. They used to log themselves, which had two
+// consequences: a typo was announced once per call site when GitHub sync
+// started, and announced not at all when it did not, so
+// "poll_interval: 15mn" on an install with no token or no enabled
+// repositories produced a completely silent startup.
 func parseDurationOr(name, raw string, fallback time.Duration) time.Duration {
 	if raw == "" {
 		return fallback
 	}
-	d, err := time.ParseDuration(raw)
-	if err != nil {
-		log.Printf("config: %s: invalid duration %q (%v) — using default %v", name, raw, err, fallback)
-		return fallback
-	}
-	if d <= 0 {
-		log.Printf("config: %s: duration %q must be positive — using default %v", name, raw, fallback)
+	d, problem := parseDuration(name, raw, fallback)
+	if problem != "" {
 		return fallback
 	}
 	return d
+}
+
+// parseDuration returns the parsed duration and, when the value is unusable,
+// the operator-facing complaint about it. An empty raw is the documented way
+// to ask for the default and is never a complaint.
+func parseDuration(name, raw string, fallback time.Duration) (time.Duration, string) {
+	if raw == "" {
+		return fallback, ""
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return fallback, fmt.Sprintf("config: %s: invalid duration %q (%v) — using default %v",
+			name, raw, err, fallback)
+	}
+	if d <= 0 {
+		return fallback, fmt.Sprintf("config: %s: duration %q must be positive — using default %v",
+			name, raw, fallback)
+	}
+	return d, ""
+}
+
+// reportBadDurations logs one line per unusable duration in the github block.
+//
+// Called from Load, unconditionally, for the same reason csp.mode is
+// validated there: a configuration typo is a startup fact, not a fact about
+// whichever subsystem happens to read the value later. Nothing here changes a
+// value — the accessors apply the same fallbacks whether or not this ran.
+func reportBadDurations(g GitHubConfig) {
+	for _, d := range []struct {
+		name     string
+		raw      string
+		fallback time.Duration
+	}{
+		{"github.poll_interval", g.PollInterval, defaultPollInterval},
+		{"github.drain_interval", g.DrainInterval, defaultDrainInterval},
+		{"github.manual_sync_cooldown", g.ManualSyncCooldown, defaultManualSyncCooldown},
+	} {
+		if _, problem := parseDuration(d.name, d.raw, d.fallback); problem != "" {
+			log.Print(problem)
+		}
+	}
 }
 
 // Config holds all orchestrator server configuration.
@@ -105,6 +146,7 @@ func Load(path string) (*Config, error) {
 	if cfg.GitHub.TokenEnv == "" {
 		cfg.GitHub.TokenEnv = defaultTokenEnv
 	}
+	reportBadDurations(cfg.GitHub)
 	switch cfg.CSP.Mode {
 	case "":
 		cfg.CSP.Mode = defaultCSPMode
