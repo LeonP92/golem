@@ -144,7 +144,7 @@ github:
   write: true                 # see "Two-writer guard" below
 ```
 
-**Two-writer guard:** `github.write` controls whether this repo is allowed to have the CLI act as a GitHub writer. `golem init` sets it to `true` for standalone use. When a shem (see Orchestrator + Shem below) initialises or preflights a repo it manages, it forces `github.write` back to `false` on every run — an orchestrator-managed repo must have exactly one writer, or the CLI and the orchestrator would post duplicate comments and fight over labels. `golem issue list`, `golem issue sync`, and `golem ticket new --from-issue` do not themselves call any GitHub write endpoint, but a repo's `write` setting reflects which side owns write access going forward.
+**Two-writer guard:** `github.write` controls whether this repo is allowed to have the CLI act as a GitHub writer. `golem init` sets it to `true` for standalone use. When a shem (see Orchestrator + Shem below) initialises or preflights a repo it manages, it forces `github.write` back to `false` on every run — an orchestrator-managed repo must have exactly one writer, or the CLI and the orchestrator would post duplicate comments and fight over labels. `golem issue list`, `golem issue sync`, and `golem ticket new --from-issue` do not themselves call any GitHub write endpoint, so `github.write` currently has no enforcement effect on the CLI — it only records which side owns write access. A future write-capable CLI command must check `cfg.GitHub.Write` itself before writing; nothing does that automatically today.
 
 ### Using with Claude Code
 

@@ -61,7 +61,7 @@ func TestIssueListRequiresRepo(t *testing.T) {
 	}
 }
 
-func TestIssueSyncPullsBodyAndURLPreservingOtherFields(t *testing.T) {
+func TestIssueSyncPullsTitleAndBodyPreservingOtherFields(t *testing.T) {
 	f := github.NewFake()
 	f.AddIssue(github.Issue{Number: 7, Title: "Add rate limiting", Body: "Do the thing",
 		State: "open", HTMLURL: "https://github.test/org/repo/issues/7", UpdatedAt: time.Now()})
@@ -85,8 +85,9 @@ func TestIssueSyncPullsBodyAndURLPreservingOtherFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ticket.Load: %v", err)
 	}
-	if got.Description != "Do the thing" {
-		t.Errorf("Description = %q, want the issue body", got.Description)
+	want := "Add rate limiting\n\nDo the thing"
+	if got.Description != want {
+		t.Errorf("Description = %q, want %q (title and body combined)", got.Description, want)
 	}
 	if got.IssueURL != "https://github.test/org/repo/issues/7" {
 		t.Errorf("IssueURL = %q, want the issue's HTML URL", got.IssueURL)
@@ -94,6 +95,63 @@ func TestIssueSyncPullsBodyAndURLPreservingOtherFields(t *testing.T) {
 	// Fields unrelated to the issue sync must survive untouched.
 	if got.Branch != "ticket/t1" || got.WorktreePath != "/some/worktree" || got.IssueNumber != 7 {
 		t.Errorf("unrelated fields not preserved: %+v", got)
+	}
+}
+
+// TestFromIssueThenSyncLeavesDescriptionUnchanged pins the property that was
+// broken before combineIssueDescription existed: creating a ticket from an
+// issue, then immediately syncing it against that same, unchanged issue,
+// must be a no-op on the description. Previously --from-issue set the
+// description to the title alone while IssueSync overwrote it with the body
+// alone, so the very first sync silently swapped one for the other.
+func TestFromIssueThenSyncLeavesDescriptionUnchanged(t *testing.T) {
+	f := github.NewFake()
+	f.AddIssue(github.Issue{Number: 21, Title: "Fix the flaky test", Body: "Steps to reproduce...",
+		HTMLURL: "https://github.test/org/repo/issues/21", State: "open"})
+	cfg := &config.Config{Backend: "claude-code", GitHub: config.GitHubConfig{Repo: "org/repo"}}
+
+	desc, issueNumber, issueURL, err := resolveFromIssue(f, cfg, 21)
+	if err != nil {
+		t.Fatalf("resolveFromIssue: %v", err)
+	}
+
+	ticketDir := t.TempDir()
+	s := ticket.New("t1", desc, false)
+	s.IssueNumber = issueNumber
+	s.IssueURL = issueURL
+	if err := s.Save(ticketDir); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	if err := IssueSync(f, cfg, ticketDir); err != nil {
+		t.Fatalf("IssueSync: %v", err)
+	}
+
+	got, err := ticket.Load(ticketDir)
+	if err != nil {
+		t.Fatalf("ticket.Load: %v", err)
+	}
+	if got.Description != desc {
+		t.Errorf("description changed on sync of an unchanged issue: got %q, want unchanged %q", got.Description, desc)
+	}
+}
+
+func TestCombineIssueDescription(t *testing.T) {
+	tests := []struct {
+		name  string
+		title string
+		body  string
+		want  string
+	}{
+		{"empty body uses title alone", "Fix the bug", "", "Fix the bug"},
+		{"title and body joined by a blank line", "Fix the bug", "Steps to reproduce", "Fix the bug\n\nSteps to reproduce"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := combineIssueDescription(tt.title, tt.body); got != tt.want {
+				t.Errorf("combineIssueDescription(%q, %q) = %q, want %q", tt.title, tt.body, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -110,6 +168,10 @@ func TestIssueSyncRequiresLinkedIssue(t *testing.T) {
 	}
 }
 
+// TestResolveFromIssueReturnsTitleAndLink covers the empty-body case: with
+// no body, the description is the title alone (see TestCombineIssueDescription
+// for the title+body case, and TestFromIssueThenSyncLeavesDescriptionUnchanged
+// for why both paths must agree).
 func TestResolveFromIssueReturnsTitleAndLink(t *testing.T) {
 	f := github.NewFake()
 	f.AddIssue(github.Issue{Number: 12, Title: "Fix the flaky test",
@@ -121,7 +183,7 @@ func TestResolveFromIssueReturnsTitleAndLink(t *testing.T) {
 		t.Fatalf("resolveFromIssue: %v", err)
 	}
 	if desc != "Fix the flaky test" {
-		t.Errorf("description = %q, want the issue title", desc)
+		t.Errorf("description = %q, want the issue title (body is empty)", desc)
 	}
 	if number != 12 {
 		t.Errorf("issueNumber = %d, want 12", number)

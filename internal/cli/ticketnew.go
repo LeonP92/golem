@@ -21,7 +21,7 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	ticketID := fs.String("ticket-id", "", "ticket id assigned by orchestrator (alternative to --id)")
 	branch := fs.String("branch", "", "working branch name (optional; defaults to ticket/<id> for standalone use)")
 	trivial := fs.Bool("trivial", false, "skip brainstorm, go straight to plan with developer+reviewer only")
-	fromIssue := fs.Int("from-issue", 0, "create the ticket from GitHub issue <n>, using its title as the description")
+	fromIssue := fs.Int("from-issue", 0, "create the ticket from GitHub issue <n>, using its title and body as the description")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -61,7 +61,7 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		issueURL = url
 	}
 	if description == "" {
-		fmt.Fprintf(stderr, "issue #%d has an empty title, cannot use it as the ticket description\n", *fromIssue)
+		fmt.Fprintf(stderr, "issue #%d has no title or body, cannot use it as the ticket description\n", *fromIssue)
 		return 1
 	}
 
