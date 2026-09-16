@@ -166,16 +166,51 @@ comment about a milestone its work passed some time ago.
 One-off, cosmetic, and limited to tickets that were already in flight. New
 tickets are unaffected.
 
+## 6. Run exactly one orchestrator process against any one database
+
+This has always been true and has never been written down outside a Go comment,
+which is the wrong place for it: the person who would violate it reads the
+README, not `publish.go`.
+
+Shems scale out. The orchestrator does not. The GitHub write outbox is drained
+by a select that takes no lock and writes no claim — no `FOR UPDATE SKIP
+LOCKED`, no claim column, no lease — so two orchestrators against one database
+both select the same due rows and both deliver them. You get duplicate
+milestone comments and duplicate label writes on your issues, burnt rate limit
+on a feature designed around conserving it, and no error anywhere, because each
+process marks the row done and considers the job well done. The issue polling
+has the same shape.
+
+It matters now because this release adds PostgreSQL support, and running more
+than one process is the usual reason to reach for PostgreSQL. It is written up
+in the README under **One orchestrator process per database**, and repeated in
+`deploy/orchestrator.yaml`.
+
+For availability, run one process and restart it. The outbox is durable:
+anything queued while it is down is delivered when it comes back.
+
 ---
 
 ## Also in this release
 
 - Agents are shown the issue **title**, not just the body, and the CLI and the
   orchestrator now produce byte-identical descriptions from the same issue.
-- `docker compose` now passes `GOLEM_GITHUB_TOKEN` to both the orchestrator
-  and the shem. Before, the variable was documented in `.env.example` and
-  reached neither container, so the integration could not run from the
-  documented quick start at all.
+- `docker compose` now passes `GOLEM_GITHUB_TOKEN` to the orchestrator.
+  Before, the variable was documented in `.env.example` and reached neither
+  container, so the integration could not run from the documented quick start
+  at all. The shem's push credential is a **separate** variable,
+  `GOLEM_SHEM_GITHUB_TOKEN`, empty unless you set it: the shem container is
+  where the agent runs, on issue text anyone can write, so it is handed a
+  repository credential only when someone has decided it needs one — the same
+  moment they turn `no_push: false` on. Set it to a push-only token if you can.
+- The agent subprocess runs with an allow-listed environment rather than
+  Golem's own. It keeps its model credentials, the shell, locale, proxy and
+  TLS settings, git identity, and the language toolchains; it no longer sees
+  anything in the `GOLEM_` namespace. The shem's `git push` is unaffected.
+- Logging out is a `POST`. A `GET /logout` used to be reachable from rendered
+  markdown via `![](/logout)`, which logged the operator out on page load.
+- DOMPurify, the sanitizer on the markdown sink, is pinned to an exact version
+  with a Subresource Integrity hash instead of floating on `@3`.
 - GitHub sync starts whenever a token is present, rather than only when a
   repository was already enabled at startup. Enabling your first repository no
   longer needs a restart. Supplying the token for the first time still does —

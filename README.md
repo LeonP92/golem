@@ -345,6 +345,33 @@ repos:
 
 That is a different variable from the orchestrator's `GOLEM_GITHUB_TOKEN`, and it is empty unless you set it. The shem container is where the agent runs, and it runs on issue text anyone can open an issue to write; the approval gate makes a successful prompt injection unlikely, not impossible. So the shem is handed a repository credential only when someone has decided it needs one. Use a second, push-only token rather than the orchestrator's if you can. The agent subprocess itself never sees either token — Golem runs `claude` with an allow-listed environment that excludes everything in the `GOLEM_` namespace, so the credential helper works for Golem's own `git push` and yields nothing to the agent.
 
+### One orchestrator process per database
+
+**Run exactly one orchestrator process against any one database.** Shems scale
+out; the orchestrator does not.
+
+`db.Open` accepts a PostgreSQL DSN, and the usual reason to reach for
+PostgreSQL is to run more than one process — so this is worth stating plainly
+rather than leaving it to be discovered. The GitHub write outbox is drained by
+a select that takes no lock and writes no claim: no `FOR UPDATE SKIP LOCKED`,
+no claim column, no lease. Two orchestrators against one database both select
+the same due rows and both deliver them.
+
+What that looks like in practice: duplicate milestone comments on issues,
+duplicate label writes, and — because each process marks the row done
+afterwards without complaint — no error anywhere to tell you it happened. It
+burns GitHub rate limit on a feature whose whole design is built around
+conserving it. The issue polling has the same shape.
+
+This is a constraint, not a bug being worked around: fixing it means either
+`FOR UPDATE SKIP LOCKED` on the outbox select or a claimed-by column checked
+with `RowsAffected == 1` before delivery, and neither is in place. Note that
+the test suite structurally cannot catch a violation — `:memory:` SQLite pins
+the pool to a single connection, so every test serialises at the driver.
+
+For availability, run one process and restart it; the outbox is durable, so
+work queued while it is down is delivered when it comes back.
+
 ### Running Multiple Shems
 
 Each shem is a stateless binary. To scale:

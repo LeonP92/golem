@@ -1,3 +1,10 @@
+# ONE ORCHESTRATOR PROCESS PER DATABASE. Shems scale out; this does not.
+# The GitHub write outbox is drained by a select that takes no lock and writes
+# no claim, so two processes against one database both deliver the same rows:
+# duplicate issue comments, duplicate label writes, wasted rate limit, and no
+# error recorded anywhere. The same applies to the issue polling. Pointing
+# db_path at a PostgreSQL DSN does not change this. See the README section
+# "One orchestrator process per database".
 port: 8080
 db_path: /data/orchestrator.db
 
