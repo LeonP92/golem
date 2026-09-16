@@ -162,7 +162,6 @@ var claudeCodeAllowList = []string{
 	`PowerShell(.\golem*)`,
 	// File operations
 	"Edit(**)",
-	"Write(**)",
 }
 
 // claudeCodeDenyList blocks destructive or network-exfiltrating commands that
@@ -170,8 +169,12 @@ var claudeCodeAllowList = []string{
 var claudeCodeDenyList = []string{
 	"Bash(git push origin main)",
 	"Bash(git push --force *)",
-	"Bash(curl *)",
-	"Bash(wget *)",
+	"Bash(git reset --hard *)",
+	"Bash(git rebase *)",
+	"Bash(npm publish *)",
+	"Bash(cargo publish *)",
+	"Bash(twine upload *)",
+	"Bash(python -m twine upload *)",
 	"Bash(sudo *)",
 }
 
