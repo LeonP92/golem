@@ -19,12 +19,19 @@ name: shem-local
 #      remote their working copy happens to point at.
 #
 # To get the pull-request half of the GitHub integration, set no_push: false
-# and make sure the shem can authenticate: set GOLEM_GITHUB_TOKEN in .env
+# and make sure the shem can authenticate: set GOLEM_SHEM_GITHUB_TOKEN in .env
 # (the entrypoint installs it as an HTTPS credential helper for github.com),
 # or give the container your own SSH key. Without one of those the push fails
 # and the pull request is never opened — the ticket still reaches
 # ready-for-review, so the failure shows up as a missing PR, not as an error
 # on the ticket.
+#
+# GOLEM_SHEM_GITHUB_TOKEN is a different variable from the orchestrator's
+# GOLEM_GITHUB_TOKEN on purpose, and it is empty by default. This container
+# runs the agent on issue text a stranger can write, so it is handed a
+# repository credential only when someone has decided it needs one — i.e. here,
+# at the same moment they turn this setting off. A push-only token is better
+# than reusing the orchestrator's.
 no_push: true
 max_concurrent: 3
 

@@ -30,74 +30,113 @@ func repoFile(t *testing.T, name string) string {
 	return string(b)
 }
 
-// TestComposePassesGitHubTokenToServicesThatNeedIt pins the documented
-// install path: an operator sets GOLEM_GITHUB_TOKEN in .env exactly as
-// .env.example instructs, and docker compose must deliver it to every
-// container that reads it.
-//
-// This is a regression test for a shipped-but-unreachable feature. .env.example
-// documented the variable and docker-compose.yml never referenced it, so the
-// whole GitHub integration was dead for anyone following the README: the
-// orchestrator logged "N repo(s) enabled but GOLEM_GITHUB_TOKEN is empty"
-// about a value the operator had set. Nothing in the Go test suite could see
-// that, because no Go code reads docker-compose.yml.
-func TestComposePassesGitHubTokenToServicesThatNeedIt(t *testing.T) {
+// envValue returns the right-hand side of the first `NAME=...` entry in a
+// service's environment block, and whether it was there at all.
+func envValue(env []string, name string) (string, bool) {
+	for _, entry := range env {
+		if k, v, ok := strings.Cut(entry, "="); ok && k == name {
+			return v, true
+		}
+	}
+	return "", false
+}
+
+// service looks a service up and refuses to reason about one that has grown an
+// env_file, which would deliver every secret in .env into the container and
+// would satisfy any check here for the wrong reason.
+func service(t *testing.T, compose composeFile, name string) []string {
+	t.Helper()
+	svc, ok := compose.Services[name]
+	if !ok {
+		t.Fatalf("docker-compose.yml has no %q service", name)
+	}
+	if svc.EnvFile != nil {
+		t.Fatalf("service %q gained an env_file; revisit this test before relying on it", name)
+	}
+	return svc.Environment
+}
+
+func parseCompose(t *testing.T) composeFile {
+	t.Helper()
 	var compose composeFile
 	if err := yaml.Unmarshal([]byte(repoFile(t, "docker-compose.yml")), &compose); err != nil {
 		t.Fatalf("parse docker-compose.yml: %v", err)
 	}
+	return compose
+}
 
-	tests := []struct {
-		service string
-		why     string
-	}{
-		{
-			service: "orchestrator",
-			why:     "reads it via config.github.token_env to poll issues and drain the write outbox",
-		},
-		{
-			service: "shem",
-			why:     "uses it as an HTTPS git credential to push the ticket branch a pull request is opened from",
-		},
-	}
+// TestComposeDeliversEachGitHubCredentialOnlyWhereItIsUsED pins the two halves
+// of the credential contract, which are not the same variable.
+//
+// This is a regression test for a shipped-but-unreachable feature and, since
+// re-review finding F2, for its overcorrection. .env.example documented
+// GOLEM_GITHUB_TOKEN and docker-compose.yml never referenced it, so the whole
+// GitHub integration was dead for anyone following the README. The fix then
+// delivered that same repo-write PAT to BOTH services — including the shem,
+// whose shipped configuration (no_push: true) cannot use it, and whose agent
+// subprocess used to inherit the entire environment. A prompt injection in an
+// approved issue therefore reached a credential rather than only a shell.
+//
+// So: the orchestrator gets GOLEM_GITHUB_TOKEN, because it always needs it.
+// The shem gets its push credential only if the operator sets a SECOND,
+// deliberately separate variable, which is the same moment they turn no_push
+// off. The container-side name stays GOLEM_GITHUB_TOKEN so
+// deploy/shem-entrypoint.sh's credential helper is unchanged.
+func TestComposeDeliversEachGitHubCredentialOnlyWhereItIsUsed(t *testing.T) {
+	compose := parseCompose(t)
 
-	for _, tc := range tests {
-		t.Run(tc.service, func(t *testing.T) {
-			svc, ok := compose.Services[tc.service]
-			if !ok {
-				t.Fatalf("docker-compose.yml has no %q service", tc.service)
-			}
-			if svc.EnvFile != nil {
-				// An env_file would also deliver the variable, but it would
-				// deliver every other secret in .env too. If someone adds one
-				// deliberately, this test should be revisited rather than
-				// silently satisfied.
-				t.Fatalf("service %q gained an env_file; revisit this test before relying on it", tc.service)
-			}
-			for _, entry := range svc.Environment {
-				if strings.HasPrefix(entry, "GOLEM_GITHUB_TOKEN=") {
-					if !strings.Contains(entry, "${GOLEM_GITHUB_TOKEN") {
-						t.Fatalf("service %q sets GOLEM_GITHUB_TOKEN to a literal (%q); it must interpolate from .env",
-							tc.service, entry)
-					}
+	t.Run("orchestrator", func(t *testing.T) {
+		env := service(t, compose, "orchestrator")
+		value, ok := envValue(env, "GOLEM_GITHUB_TOKEN")
+		if !ok {
+			t.Fatalf("the orchestrator does not receive GOLEM_GITHUB_TOKEN, but it reads it via "+
+				"config.github.token_env to poll issues and drain the write outbox.\nenvironment: %v", env)
+		}
+		if !strings.Contains(value, "${GOLEM_GITHUB_TOKEN") {
+			t.Fatalf("the orchestrator sets GOLEM_GITHUB_TOKEN to %q; it must interpolate from .env", value)
+		}
+	})
+
+	t.Run("shem", func(t *testing.T) {
+		env := service(t, compose, "shem")
+		value, ok := envValue(env, "GOLEM_GITHUB_TOKEN")
+		if !ok {
+			t.Fatalf("the shem no longer receives GOLEM_GITHUB_TOKEN at all; "+
+				"deploy/shem-entrypoint.sh reads exactly that name to install the push "+
+				"credential, so no_push: false can no longer open a pull request.\nenvironment: %v", env)
+		}
+		if strings.Contains(value, "${GOLEM_GITHUB_TOKEN") {
+			t.Fatalf("the shem is handed the orchestrator's GOLEM_GITHUB_TOKEN (%q). "+
+				"That ships a repo-write PAT into the container that runs the agent, on a "+
+				"default configuration (no_push: true) that cannot use it. It must come from "+
+				"a separate opt-in variable.", value)
+		}
+		if !strings.Contains(value, "${GOLEM_SHEM_GITHUB_TOKEN") {
+			t.Fatalf("the shem's GOLEM_GITHUB_TOKEN is %q; it must interpolate from "+
+				"GOLEM_SHEM_GITHUB_TOKEN, the opt-in push credential", value)
+		}
+		if !strings.Contains(value, ":-}") {
+			t.Fatalf("the shem's GOLEM_GITHUB_TOKEN is %q; it must default to empty so an "+
+				"operator who has not opted in ships no credential", value)
+		}
+	})
+}
+
+// TestEnvExampleDocumentsBothGitHubTokens keeps the variables the compose file
+// interpolates and the variables .env.example tells operators to fill in from
+// drifting apart — the pair is the whole contract.
+func TestEnvExampleDocumentsBothGitHubTokens(t *testing.T) {
+	env := repoFile(t, ".env.example")
+	for _, name := range []string{"GOLEM_GITHUB_TOKEN", "GOLEM_SHEM_GITHUB_TOKEN"} {
+		t.Run(name, func(t *testing.T) {
+			for _, line := range strings.Split(env, "\n") {
+				line = strings.TrimSpace(line)
+				line = strings.TrimPrefix(line, "# ")
+				if strings.HasPrefix(line, name+"=") {
 					return
 				}
 			}
-			t.Fatalf("service %q does not receive GOLEM_GITHUB_TOKEN, but %s.\nenvironment: %v",
-				tc.service, tc.why, svc.Environment)
+			t.Fatalf(".env.example no longer declares %s, but docker-compose.yml interpolates it", name)
 		})
 	}
-}
-
-// TestEnvExampleDocumentsGitHubToken keeps the variable the compose file
-// interpolates and the variable .env.example tells operators to fill in from
-// drifting apart — the pair is the whole contract.
-func TestEnvExampleDocumentsGitHubToken(t *testing.T) {
-	env := repoFile(t, ".env.example")
-	for _, line := range strings.Split(env, "\n") {
-		if strings.HasPrefix(strings.TrimSpace(line), "GOLEM_GITHUB_TOKEN=") {
-			return
-		}
-	}
-	t.Fatal(".env.example no longer declares GOLEM_GITHUB_TOKEN, but docker-compose.yml interpolates it")
 }

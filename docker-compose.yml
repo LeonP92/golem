@@ -95,9 +95,16 @@ services:
       - GOLEM_SHEM_NAME=${GOLEM_SHEM_NAME:-default}
       # Push credential for the ticket branch a pull request is opened from.
       # The entrypoint installs it as an HTTPS git credential helper for
-      # github.com when it is set. Only used once no_push is turned off in
-      # deploy/shem.yaml — see the comment there.
-      - GOLEM_GITHUB_TOKEN=${GOLEM_GITHUB_TOKEN:-}
+      # github.com when it is set, and only then.
+      #
+      # Deliberately NOT ${GOLEM_GITHUB_TOKEN}. This container runs the agent
+      # on text a stranger wrote, and the shipped deploy/shem.yaml sets
+      # no_push: true, so by default there is nothing here for a credential to
+      # do. Shipping the orchestrator's repo-write PAT in anyway would widen
+      # what a successful prompt injection gets its hands on for no benefit.
+      # Set GOLEM_SHEM_GITHUB_TOKEN in .env at the same time you turn no_push
+      # off — ideally to a second, push-only token rather than the same one.
+      - GOLEM_GITHUB_TOKEN=${GOLEM_SHEM_GITHUB_TOKEN:-}
 
 volumes:
   orchestrator-data:

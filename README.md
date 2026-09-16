@@ -266,7 +266,7 @@ A ticket's description is the issue's **title and body**: the title, a blank lin
 
 **There is no add-repo form and no token field on `/settings/github`.** Repositories are discovered from the shems that register with them, and the token is read from the environment only, never stored in the database. The full path from a fresh install to a working sync is:
 
-1. **Give the orchestrator a token.** Create a fine-grained PAT with, on the target repository: Issues read/write, Pull requests read/write, Contents read/write, Metadata read. Put it in `.env` as `GOLEM_GITHUB_TOKEN` (docker compose passes it to both services) or in the orchestrator's environment directly. The variable's name is configurable as `github.token_env` in `orchestrator.yaml`.
+1. **Give the orchestrator a token.** Create a fine-grained PAT with, on the target repository: Issues read/write, Pull requests read/write, Contents read, Metadata read. Put it in `.env` as `GOLEM_GITHUB_TOKEN` or in the orchestrator's environment directly. The variable's name is configurable as `github.token_env` in `orchestrator.yaml`. Docker compose gives this one to the orchestrator only — the shem's push credential is a separate, opt-in variable, for the reason given under [Shem Configuration](#shem-configuration).
 
    The token is read once, at startup. If it was empty when the orchestrator started, sync stays off until you set it and **restart** — the log says so, and **Sync now** answers "GitHub sync is not running on this orchestrator". Enabling a repository does not need a restart; only supplying the token for the first time does.
 
@@ -341,7 +341,9 @@ repos:
     remote: https://github.com/your-org/your-repo
 ```
 
-`no_push: true` routes `git push` to the local repository instead of a remote, which is ideal for trying Golem out — but it also means **no branch reaches GitHub and no pull request is ever opened**. The shipped `deploy/shem.yaml` keeps it on, because the compose stack's default repositories are a throwaway local one and whatever `GOLEM_REPO_PATH` points at. To get the pull request, set `no_push: false` and give the shem a push credential: `GOLEM_GITHUB_TOKEN` in `.env` (the container's entrypoint installs it as an HTTPS credential helper for github.com) or an SSH key. Without one the push fails and the pull request is silently never opened — the ticket still reaches `ready-for-review`.
+`no_push: true` routes `git push` to the local repository instead of a remote, which is ideal for trying Golem out — but it also means **no branch reaches GitHub and no pull request is ever opened**. The shipped `deploy/shem.yaml` keeps it on, because the compose stack's default repositories are a throwaway local one and whatever `GOLEM_REPO_PATH` points at. To get the pull request, set `no_push: false` and give the shem a push credential: `GOLEM_SHEM_GITHUB_TOKEN` in `.env` (the container's entrypoint installs it as an HTTPS credential helper for github.com) or an SSH key. Without one the push fails and the pull request is silently never opened — the ticket still reaches `ready-for-review`.
+
+That is a different variable from the orchestrator's `GOLEM_GITHUB_TOKEN`, and it is empty unless you set it. The shem container is where the agent runs, and it runs on issue text anyone can open an issue to write; the approval gate makes a successful prompt injection unlikely, not impossible. So the shem is handed a repository credential only when someone has decided it needs one. Use a second, push-only token rather than the orchestrator's if you can. The agent subprocess itself never sees either token — Golem runs `claude` with an allow-listed environment that excludes everything in the `GOLEM_` namespace, so the credential helper works for Golem's own `git push` and yields nothing to the agent.
 
 ### Running Multiple Shems
 

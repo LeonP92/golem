@@ -341,14 +341,26 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 	return nil
 }
 
-// runClaudePhase runs a single `claude --print` session with the given prompt.
-func runClaudePhase(ctx context.Context, repoPath, prompt string) error {
+// claudePhaseCmd builds the agent subprocess. It is separate from
+// runClaudePhase only so a test can inspect what is handed to the agent
+// without executing it — see TestClaudePhaseCmdDoesNotLeakGolemSecrets.
+func claudePhaseCmd(ctx context.Context, repoPath, prompt string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "claude", "--print")
 	cmd.Dir = repoPath
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
+	// The prompt carries untrusted issue text, so this process must not
+	// carry golem's credentials — see agentenv.go. The golem and git
+	// subprocesses around it are golem's own commands and keep the full
+	// environment, which is what leaves the shem's push credential working.
+	cmd.Env = agentEnviron()
+	return cmd
+}
+
+// runClaudePhase runs a single `claude --print` session with the given prompt.
+func runClaudePhase(ctx context.Context, repoPath, prompt string) error {
+	if err := claudePhaseCmd(ctx, repoPath, prompt).Run(); err != nil {
 		return fmt.Errorf("claude --print: %w", err)
 	}
 	return nil
@@ -585,6 +597,12 @@ func readState(ticketDir string) (string, string, error) {
 // pushTicketBranch publishes the ticket branch to origin so the orchestrator
 // can open a pull request against it. Golem has no other code path that
 // pushes; agents remain denied `git push` by the tool-call gating policy.
+//
+// This is one of Golem's own subprocesses and deliberately inherits the whole
+// environment, unlike the agent (see agentenv.go). That is what leaves
+// deploy/shem-entrypoint.sh's credential helper working: the helper expands
+// GOLEM_GITHUB_TOKEN at use time, so this push gets the token and a `git
+// credential fill` run by the agent gets an empty password.
 func pushTicketBranch(ctx context.Context, worktreePath, branch string) error {
 	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branch)
 	cmd.Dir = worktreePath
