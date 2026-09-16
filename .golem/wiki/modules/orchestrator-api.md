@@ -9,7 +9,7 @@ Every "(session auth)" route below is additionally wrapped in `rbac.Require(...)
 - `Handlers` struct holds `*gorm.DB`, `*ws.Hub`, and `*sse.Broker`.
 - `NewHandlers(gdb, hub, broker)` constructs a Handlers.
 - `RegisterShemRoutes(mux)` wires:
-  - `POST /api/shems/register` (API-key auth) — updates shem status to online, normalizes repos, returns `{shem_id}`
+  - `PUT /api/shems/me` (API-key auth) — idempotent self-update: sets shem status to online, normalizes repos, returns `{shem_id}`. PUT because a shem restart safely resends the same body.
   - `DELETE /api/shems/me` (API-key auth) — marks shem offline and unregisters from WS hub
   - `GET /api/shems` (session auth) — lists all shems
   - `GET /api/ws` (API-key auth) — WebSocket upgrade, registers conn in hub

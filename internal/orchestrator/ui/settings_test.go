@@ -127,6 +127,35 @@ func TestSettingsChangePassword_TooShort(t *testing.T) {
 	}
 }
 
+func TestLogout_RequiresPost(t *testing.T) {
+	_, mux, gdb := newUIMux(t)
+	_, cookie := seedUISessionWithPassword(t, gdb, mux, "leon", "originalpass", rbac.RoleDeveloper)
+
+	// GET must NOT invoke the logout handler — <img src="/logout"> on a hostile
+	// page would otherwise sign the user out on load. A subsequent authenticated
+	// GET must still succeed, proving the session survived the cross-site probe.
+	do(mux, "GET", "/logout", cookie, "")
+	if w := do(mux, "GET", "/settings/security", cookie, ""); w.Code != http.StatusOK {
+		t.Fatalf("after GET /logout, session was cleared (got %d on /settings/security)", w.Code)
+	}
+
+	// POST clears the cookie and redirects to /login.
+	w := do(mux, "POST", "/logout", cookie, "")
+	if w.Code != http.StatusFound {
+		t.Fatalf("POST /logout: got %d, want 302", w.Code)
+	}
+	var cleared bool
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "golem_session" && c.MaxAge < 0 {
+			cleared = true
+			break
+		}
+	}
+	if !cleared {
+		t.Error("POST /logout did not emit a Set-Cookie clearing golem_session")
+	}
+}
+
 func TestUsersPage_HidesDeleteButtonOnSelfRow(t *testing.T) {
 	_, mux, gdb := newUIMux(t)
 	me, cookie := seedUISessionWithPassword(t, gdb, mux, "root", "originalpass", rbac.RoleAdmin)

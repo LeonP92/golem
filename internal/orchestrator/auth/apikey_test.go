@@ -17,7 +17,7 @@ func TestAPIKeyAuth(t *testing.T) {
 	shem := db.Shem{Name: "node-a", APIKeyHash: string(hash), Repos: "[]", Status: "online"}
 	gdb.Create(&shem)
 
-	req := httptest.NewRequest("POST", "/api/shems/register", nil)
+	req := httptest.NewRequest("PUT", "/api/shems/me", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	req.Header.Set("X-Shem-Name", "node-a")
 	w := httptest.NewRecorder()
@@ -41,7 +41,7 @@ func TestAPIKeyAuth_Unauthorized(t *testing.T) {
 	shem := db.Shem{Name: "node-b", APIKeyHash: string(hash), Repos: "[]", Status: "online"}
 	gdb.Create(&shem)
 
-	req := httptest.NewRequest("POST", "/api/shems/register", nil)
+	req := httptest.NewRequest("PUT", "/api/shems/me", nil)
 	req.Header.Set("Authorization", "Bearer wrongkey")
 	req.Header.Set("X-Shem-Name", "node-b")
 	w := httptest.NewRecorder()
@@ -58,7 +58,7 @@ func TestAPIKeyAuth_Unauthorized(t *testing.T) {
 func TestAPIKeyAuth_MissingName(t *testing.T) {
 	gdb, _ := db.Open(":memory:")
 
-	req := httptest.NewRequest("POST", "/api/shems/register", nil)
+	req := httptest.NewRequest("PUT", "/api/shems/me", nil)
 	req.Header.Set("Authorization", "Bearer secret")
 	// No X-Shem-Name header
 	w := httptest.NewRecorder()

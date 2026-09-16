@@ -34,7 +34,9 @@ var upgrader = websocket.Upgrader{
 
 // RegisterShemRoutes adds shem-facing routes to mux.
 func (h *Handlers) RegisterShemRoutes(mux *http.ServeMux) {
-	mux.Handle("POST /api/shems/register", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.register)))
+	// PUT is idempotent — re-registering with the same body yields the same
+	// state, so a shem restart can safely resend it.
+	mux.Handle("PUT /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.register)))
 	mux.Handle("DELETE /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.deregister)))
 	mux.Handle("GET /api/shems",
 		auth.RequireSession(h.DB)(rbac.Require(rbac.PermShemView)(http.HandlerFunc(h.listShems))))

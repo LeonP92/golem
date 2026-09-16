@@ -144,7 +144,9 @@ func NewHandlersWithMap(gdb *gorm.DB, tmpls map[string]*template.Template, secur
 func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /login", h.loginPage)
 	mux.HandleFunc("POST /login", h.loginSubmit)
-	mux.HandleFunc("GET /logout", h.logout)
+	// POST-only: a GET /logout is CSRF-exploitable — any hostile <img src="/logout">
+	// on another page could sign the user out.
+	mux.HandleFunc("POST /logout", h.logout)
 	mux.Handle("GET /dashboard", h.sessionRoute(rbac.PermTicketView, h.dashboard))
 	mux.Handle("GET /shems", h.sessionRoute(rbac.PermShemView, h.shems))
 	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
