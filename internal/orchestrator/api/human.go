@@ -189,7 +189,23 @@ func (h *Handlers) actionApprove(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
-	if err := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Update("phase", nextPhase).Error; err != nil {
+	// The phase change and its GitHub label write commit together, like
+	// every other transition (finding I4, round 1c). Before this, approve
+	// was a bare Update that queued nothing, so a linked ticket advancing
+	// brainstorm -> plan -> implement kept whatever golem:* label it had
+	// until some later reconcile pass noticed — and reconcile is skipped on
+	// a 304, which is what a quiet repository answers.
+	if err := h.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", id).
+			Update("phase", nextPhase).Error; err != nil {
+			return err
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, nextPhase, h.BaseURL)
+	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -363,6 +379,10 @@ var errNotRequeueable = errors.New("ticket is not requeueable")
 // errNotFlaggable signals that the ticket did not exist, or was still
 // awaiting intake approval, when a needs-attention action was attempted.
 var errNotFlaggable = errors.New("ticket is not flaggable")
+
+// errNotInReview signals that the ticket left ready-for-review before a
+// request-changes submitted from the review screen could move it to revising.
+var errNotInReview = errors.New("ticket is not in ready-for-review")
 
 // actionStart releases an externally-ingested ticket for execution, moving it
 // to unassigned so a shem can claim it. This is the human checkpoint required
@@ -637,15 +657,31 @@ func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "ticket has no assigned shem; use requeue instead", http.StatusConflict)
 		return
 	}
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase = 'ready-for-review'", ticket.ID).
-		Update("phase", "revising")
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// As in actionApprove and actionRequeue, the phase change and its GitHub
+	// label write commit together (finding I4, round 1c). The WHERE clause is
+	// unchanged.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase = 'ready-for-review'", ticket.ID).
+			Update("phase", "revising")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotInReview
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", ticket.ID).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", ticket.ID, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, "revising", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotInReview) {
+		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
 		return
 	}
-	if result.RowsAffected == 0 {
-		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 

@@ -158,3 +158,115 @@ func payloadPhase(t *testing.T, payload string) string {
 	}
 	return p.Phase
 }
+
+// TestApproveAndRequestChangesQueueTheirLabel finishes what
+// TestBarePhaseActionsQueueTheirLabel started (finding I4, round 1c). Two
+// phase writers were still bare Updates that queued nothing: actionApprove,
+// which advances brainstorm -> plan -> implement, and the ready-for-review
+// branch of request-changes, which moves a ticket to revising. Their labels
+// came only from reconcile — and reconcile is skipped on a 304, which is what
+// a quiet repo answers, so the public issue could advertise a phase the
+// ticket had left for as long as nothing else happened in the repository.
+//
+// Verified against HEAD 62cee0f before the fix: 0 label rows for all three.
+func TestApproveAndRequestChangesQueueTheirLabel(t *testing.T) {
+	someShem := uint(1)
+	cases := []struct {
+		name       string
+		action     string
+		feedback   string
+		fromPhase  string
+		withShem   *uint
+		needsInput bool
+		linked     bool
+		wantPhase  string
+		wantLabel  string
+	}{
+		{
+			name: "approve advances brainstorm to plan", action: "approve",
+			fromPhase: "brainstorm", needsInput: true, linked: true,
+			wantPhase: "plan", wantLabel: "plan",
+		},
+		{
+			name: "approve advances plan to implement", action: "approve",
+			fromPhase: "plan", needsInput: true, linked: true,
+			wantPhase: "implement", wantLabel: "implement",
+		},
+		{
+			name: "request-changes from review moves to revising", action: "request-changes",
+			feedback: "please fix", fromPhase: "ready-for-review", withShem: &someShem, linked: true,
+			wantPhase: "revising", wantLabel: "revising",
+		},
+		{
+			name: "approve on an unlinked ticket queues nothing", action: "approve",
+			fromPhase: "plan", needsInput: true, linked: false,
+			wantPhase: "implement", wantLabel: "",
+		},
+		{
+			name: "request-changes on an unlinked ticket queues nothing", action: "request-changes",
+			feedback: "please fix", fromPhase: "ready-for-review", withShem: &someShem, linked: false,
+			wantPhase: "revising", wantLabel: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mux, cookie := setupActionTest(t)
+
+			ticket := db.Ticket{
+				RepoRemote: "https://github.com/org/repo", Title: "t", Branch: "b",
+				Description: "d", Phase: tc.fromPhase, AssignedShem: tc.withShem,
+			}
+			if tc.linked {
+				n := 93
+				ticket.IssueNumber = &n
+			}
+			if err := h.DB.Create(&ticket).Error; err != nil {
+				t.Fatalf("seed ticket: %v", err)
+			}
+			if tc.needsInput {
+				hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "approve?"}
+				if err := h.DB.Create(&hi).Error; err != nil {
+					t.Fatalf("seed human input: %v", err)
+				}
+			}
+
+			payload := map[string]string{"action": tc.action}
+			if tc.feedback != "" {
+				payload["feedback"] = tc.feedback
+			}
+			body, _ := json.Marshal(payload)
+			req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/actions", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			withSession(req, cookie)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, req)
+			if w.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
+			}
+
+			var got db.Ticket
+			if err := h.DB.First(&got, "id = ?", ticket.ID).Error; err != nil {
+				t.Fatalf("reload ticket: %v", err)
+			}
+			if got.Phase != tc.wantPhase {
+				t.Fatalf("phase = %q, want %q", got.Phase, tc.wantPhase)
+			}
+
+			var rows []db.GitHubOutbox
+			h.DB.Where("ticket_id = ? AND kind = ?", ticket.ID, ghsync.KindLabel).Find(&rows)
+			if tc.wantLabel == "" {
+				if len(rows) != 0 {
+					t.Fatalf("label rows = %d, want 0 for an unlinked ticket", len(rows))
+				}
+				return
+			}
+			if len(rows) != 1 {
+				t.Fatalf("label rows = %d, want 1", len(rows))
+			}
+			if phase := payloadPhase(t, rows[0].Payload); phase != tc.wantLabel {
+				t.Errorf("queued label phase = %q, want %q", phase, tc.wantLabel)
+			}
+		})
+	}
+}
