@@ -262,6 +262,8 @@ At every step the shem tails the ticket's `log.jsonl` and forwards entries to th
 
 Issues carrying a trigger label become tickets. The orchestrator polls, ingests, and — as the ticket moves — labels the issue, comments on it, closes it, and opens the pull request.
 
+A ticket's description is the issue's **title and body**: the title, a blank line, then the body, or the title alone when the body is empty. That is byte-for-byte what `golem ticket new --from-issue` stores in CLI mode, so an issue produces the same ticket either way, and an issue whose title says everything still gives the agent something to work on.
+
 **There is no add-repo form and no token field on `/settings/github`.** Repositories are discovered from the shems that register with them, and the token is read from the environment only, never stored in the database. The full path from a fresh install to a working sync is:
 
 1. **Give the orchestrator a token.** Create a fine-grained PAT with, on the target repository: Issues read/write, Pull requests read/write, Contents read/write, Metadata read. Put it in `.env` as `GOLEM_GITHUB_TOKEN` (docker compose passes it to both services) or in the orchestrator's environment directly. The variable's name is configurable as `github.token_env` in `orchestrator.yaml`.
@@ -290,7 +292,9 @@ Poll interval, drain interval, manual-sync cooldown, and a GitHub Enterprise `ap
 
 **An ingested ticket is not claimable until a human approves it.** It arrives in phase `pending-approval`, and no shem can take it until someone opens it in the dashboard, reads the description, and presses **Approve & Start**.
 
-This is deliberate and is the feature's load-bearing control. An issue body is written by anyone who can open an issue on that repository, and it is interpolated into the prompts that drive brainstorm, plan, implement, and revise — one of which has shell and repository write access. The approval binds to the exact text you were shown: if the issue is edited between the page rendering and your click, the approval is refused with a 409 and you are asked to reload and read the new text. If the issue is edited *after* approval and the ticket has not been claimed yet, it returns to `pending-approval` for a fresh read; if it has already been claimed, the running agent keeps working from the text that was approved and the change is recorded in the ticket's log.
+This is deliberate and is the feature's load-bearing control. An issue is written by anyone who can open one on that repository, and its text is interpolated into the prompts that drive brainstorm, plan, implement, and revise — one of which has shell and repository write access.
+
+The approval binds to the exact text you were shown, **title included**. If the issue is edited between the page rendering and your click, the approval is refused with a 409 and you are asked to reload and read the new text. If the issue is edited *after* approval and the ticket has not been claimed yet, it returns to `pending-approval` for a fresh read; if it has already been claimed, the running agent keeps working from the text that was approved and the change is recorded in the ticket's log. Editing only the title counts as an edit — the title is part of what the agent is given, so it is part of what you approved.
 
 The CLI has no such gate, on purpose: `golem ticket new --from-issue 42` is typed by the human who would otherwise be approving, so the act of running it *is* the approval.
 

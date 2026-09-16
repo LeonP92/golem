@@ -41,11 +41,47 @@ refused. Nothing heals it on its own: polling only revisits issues that have
 actually been edited, and the reconciliation pass deliberately never writes
 the ticket row.
 
+**How it interacts with the re-hash below.** The backfill restores the hash
+for the text each ticket currently holds, which is what its recorded approval
+was given for, so those tickets become claimable again immediately. The first
+poll then re-composes their descriptions with the title and re-gates them once,
+along with every other linked ticket (see section 2). Both steps are correct
+and the order does not matter.
+
 **What it changes.** `body_hash`, on GitHub-linked tickets that have none, and
 nothing else. It never marks anything approved, so it cannot release work no
 human has read. A dry run prints exactly how many rows it would touch.
 
-## 2. Dashboard pages left open across the upgrade fail once
+## 2. Approved tickets go back to "pending approval" once, after the first poll
+
+**Expect a wave of what looks like un-approvals on your first poll after
+upgrading. It is not a fault, and it clears as soon as each ticket is
+re-approved.**
+
+A ticket's description is now the issue's **title and body** — the title, a
+blank line, then the body — where it used to be the body alone. That is what
+the CLI has always stored, and it means an agent finally sees the title: an
+issue whose title says everything and whose body is empty used to become a
+ticket with an empty description and an agent with nothing to work on.
+
+The approval you give is bound to the exact text you were shown, by a hash. On
+the first poll after upgrading, every GitHub-linked ticket's description gains
+its title, so that hash changes for all of them. Any ticket that was approved
+but **not yet claimed** therefore returns to `pending-approval` for one
+re-read. Tickets already claimed are left alone — the shem working on one is
+not interrupted, and the change is recorded in that ticket's log.
+
+This is fail-closed and is arguably just correct: the text under approval
+genuinely is changing, by gaining a line nobody approved. Re-approving is one
+click per ticket and is a one-time event.
+
+It also closes a real hole, which is why it was not made optional. While the
+hash covered the body alone, editing only an issue's **title** moved nothing:
+an approved ticket stayed approved, and — now that the title reaches the agent
+— it would have carried text no human had read. Editing a title now re-gates
+exactly as editing a body does.
+
+## 3. Dashboard pages left open across the upgrade fail once
 
 State-changing requests from the dashboard now carry a CSRF token. A page that
 was rendered by the old version does not have one, so the first button pressed
@@ -56,7 +92,7 @@ There is no upgrade step and nothing to migrate. The token is derived from the
 session cookie rather than stored, so existing logins keep working and nobody
 is signed out.
 
-## 3. A repository whose default branch cannot be read now produces no tickets
+## 4. A repository whose default branch cannot be read now produces no tickets
 
 Golem asks GitHub for a repository's default branch when it first turns an
 issue into a ticket, and uses it as the pull request's base. That lookup used
@@ -74,7 +110,7 @@ It can be experienced as "Golem stopped working", so check the **Status**
 column on `/settings/github` first. The reason is recorded there on the
 repository's row.
 
-## 4. Some issues get a milestone comment for work that already finished
+## 5. Some issues get a milestone comment for work that already finished
 
 Milestone comments ("Golem wrote a spec for this issue", and so on) are
 delivered through an outbox whose delivered rows are kept forever, so anything
@@ -89,6 +125,8 @@ tickets are unaffected.
 
 ## Also in this release
 
+- Agents are shown the issue **title**, not just the body, and the CLI and the
+  orchestrator now produce byte-identical descriptions from the same issue.
 - `docker compose` now passes `GOLEM_GITHUB_TOKEN` to both the orchestrator
   and the shem. Before, the variable was documented in `.env.example` and
   reached neither container, so the integration could not run from the
@@ -99,7 +137,9 @@ tickets are unaffected.
   it is read once, at startup.
 - **Sync now** says which failure it hit: the session expired, sync is not
   running on the server, the repository is not enabled, the repository is
-  gone. Previously all four rendered "Failed — retry?".
+  gone. Previously all four rendered "Failed — retry?". When sync is not
+  running it names the variable *your* config reads (`github.token_env`),
+  not a hardcoded one.
 - Writes to GitHub that fail repeatedly are parked and listed at the bottom of
   `/settings/github`, each with a **Retry** button. Before, a parked write was
   lost behind a single log line.
