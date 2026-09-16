@@ -105,6 +105,13 @@ func PRKey(ticketID string) string {
 // ever aborted, on either backend. isDuplicateKey is kept for
 // createTicketFromIssue, whose Create is standalone (its own implicit
 // transaction) and therefore poisons nothing.
+//
+// Do not "simplify" this back to a plain Create. The PostgreSQL regressions
+// in api/postgres_outbox_test.go are skipped unless GOLEM_TEST_POSTGRES_DSN
+// is set, and on SQLite both spellings look identical to the caller, so a
+// revert used to pass the whole suite. TestEnqueueUsesOnConflictDoNothing runs
+// everywhere and asserts both halves: that the clause is in the generated SQL
+// and that the driver answered no error for the duplicate.
 func Enqueue(tx *gorm.DB, row db.GitHubOutbox) error {
 	if row.NextAttempt.IsZero() {
 		row.NextAttempt = time.Now()
