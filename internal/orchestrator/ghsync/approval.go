@@ -3,6 +3,7 @@ package ghsync
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
@@ -28,10 +29,19 @@ func HashBody(body string) string {
 // call site that needs it here: recording a post-approval issue-body edit.
 func appendLog(gdb *gorm.DB, ticketID, entryType, fromRole, toRole, message string) error {
 	var maxSeq struct{ Max *uint }
-	gdb.Model(&db.LogEntry{}).
+	// The error is returned, not discarded: on a failure maxSeq.Max stays
+	// nil, nextSeq falls back to 1, and the Create below violates
+	// idx_ticket_seq for any ticket that already has a log entry. It fails
+	// closed, but the operator is shown a unique-constraint violation
+	// instead of the real cause, and — because appendLog's caller is
+	// applyIssue — the whole page is marked as a partial failure and the
+	// ingest cursor freezes on a misleading error.
+	if err := gdb.Model(&db.LogEntry{}).
 		Select("MAX(sequence_num) as max").
 		Where("ticket_id = ?", ticketID).
-		Scan(&maxSeq)
+		Scan(&maxSeq).Error; err != nil {
+		return fmt.Errorf("next log sequence for ticket %s: %w", ticketID, err)
+	}
 	nextSeq := uint(1)
 	if maxSeq.Max != nil {
 		nextSeq = *maxSeq.Max + 1

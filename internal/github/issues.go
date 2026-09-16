@@ -43,7 +43,15 @@ func (c *client) ListIssuesSince(ctx context.Context, owner, repo, label string,
 		if err != nil {
 			return IssuePage{}, fmt.Errorf("list issues for %s/%s: %w", owner, repo, err)
 		}
-		if etag != "" {
+		// Only the first page is conditional. The stored ETag identifies
+		// the listing as a whole, so sending it on page 2 asks a question
+		// it cannot answer meaningfully — and if page 2 ever did answer
+		// 304, the branch below would discard page 1's already-collected
+		// issues and report "nothing changed", while IngestRepo's 304 path
+		// advances neither the cursor nor the ETag, so the next poll would
+		// repeat it identically. That is a permanent stall, not a one-off
+		// loss.
+		if etag != "" && pageNum == 0 {
 			req.Header.Set("If-None-Match", etag)
 		}
 

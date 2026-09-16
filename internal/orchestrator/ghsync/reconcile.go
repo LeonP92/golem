@@ -75,6 +75,16 @@ func (s *Syncer) reconcileTicket(ctx context.Context, repo *db.GitHubRepo, ticke
 		if issue.State == "closed" {
 			return nil
 		}
+		// The issue is open and the ticket is closed, which on this path
+		// almost always means a human reopened the issue. Golem has no
+		// reopen action, so reconcile undoes that every poll; log it rather
+		// than doing it silently, so the person who keeps finding their
+		// issue closed again has something to find (m10). Honouring the
+		// reopen instead would need a product decision about what a
+		// reopened, already-closed ticket becomes.
+		log.Printf("ghsync: issue #%d is open but ticket %s is closed; re-closing it "+
+			"(Golem has no reopen action — close the ticket's GitHub issue from Golem, or "+
+			"open a new issue, rather than reopening this one)", number, ticket.ID)
 		if err := s.GH.SetIssueState(ctx, repo.Owner, repo.Name, number, "closed"); err != nil {
 			return fmt.Errorf("close issue #%d: %w", number, err)
 		}

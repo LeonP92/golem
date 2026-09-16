@@ -15,7 +15,8 @@ import (
 // the PostgreSQL driver is used; otherwise the pure-Go SQLite driver is used.
 func Open(dsn string) (*gorm.DB, error) {
 	var dialector gorm.Dialector
-	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+	isPostgres := strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://")
+	if isPostgres {
 		dialector = postgres.Open(dsn)
 	} else {
 		dialector = sqlite.Open(dsn)
@@ -53,10 +54,16 @@ func Open(dsn string) (*gorm.DB, error) {
 	}
 	// Enable WAL mode so multiple processes (server + admin CLI) can access
 	// the same database file concurrently without exclusive-lock conflicts.
-	// Best-effort: not every dialector understands PRAGMA (Postgres doesn't),
-	// so a failure here is logged rather than treated as fatal.
-	if err := gdb.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
-		log.Printf("db: enable WAL mode: %v", err)
+	// Skipped entirely on Postgres, which has no PRAGMA: running it there
+	// made every boot log `ERROR: syntax error at or near "PRAGMA"` for a
+	// statement that was never applicable, which is exactly the kind of
+	// noise that trains an operator to ignore startup errors. On SQLite a
+	// failure is still logged rather than fatal — WAL is an optimisation,
+	// not a requirement.
+	if !isPostgres {
+		if err := gdb.Exec("PRAGMA journal_mode=WAL").Error; err != nil {
+			log.Printf("db: enable WAL mode: %v", err)
+		}
 	}
 	return gdb, gdb.AutoMigrate(
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
