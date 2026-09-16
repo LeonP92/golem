@@ -235,6 +235,12 @@ func TestIngestRecordsGitHubErrorAndReturnsIt(t *testing.T) {
 // specific issue's ticket insert — the alternative of racing two goroutines
 // against the (repo_remote, issue_number) unique index would be flaky and
 // wasn't attempted.
+//
+// The ETag half of the same guard is asserted here too (mutation survivor
+// M28): storing a fresh ETag on a partial failure makes GitHub answer 304 on
+// the next poll, so the issue that failed is never seen again — the same
+// permanently-dropped-issue defect the cursor half exists to prevent,
+// reached by a second route. Only the cursor half had a test.
 func TestIngestPartialFailureDoesNotAdvanceCursor(t *testing.T) {
 	gdb, err := db.Open(":memory:")
 	if err != nil {
@@ -251,10 +257,15 @@ END;
 		t.Fatalf("create trigger: %v", err)
 	}
 	repo := newRepo(t, gdb)
+	if err := gdb.Model(repo).Update("etag", "stored-etag").Error; err != nil {
+		t.Fatalf("seed etag: %v", err)
+	}
+	repo.ETag = "stored-etag"
 
 	older := time.Now().Add(-time.Hour)
 	newer := time.Now()
 	f := github.NewFake()
+	f.PageETag = "fresh-etag"
 	f.AddIssue(github.Issue{Number: 1, Title: "boom-title", State: "open",
 		UpdatedAt: older, Labels: []string{"golem"}})
 	f.AddIssue(github.Issue{Number: 2, Title: "ok-title", State: "open",
@@ -271,6 +282,10 @@ END;
 	}
 	if got.LastIssueSync != nil {
 		t.Errorf("LastIssueSync = %v, want nil (unmoved) — a partial failure must not advance the cursor", *got.LastIssueSync)
+	}
+	if got.ETag != "stored-etag" {
+		t.Errorf("ETag = %q, want %q (unmoved) — storing a fresh ETag after a partial failure makes the next poll 304 and the failed issue is never retried",
+			got.ETag, "stored-etag")
 	}
 	if got.LastError == "" {
 		t.Error("LastError not recorded after a partial failure — the stall would be invisible to an operator")

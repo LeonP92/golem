@@ -41,6 +41,14 @@ type Fake struct {
 	// caller's NotModified handling.
 	ETag string
 
+	// PageETag, when non-empty, is the ETag returned on a normal (non-304)
+	// page. It is separate from ETag so a test can distinguish "the ETag
+	// GitHub is offering now" from "the ETag that provokes a 304", which is
+	// what the partial-failure guard needs: a page that fails partway must
+	// not store a fresh ETag, or the next poll answers 304 and the issue
+	// that failed is never retried.
+	PageETag string
+
 	// FailNext, when non-nil, is returned by the next call to any method and
 	// then cleared — for exercising retry paths.
 	FailNext error
@@ -87,7 +95,7 @@ func (f *Fake) ListIssuesSince(_ context.Context, _, _, label string, since time
 	if f.ETag != "" && etag == f.ETag {
 		return IssuePage{ETag: f.ETag, NotModified: true}, nil
 	}
-	var page IssuePage
+	page := IssuePage{ETag: f.PageETag}
 	for _, i := range f.Issues {
 		if label != "" && !i.HasLabel(label) {
 			continue
