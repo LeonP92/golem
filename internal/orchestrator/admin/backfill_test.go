@@ -463,3 +463,38 @@ func TestBackfillRegateLeavesTheTicketApprovableAgain(t *testing.T) {
 			got.BodyHash, ghsync.HashDescription(got.Description))
 	}
 }
+
+// TestBackfillResultString pins the line the subcommand prints, because the
+// release note quotes it verbatim as what an operator will see. A wording
+// change that leaves the docs stale should fail here rather than in a support
+// thread.
+func TestBackfillResultString(t *testing.T) {
+	tests := []struct {
+		name string
+		res  admin.BackfillResult
+		want string
+	}{
+		{
+			name: "dry run",
+			res:  admin.BackfillResult{Scanned: 4, Repaired: 4, Regated: 2, DryRun: true},
+			want: "backfill body_hash: scanned 4 ticket(s), would repair 4, would return 2 unbound approval(s) for re-review",
+		},
+		{
+			name: "applied",
+			res:  admin.BackfillResult{Scanned: 4, Repaired: 4, Regated: 2},
+			want: "backfill body_hash: scanned 4 ticket(s), repaired 4, returned 2 unbound approval(s) for re-review",
+		},
+		{
+			name: "nothing to do",
+			res:  admin.BackfillResult{},
+			want: "backfill body_hash: scanned 0 ticket(s), repaired 0, returned 0 unbound approval(s) for re-review",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := tt.res.String(); got != tt.want {
+				t.Errorf("String() = %q,\n            want %q", got, tt.want)
+			}
+		})
+	}
+}

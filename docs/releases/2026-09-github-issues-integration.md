@@ -68,6 +68,13 @@ anyway**, for two reasons: it is what makes those tickets usable again, and if
 you ever roll back to an intermediate build the hole is open again for as long
 as that build is serving.
 
+**Before you run it, know that it clears approvals.** Not all of them — only
+the ones that were never bound to any text, the middle row above. Those
+tickets go back to `pending-approval` and need one human read each before a
+shem can take them. The tool never grants an approval, only ever clears one, so
+the worst it can do is give you work to do; it cannot release work nobody read.
+`--dry-run` prints the count of each before you commit to it.
+
 **What the backfill does.**
 
 1. It writes `body_hash` on GitHub-linked tickets that have none, hashing that
@@ -82,8 +89,11 @@ as that build is serving.
    column that only the polling loop would otherwise clear. Tickets a shem is
    already working on, and closed tickets, are left alone.
 
-It only ever **clears** approval, never grants it, so it cannot release work no
-human has read. A dry run prints exactly how many rows each step would touch.
+A dry run prints exactly how many rows each step would touch:
+
+```
+backfill body_hash: scanned 4 ticket(s), would repair 4, would return 2 unbound approval(s) for re-review
+```
 
 **What you will see afterwards.** The tickets from step 2 are back in
 `pending-approval` with their current issue text, waiting for one human read
