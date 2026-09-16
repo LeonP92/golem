@@ -20,23 +20,47 @@
        attaches it to every htmx request. */}}
   <meta name="csrf-token" content="{{.CSRFToken}}">
   <title>Golem Orchestrator</title>
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
-  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
-  <!-- DOMPurify is the control on the markdown sink, not one dependency among
-       several: renderMarkdown below assigns marked's output to innerHTML, and
-       marked does no sanitizing. So this one is pinned to an exact version and
-       integrity-checked, unlike the scripts above it. To upgrade: fetch the new
-       file and recompute with
-         openssl dgst -sha384 -binary purify.min.js | openssl base64 -A
-       A mismatch makes the browser refuse the script, which fails closed —
-       renderMarkdown's guard then takes the textContent path. -->
+  {{/* Every external subresource below is pinned to an EXACT version and
+       carries a Subresource Integrity hash. This is the whole page's rule, not
+       the sanitizer's: DOMPurify is the control on the markdown sink, but
+       marked produces the HTML it is handed and htmx runs with 'unsafe-eval'
+       granted and drives every state-changing request, so pinning only the
+       sanitizer would leave its own input floating.
+
+       A mismatch makes the browser refuse the file, and every such refusal
+       degrades rather than exposes — renderMarkdown guards on DOMPurify being
+       absent and catches marked throwing, and both land on plain text.
+
+       To upgrade any of them: fetch the exact-version URL and recompute with
+         openssl dgst -sha384 -binary <file> | openssl base64 -A
+       ui/subresources_test.go fails on any tag added here without both. */}}
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.24/dist/full.min.css"
+        integrity="sha384-2V5uSMIWpBK7suX6yRDZH6ll7ktPJF2O58y0HSz+HiFCBCsmqZpxX1AZB4qAHuYI"
+        crossorigin="anonymous" rel="stylesheet" type="text/css" />
+  {{/* The one exception, and the reason is the CDN's: cdn.tailwindcss.com
+       sends no access-control-allow-origin header, so crossorigin="anonymous"
+       would make the browser block this outright, and an integrity attribute
+       without it is not honoured on a cross-origin script. The version is
+       pinned, which at least removes the floating redirect (the bare host 302s
+       to whatever is current). Recorded in noSRIHosts in
+       ui/subresources_test.go. Serving Tailwind from the binary, or building
+       the CSS ahead of time, is what would close it. */}}
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"
+          integrity="sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq"
+          crossorigin="anonymous"></script>
+  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"
+          integrity="sha384-fw+eTlCc7suMV/1w/7fr2/PmwElUIt5i82bi+qTiLXvjRXZ2/FkiTNA/w0MhXnGI"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js"
+          integrity="sha384-lqPzN0kmFw9t2syAMwVPM4VbAyqsz/lPyYWbb2Xt6nSPM0WPNrpSWCUBgdcAdgnC"
+          crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js"
           integrity="sha384-uUMu9JDY09vBzRf9SPcK2VgUj+W/70J6Soc+Dded5P474ElQ63iv9j5N3DE7Kp3N"
           crossorigin="anonymous"></script>
-  <script src="https://code.iconify.design/3/3.1.0/iconify.min.js"></script>
+  <script src="https://code.iconify.design/3/3.1.0/iconify.min.js"
+          integrity="sha384-GYcZF/Xz4/6ZHVch5eVcYcyWmSCvO3+ffsxF+B9hfRyc3XCkSws7SO5ZSGqHlUNH"
+          crossorigin="anonymous"></script>
   <style>
     .log-feed { font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace; font-size: 0.8rem; line-height: 1.6; }
     .entry-FINDING { color: #b45309; }

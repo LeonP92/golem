@@ -3,7 +3,6 @@ package ui_test
 import (
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 )
@@ -149,66 +148,6 @@ func TestMarkdownSinkIsSanitized(t *testing.T) {
 	}
 }
 
-// dompurifyTagRE captures the whole <script> tag that loads DOMPurify.
-var dompurifyTagRE = regexp.MustCompile(`(?i)<script[^>]*purify\.min\.js[^>]*>`)
-
-// TestDOMPurifyIsPinnedAndIntegrityChecked covers re-review finding F5.
-//
-// Everything above this test asserts that the sanitizer is configured
-// correctly. None of it asserts anything about the bytes that configuration is
-// handed to. DOMPurify arrives over the network from a public CDN, and it was
-// requested as `dompurify@3` with no integrity attribute — a floating major.
-// A 3.x release that changes what FORBID_TAGS or ALLOW_DATA_ATTR mean, or a
-// compromise of the registry or the CDN, changes the security posture of the
-// dashboard with nothing in this suite able to notice.
-//
-// It is not one dependency among several: it is the control. The markdown
-// sink takes an issue body a stranger wrote, runs it through a parser that
-// does no sanitizing at all, and assigns the result to innerHTML. DOMPurify
-// is the only thing between those two facts.
-//
-// Pinning an exact version plus a Subresource Integrity hash converts the
-// implementers' documented residual — "would not catch a future DOMPurify
-// release changing what the config means" — from unbounded into a dependency
-// bump that shows up in a diff. The browser refuses to execute bytes that do
-// not match the hash, so a swapped file fails closed: DOMPurify is absent,
-// renderMarkdown's guard takes the textContent path, and the sink renders as
-// plain text rather than unsanitized HTML.
-func TestDOMPurifyIsPinnedAndIntegrityChecked(t *testing.T) {
-	src, err := os.ReadFile(filepath.Join("templates", "layout.html"))
-	if err != nil {
-		t.Fatalf("read layout.html: %v", err)
-	}
-	tag := dompurifyTagRE.FindString(string(src))
-	if tag == "" {
-		t.Fatal("layout.html has no <script> tag loading purify.min.js")
-	}
-
-	checks := []struct {
-		name string
-		re   *regexp.Regexp
-		why  string
-	}{
-		{
-			name: "exact version",
-			re:   regexp.MustCompile(`dompurify@\d+\.\d+\.\d+/`),
-			why: "a floating major (dompurify@3) lets a future release change what the " +
-				"sanitizer config means with nothing in CI able to notice",
-		},
-		{
-			name: "integrity",
-			re:   regexp.MustCompile(`integrity="sha(256|384|512)-[A-Za-z0-9+/]+={0,2}"`),
-			why:  "without it a CDN or registry compromise silently replaces the control",
-		},
-		{
-			name: "crossorigin",
-			re:   regexp.MustCompile(`crossorigin="anonymous"`),
-			why:  "a cross-origin subresource without it is not integrity-checked at all",
-		},
-	}
-	for _, c := range checks {
-		if !c.re.MatchString(tag) {
-			t.Errorf("the DOMPurify script tag has no %s — %s\ntag: %s", c.name, c.why, tag)
-		}
-	}
-}
+// The pinning and integrity half of this — that the bytes DOMPurify and marked
+// arrive as are the bytes we chose — lives in subresources_test.go, as a rule
+// about every external subresource on the page rather than about this pair.
