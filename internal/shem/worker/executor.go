@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -136,7 +137,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 					feedback := consumeFeedback(ctx, c, claim.TicketID)
 					postStatus(c, ticketID, "Starting agent (claude) — brainstorm phase")
 					prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
-					if err := runClaudePhase(ctx, repoPath, prompt); err != nil {
+					if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-brainstorm.log")); err != nil {
 						return err
 					}
 					postStatus(c, ticketID, "Brainstorm complete — spec ready for review")
@@ -177,7 +178,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 					feedback := consumeFeedback(ctx, c, claim.TicketID)
 					postStatus(c, ticketID, "Starting agent (claude) — planning phase")
 					prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
-					if err := runClaudePhase(ctx, repoPath, prompt); err != nil {
+					if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-plan.log")); err != nil {
 						return err
 					}
 					postStatus(c, ticketID, "Plan complete — ready for review")
@@ -212,7 +213,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "implement":
 			postStatus(c, ticketID, "Starting agent (claude) — implementation phase")
-			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Description)); err != nil {
+			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
 				return err
 			}
 			postStatus(c, ticketID, "Implementation complete — ready for review")
@@ -236,7 +237,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
 			postStatus(c, ticketID, "Starting agent (claude) — revision phase")
-			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback)); err != nil {
+			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
 				return err
 			}
 			postStatus(c, ticketID, "Revision complete — ready for review")
@@ -289,12 +290,23 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 }
 
 // runClaudePhase runs a single `claude --print` session with the given prompt.
-func runClaudePhase(ctx context.Context, repoPath, prompt string) error {
+// Output is written to os.Stdout and also teed to logPath for post-mortem inspection.
+func runClaudePhase(ctx context.Context, repoPath, prompt, logPath string) error {
 	cmd := exec.CommandContext(ctx, "claude", "--print")
 	cmd.Dir = repoPath
 	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+
+	f, err := os.Create(logPath) //nolint:gosec
+	if err != nil {
+		log.Printf("executor: could not create phase log %s: %v", logPath, err)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	} else {
+		defer f.Close()
+		cmd.Stdout = io.MultiWriter(os.Stdout, f)
+		cmd.Stderr = io.MultiWriter(os.Stderr, f)
+	}
+
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("claude --print: %w", err)
 	}

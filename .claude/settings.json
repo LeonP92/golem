@@ -2,8 +2,18 @@
   "permissions": {
     "allow": [
       "Bash(*)",
-      "Write(**)",
       "Edit(**)"
+    ],
+    "deny": [
+      "Bash(git push origin main)",
+      "Bash(git push --force *)",
+      "Bash(git reset --hard *)",
+      "Bash(git rebase *)",
+      "Bash(npm publish *)",
+      "Bash(cargo publish *)",
+      "Bash(twine upload *)",
+      "Bash(python -m twine upload *)",
+      "Bash(sudo *)"
     ]
   }
 }
