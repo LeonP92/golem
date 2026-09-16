@@ -373,14 +373,32 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var ticket db.Ticket
-	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
-		http.Error(w, "ticket not owned by this shem", http.StatusConflict)
-		return
-	}
-
 	// The phase update and its GitHub follow-ups commit together, so a phase
 	// can never be recorded without its writes queued.
+	//
+	// The ticket handed to enqueueGitHubPhase is reloaded via tx.First AFTER
+	// the Updates call below succeeds, not fetched before this transaction
+	// opens (fix round 1: a prior version read the ticket via a plain,
+	// pre-transaction h.DB.First). That plain read takes no lock, so a
+	// fully separate, concurrent write — e.g. POST .../branch-pushed
+	// committing between the read and this transaction's own write — could
+	// land in the gap, and enqueueGitHubPhase would then decide the PR
+	// precondition (BranchPushed) from a snapshot that was already stale by
+	// the time it ran. That inverts the failure the outbox's idempotency
+	// key guards against: instead of two writers racing to a duplicate PR
+	// (which the unique key already prevents), BOTH writers would correctly
+	// see their own precondition as unmet and both decline, leaving the row
+	// with phase = ready-for-review AND branch_pushed = true but zero pr
+	// rows — and nothing recovers it, since reconcile.go never calls
+	// CreatePullRequest. Reloading via tx.First after this transaction's own
+	// write closes the gap: no backend lets a second writer commit against
+	// this row while this transaction holds it, so the reload is guaranteed
+	// to see every write already committed against this row, plus this
+	// transaction's own just-applied phase change — never anything staler.
+	// This applies to every field enqueueGitHubPhase/enqueuePRIfReady reads
+	// (IssueNumber, BranchPushed, Phase, BaseBranch, Branch, Title), not
+	// just BranchPushed — none of them can come from a snapshot older than
+	// this transaction's own write once sourced this way.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND assigned_shem = ?", id, shem.ID).
@@ -391,7 +409,11 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 		if result.RowsAffected == 0 {
 			return errNotOwner
 		}
-		return enqueueGitHubPhase(tx, ticket, body.Phase, h.BaseURL)
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, body.Phase, h.BaseURL)
 	})
 	if errors.Is(txErr, errNotOwner) {
 		http.Error(w, "ticket not owned by this shem", http.StatusConflict)
@@ -430,8 +452,13 @@ func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) er
 
 	// The PR check runs for every phase transition, not just ones with a
 	// milestone comment, so it must not sit behind the !ok early return
-	// below. enqueueGitHubPhase receives ticket as it was before this
-	// transition's update, so the new phase is set on a copy first.
+	// below. phase is set on a copy explicitly and unconditionally, rather
+	// than trusting ticket.Phase to already match it: updatePhase's caller
+	// reloads ticket after its own write (so ticket.Phase already agrees),
+	// but actionStart's does not (it passes "unassigned", a phase that can
+	// never satisfy enqueuePRIfReady's ready-for-review check regardless),
+	// and enqueueGitHubPhase must give both callers the same guarantee
+	// rather than depending on which one already agrees.
 	updated := ticket
 	updated.Phase = phase
 	if err := enqueuePRIfReady(tx, updated); err != nil {

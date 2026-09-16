@@ -11,6 +11,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
+	"gorm.io/gorm"
 )
 
 // setupPRTest extends setupTicketTest with the GitHub routes, since
@@ -261,5 +262,132 @@ func TestBranchPushed_UnknownTicket_Conflict(t *testing.T) {
 	code := doBranchPushed(t, mux, "does-not-exist", "pr-shem-missing", "prkeymissing")
 	if code != http.StatusConflict {
 		t.Fatalf("status = %d, want 409", code)
+	}
+}
+
+// TestUpdatePhaseRace_ConcurrentBranchPushed_StillQueuesOnePR is fix round 1's
+// regression test for a Critical the review found: updatePhase used to read
+// the ticket via a plain, pre-transaction h.DB.First and hand that snapshot
+// to enqueueGitHubPhase. If a branch-pushed call fully committed in the gap
+// between that read and updatePhase's own transaction, the phase transition
+// decided the PR precondition from a stale BranchPushed=false snapshot and
+// declined — leaving the row with phase=ready-for-review AND
+// branch_pushed=true (both preconditions genuinely true) but zero pr rows,
+// permanently: reconcile.go never calls CreatePullRequest, so nothing ever
+// recovers a PR lost this way. That is the inverse of the duplicate-PR
+// failure the shared idempotency key guards against, and sequential-ordering
+// tests (TestPRQueuedWhenBothConditionsHold) cannot see it, because nothing
+// there ever hands enqueueGitHubPhase a snapshot that outlives a concurrent
+// write.
+//
+// The interleaving is reproduced deterministically — not via goroutines or
+// sleeps, which would make this flaky — by hooking GORM's query callback
+// chain: the hook fires exactly once, immediately after the FIRST
+// non-transactional read of this exact ticket by ID, and injects a full,
+// committed POST .../branch-pushed call right there. That is precisely "a
+// concurrent write commits in the gap between the pre-transaction read and
+// the transaction that uses it." The hook deliberately never fires for a
+// read taken *inside* an already-open transaction (guarded via the
+// gorm.TxCommitter type assertion on Statement.ConnPool): no SQL backend
+// lets a second writer commit against a row while a transaction already
+// holds it, so injecting a competing write from inside one would simply
+// deadlock (the outer transaction can never reach Commit while blocked
+// inside its own callback, waiting on a lock it itself holds) — and, once
+// the fix is applied, that in-transaction reload is the ONLY ticket read
+// updatePhase performs, so the vulnerable, lock-free read this test targets
+// no longer exists at all. When the hook never fires (fix in place), the
+// test falls back to calling branch-pushed itself right after the phase
+// update returns — ordinary sequential completion of both operations, which
+// the fixed code already handles correctly (see TestPRQueuedWhenBothConditionsHold).
+//
+// Verified failing against the pre-fix code (this test was written and run
+// before the fix below existed): prs = 0, "pr rows = 0, want exactly 1 once
+// both preconditions are true" — reproducing the exact zero-PR defect the
+// review reported, via the hook path (fired = true), not the fallback.
+func TestUpdatePhaseRace_ConcurrentBranchPushed_StillQueuesOnePR(t *testing.T) {
+	h, mux := setupPRTest(t)
+	shem := seedShem(t, h, "race-shem", "racekey")
+
+	n := 11
+	ticket := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo",
+		Title:        "Race regression",
+		Branch:       "ticket/race-t1",
+		BaseBranch:   "main",
+		Description:  "d",
+		Phase:        "implement",
+		AssignedShem: &shem.ID,
+		IssueNumber:  &n,
+	}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatalf("seed ticket: %v", err)
+	}
+
+	var fired bool
+	const hookName = "pr_race_test:inject_branch_pushed"
+	if err := h.DB.Callback().Query().After("gorm:query").Register(hookName, func(tx *gorm.DB) {
+		if fired {
+			return
+		}
+		dest, ok := tx.Statement.Dest.(*db.Ticket)
+		if !ok || dest.ID != ticket.ID {
+			return
+		}
+		// A read taken inside an already-open transaction must never be
+		// intercepted here: injecting a competing write from inside it
+		// would deadlock against the very transaction we are nested in (no
+		// backend allows a second writer to commit against a locked row,
+		// and this transaction cannot reach Commit while blocked in its
+		// own callback). Post-fix, updatePhase's only ticket read is
+		// exactly such an in-transaction reload, so this guard is also
+		// what makes the hook correctly never fire once the bug is fixed.
+		if _, inTx := tx.Statement.ConnPool.(gorm.TxCommitter); inTx {
+			return
+		}
+		fired = true
+		if code := doBranchPushed(t, mux, ticket.ID, "race-shem", "racekey"); code != http.StatusNoContent {
+			t.Fatalf("injected branch-pushed status = %d", code)
+		}
+	}); err != nil {
+		t.Fatalf("register race hook: %v", err)
+	}
+	defer func() {
+		if err := h.DB.Callback().Query().Remove(hookName); err != nil {
+			t.Logf("remove race hook: %v", err)
+		}
+	}()
+
+	if code := doPhaseUpdateTo(t, mux, ticket.ID, "race-shem", "racekey", "ready-for-review"); code != http.StatusNoContent {
+		t.Fatalf("phase status = %d", code)
+	}
+	if !fired {
+		// The vulnerable pre-transaction read is gone (the fix is in
+		// place): perform the second operation now, exactly as a real
+		// branch-pushed call arriving right after the phase transition
+		// would.
+		if code := doBranchPushed(t, mux, ticket.ID, "race-shem", "racekey"); code != http.StatusNoContent {
+			t.Fatalf("push status = %d", code)
+		}
+	}
+	// Disarm now, before the verification reads below: they also match a
+	// *db.Ticket lookup by this ID, and left armed the hook would treat
+	// the very first one as "the" targeted read and inject a third,
+	// unwanted branch-pushed call.
+	if err := h.DB.Callback().Query().Remove(hookName); err != nil {
+		t.Fatalf("remove race hook: %v", err)
+	}
+
+	var final db.Ticket
+	if err := h.DB.First(&final, "id = ?", ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if final.Phase != "ready-for-review" || !final.BranchPushed {
+		t.Fatalf("both preconditions must be true: phase=%q branch_pushed=%v", final.Phase, final.BranchPushed)
+	}
+
+	var prs int64
+	h.DB.Model(&db.GitHubOutbox{}).Where("kind = ?", ghsync.KindPR).Count(&prs)
+	if prs != 1 {
+		t.Errorf("pr rows = %d, want exactly 1 once both preconditions are true", prs)
 	}
 }
