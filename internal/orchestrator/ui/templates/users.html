@@ -1,0 +1,96 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Users</h1>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error mb-4">
+  <span class="iconify" data-icon="heroicons:x-circle"></span>
+  {{.Error}}
+</div>
+{{end}}
+
+<div class="card bg-base-100 shadow-sm mb-6 max-w-2xl">
+  <div class="card-body">
+    <h2 class="card-title text-base">Add a user</h2>
+    <form method="POST" action="/users" class="flex flex-col gap-4">
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Username</span>
+        </label>
+        <input type="text" name="username" class="input input-bordered" required
+               placeholder="jane">
+      </div>
+
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Password</span>
+          <span class="label-text-alt text-base-content/50">At least 8 characters</span>
+        </label>
+        <input type="password" name="password" class="input input-bordered" required
+               minlength="8">
+      </div>
+
+      <div class="form-control">
+        <label class="label">
+          <span class="label-text font-medium">Role</span>
+        </label>
+        <select name="role" class="select select-bordered">
+          {{range .Roles}}<option value="{{.}}">{{.}}</option>{{end}}
+        </select>
+      </div>
+
+      <div class="flex gap-2 mt-2">
+        <button type="submit" class="btn btn-primary gap-1.5">
+          <span class="iconify" data-icon="heroicons:user-plus"></span>
+          Add User
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Username</th>
+            <th>Role</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Users}}
+          <tr>
+            <td class="font-medium">{{.Username}}</td>
+            <td>
+              <form method="POST" action="/users/{{.ID}}/role" class="flex gap-2 items-center">
+                {{$cur := .Role}}
+                <select name="role" class="select select-sm select-bordered">
+                  {{range $.Roles}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
+                </select>
+                <button class="btn btn-sm">Save</button>
+              </form>
+            </td>
+            <td class="text-right">
+              <form method="POST" action="/users/{{.ID}}/delete">
+                <button class="btn btn-sm btn-error btn-outline gap-1.5">
+                  <span class="iconify" data-icon="heroicons:trash"></span>
+                  Delete
+                </button>
+              </form>
+            </td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="3" class="text-center py-12 text-base-content/50">No users.</td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}

@@ -101,6 +101,7 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 		"shems":         "templates/shems.html",
 		"ticket_new":    "templates/ticket_new.html",
 		"ticket_detail": "templates/ticket_detail.html",
+		"users":         "templates/users.html",
 	}
 
 	out := make(map[string]*template.Template, len(pages))
@@ -148,6 +149,10 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
 	mux.Handle("POST /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
 	mux.Handle("GET /tickets/{id}", h.sessionRoute(rbac.PermTicketView, h.ticketDetail))
+	mux.Handle("GET /users", h.sessionRoute(rbac.PermUserManage, h.usersPage))
+	mux.Handle("POST /users", h.sessionRoute(rbac.PermUserManage, h.usersCreate))
+	mux.Handle("POST /users/{id}/role", h.sessionRoute(rbac.PermUserManage, h.usersSetRole))
+	mux.Handle("POST /users/{id}/delete", h.sessionRoute(rbac.PermUserManage, h.usersDelete))
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
 			http.Redirect(w, r, "/dashboard", http.StatusFound)
