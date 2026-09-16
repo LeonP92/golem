@@ -48,6 +48,27 @@ if { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ ! 
   echo "shem: bootstrapped $CLAUDE_JSON for headless auth"
 fi
 
+# --- Git push credential ------------------------------------------------------
+# The shem pushes the ticket branch that the orchestrator's pull request is
+# opened from. That push happens on the shem host, so it needs its own
+# credential — the orchestrator's token never reaches this container by any
+# other route.
+#
+# The helper reads GOLEM_GITHUB_TOKEN from the environment at use time instead
+# of baking it into ~/.gitconfig, so the token is never written to disk and
+# never appears in a `git config --list` dump. Scoped to github.com so it
+# cannot be offered to any other host.
+#
+# Doing nothing when the variable is empty is the supported default: with
+# `no_push: true` in shem.yaml (the shipped setting) there is no push at all,
+# and a host that already has SSH keys or a credential manager keeps using
+# them.
+if [ -n "$GOLEM_GITHUB_TOKEN" ]; then
+  git config --global credential."https://github.com".helper \
+    '!f() { echo username=x-access-token; echo "password=$GOLEM_GITHUB_TOKEN"; }; f'
+  echo "shem: configured github.com push credential from GOLEM_GITHUB_TOKEN"
+fi
+
 # --- Workspace trust ----------------------------------------------------------
 # Pre-accept the Claude Code workspace trust dialog for every repo the shem
 # will work on.  Without this, Claude Code ignores the project's allow-list
