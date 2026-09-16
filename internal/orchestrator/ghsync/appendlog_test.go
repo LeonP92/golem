@@ -37,8 +37,8 @@ func TestAppendLogSurfacesItsSequenceQueryFailure(t *testing.T) {
 		ID: "t1", RepoRemote: repo.RepoRemote, Title: "t", Branch: "b",
 		BaseBranch: "main", Description: "approved body", Phase: "unassigned",
 		IssueNumber: intPtr(7), IntakeApproved: true,
-		ApprovedBodyHash: ghsync.HashBody("approved body"),
-		BodyHash:         ghsync.HashBody("approved body"),
+		ApprovedBodyHash: ghsync.HashDescription("approved body"),
+		BodyHash:         ghsync.HashDescription("approved body"),
 	}
 	if err := gdb.Create(&tk).Error; err != nil {
 		t.Fatalf("seed ticket: %v", err)

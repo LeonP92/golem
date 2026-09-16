@@ -31,7 +31,7 @@ func TestTicketDetailSubmitsTheHashItRendered(t *testing.T) {
 	ticket := db.Ticket{
 		ID: "reviewed-hash-ticket", RepoRemote: "https://github.com/org/repo",
 		Title: "t", Branch: "ticket/x", Description: description,
-		BodyHash: ghsync.HashBody(description), Phase: "pending-approval",
+		BodyHash: ghsync.HashDescription(description), Phase: "pending-approval",
 		IssueNumber: &number, IssueURL: "https://github.com/org/repo/issues/11",
 	}
 	if err := gdb.Create(&ticket).Error; err != nil {
@@ -69,7 +69,7 @@ func TestTicketDetailSubmitsTheHashItRendered(t *testing.T) {
 	// hx-vals sits in a single-quoted attribute, so html/template leaves the
 	// JSON's own double quotes alone and escapes only the interpolated value
 	// — which for a hex hash is a no-op.
-	want := `"reviewed_body_hash":"` + ghsync.HashBody(description) + `"`
+	want := `"reviewed_body_hash":"` + ghsync.HashDescription(description) + `"`
 	if !strings.Contains(body, want) {
 		t.Errorf("approval control does not submit the hash of the description it rendered; want %s", want)
 	}

@@ -231,7 +231,7 @@ func TestReconcileNeverTouchesIntakeGateFields(t *testing.T) {
 	}
 	repo := newRepo(t, gdb)
 
-	bodyHash := ghsync.HashBody("some body")
+	bodyHash := ghsync.HashDescription("some body")
 	tk := db.Ticket{
 		ID: "t1", RepoRemote: "https://github.com/org/repo",
 		Title: "t", Branch: "ticket/t-t1", BaseBranch: "main",

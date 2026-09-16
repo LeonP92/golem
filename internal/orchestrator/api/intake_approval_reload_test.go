@@ -72,7 +72,7 @@ func TestActionStartChecksTheReviewedHashInsideItsOwnTransaction(t *testing.T) {
 	number := 61
 	ticket := db.Ticket{
 		RepoRemote: "https://github.com/org/repo", Title: "t", Branch: "b",
-		Description: "old text", BodyHash: ghsync.HashBody("old text"),
+		Description: "old text", BodyHash: ghsync.HashDescription("old text"),
 		Phase: "pending-approval", IssueNumber: &number,
 	}
 	if err := h.DB.Create(&ticket).Error; err != nil {
@@ -85,7 +85,7 @@ func TestActionStartChecksTheReviewedHashInsideItsOwnTransaction(t *testing.T) {
 	interleaveOnceAfterTicketRead(t, h.DB, func(gdb *gorm.DB) {
 		gdb.Model(&db.Ticket{}).Where("id = ?", ticket.ID).Updates(map[string]any{
 			"description": "new text",
-			"body_hash":   ghsync.HashBody("new text"),
+			"body_hash":   ghsync.HashDescription("new text"),
 		})
 	})
 
@@ -113,7 +113,7 @@ func TestActionStartChecksTheReviewedHashInsideItsOwnTransaction(t *testing.T) {
 	// body_hash is owned by ingest alone. actionStart must never write it:
 	// stamping both hashes from one read is what would make new, unreviewed
 	// text claimable.
-	if got.BodyHash != ghsync.HashBody("new text") {
+	if got.BodyHash != ghsync.HashDescription("new text") {
 		t.Errorf("body_hash = %q, want the ingest-written hash of %q — actionStart must not write body_hash",
 			got.BodyHash, "new text")
 	}
@@ -124,7 +124,7 @@ func TestActionStartChecksTheReviewedHashInsideItsOwnTransaction(t *testing.T) {
 	// Recovery is a reload, and the approval it produces leaves the ticket
 	// genuinely claimable — the liveness half of I5.
 	body, _ = json.Marshal(map[string]string{
-		"action": "start", "reviewed_body_hash": ghsync.HashBody("new text"),
+		"action": "start", "reviewed_body_hash": ghsync.HashDescription("new text"),
 	})
 	req = httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/actions", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")

@@ -139,8 +139,8 @@ func TestReviseClaimRefusesPostApprovalEditWhileRevising(t *testing.T) {
 		t.Fatalf("setup: expected still revising/approved after poll (not yanked), got phase=%q intake_approved=%v",
 			afterPoll.Phase, afterPoll.IntakeApproved)
 	}
-	if afterPoll.Description != maliciousBody {
-		t.Fatalf("setup: description = %q, want the edited body", afterPoll.Description)
+	if want := (github.Issue{Title: "t", Body: maliciousBody}).TicketDescription(); afterPoll.Description != want {
+		t.Fatalf("setup: description = %q, want the edited text %q", afterPoll.Description, want)
 	}
 	if afterPoll.ApprovedBodyHash == afterPoll.BodyHash {
 		t.Fatalf("setup: approved_body_hash still matches body_hash; the edit did not register as unapproved")
@@ -261,7 +261,7 @@ func TestReviseClaimStillSucceedsApprovedUneditedGitHubTicket(t *testing.T) {
 	if err := json.Unmarshal(reviseW.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.Description != body {
-		t.Errorf("description = %q, want %q", resp.Description, body)
+	if want := (github.Issue{Title: "t", Body: body}).TicketDescription(); resp.Description != want {
+		t.Errorf("description = %q, want %q", resp.Description, want)
 	}
 }

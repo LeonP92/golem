@@ -183,10 +183,16 @@ func (s *Syncer) applyIssue(ctx context.Context, repo *db.GitHubRepo, issue gith
 	// matches approved_body_hash, and it is unclaimable until a human
 	// re-approves. Guarding requeue/reap individually was the same mistake
 	// this task already made three times over; this is the structural fix.
-	bodyHash := HashBody(issue.Body)
+	// description and bodyHash are computed together, from the same value, so
+	// the BodyHash == HashDescription(Description) invariant cannot drift:
+	// see HashDescription. The description is title+body
+	// (Issue.TicketDescription), which is also what the CLI stores, so an
+	// agent sees the title and the hash covers it.
+	description := issue.TicketDescription()
+	bodyHash := HashDescription(description)
 	updates := map[string]any{
 		"title":       issue.Title,
-		"description": issue.Body,
+		"description": description,
 		"issue_url":   issue.HTMLURL,
 		"body_hash":   bodyHash,
 	}
@@ -298,14 +304,19 @@ func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo,
 	}
 	id := uuid.NewString()
 	number := issue.Number
+	// Computed once and hashed from that same value, so the
+	// BodyHash == HashDescription(Description) invariant holds by
+	// construction here exactly as it does in applyIssue. See
+	// HashDescription for why the hash has to cover the title.
+	description := issue.TicketDescription()
 	ticket := db.Ticket{
 		ID:          id,
 		RepoRemote:  repo.RepoRemote,
 		BaseBranch:  base,
 		Title:       issue.Title,
 		Branch:      slug.Branch(issue.Title, id),
-		Description: issue.Body,
-		BodyHash:    HashBody(issue.Body),
+		Description: description,
+		BodyHash:    HashDescription(description),
 		// Externally-sourced tickets are NOT claimable on arrival. The issue
 		// body is authored by anyone who can open an issue in this repo, and it
 		// is interpolated into the agent prompts that drive brainstorm, plan,

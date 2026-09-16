@@ -113,9 +113,17 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, revie
 		// that is on the ticket now (spec Amendment 1 fix round 4):
 		// ghsync.applyIssue re-gates (clears intake_approved and this hash,
 		// and returns the ticket to pending-approval) if a later poll finds
-		// the live issue body no longer hashes to what was approved here,
-		// for any ticket that has not yet been claimed.
-		approvedHash := ghsync.HashBody(fresh.Description)
+		// the live issue no longer hashes to what was approved here, for any
+		// ticket that has not yet been claimed.
+		//
+		// "Description" is the COMPOSED issue text — title, blank line, body
+		// (github.Issue.TicketDescription) — and ghsync writes body_hash over
+		// exactly those same bytes, which is what makes the comparison below
+		// meaningful rather than accidental. It matters that the title is in
+		// there: it is interpolated into the agent prompts along with the
+		// rest, so a hash that skipped it would let an edited title through
+		// unread. See ghsync.HashDescription.
+		approvedHash := ghsync.HashDescription(fresh.Description)
 
 		// ...and reviewedBodyHash binds it to the text the operator was
 		// actually SHOWN (fix round 1c). Round 1b closed the window between
@@ -132,11 +140,14 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, revie
 		//
 		// Both comparisons are required. reviewedBodyHash == fresh.BodyHash
 		// is the actual check. approvedHash == fresh.BodyHash additionally
-		// refuses to approve a row whose two ghsync-written columns
-		// disagree — a state nothing produces today, but one where a silent
-		// 204 would strand the ticket unclaimable with no recovery (the S5
-		// shape). Failing loudly here means an approval that returns 204 has
-		// always left the ticket genuinely claimable.
+		// refuses to approve a row whose description and body_hash disagree —
+		// i.e. one where ghsync's invariant BodyHash ==
+		// HashDescription(Description) has been broken by some write site.
+		// Nothing produces that state today, and an mid-upgrade row that did
+		// (empty body_hash, the S5 shape) would otherwise get a silent 204
+		// and be stranded unclaimable with no recovery. Failing loudly here
+		// means an approval that returns 204 has always left the ticket
+		// genuinely claimable.
 		//
 		// This check is deliberately after the UPDATE above rather than
 		// before it: the row is only held against concurrent writers once

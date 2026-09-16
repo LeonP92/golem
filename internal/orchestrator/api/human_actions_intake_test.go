@@ -78,7 +78,7 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 			// still exercises the guard it was written for rather than
 			// stopping at the reviewed-hash check.
 			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
-				BodyHash: ghsync.HashBody("d"),
+				BodyHash: ghsync.HashDescription("d"),
 				Phase:    tt.phase, IssueNumber: tt.issueNumber, IntakeApproved: tt.intakeApproved,
 				AssignedShem: tt.assignedShem}
 			h.DB.Create(&ticket)
@@ -124,7 +124,7 @@ func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
 
 	n := 7
 	ticket := db.Ticket{RepoRemote: "https://github.com/org/repo", Branch: "b",
-		Description: "d", BodyHash: ghsync.HashBody("d"),
+		Description: "d", BodyHash: ghsync.HashDescription("d"),
 		Phase: "pending-approval", IssueNumber: &n}
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		t.Fatalf("seed ticket: %v", err)

@@ -99,7 +99,7 @@ func TestIssueSyncPullsTitleAndBodyPreservingOtherFields(t *testing.T) {
 }
 
 // TestFromIssueThenSyncLeavesDescriptionUnchanged pins the property that was
-// broken before combineIssueDescription existed: creating a ticket from an
+// broken before one shared composition existed: creating a ticket from an
 // issue, then immediately syncing it against that same, unchanged issue,
 // must be a no-op on the description. Previously --from-issue set the
 // description to the title alone while IssueSync overwrote it with the body
@@ -133,25 +133,6 @@ func TestFromIssueThenSyncLeavesDescriptionUnchanged(t *testing.T) {
 	}
 	if got.Description != desc {
 		t.Errorf("description changed on sync of an unchanged issue: got %q, want unchanged %q", got.Description, desc)
-	}
-}
-
-func TestCombineIssueDescription(t *testing.T) {
-	tests := []struct {
-		name  string
-		title string
-		body  string
-		want  string
-	}{
-		{"empty body uses title alone", "Fix the bug", "", "Fix the bug"},
-		{"title and body joined by a blank line", "Fix the bug", "Steps to reproduce", "Fix the bug\n\nSteps to reproduce"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := combineIssueDescription(tt.title, tt.body); got != tt.want {
-				t.Errorf("combineIssueDescription(%q, %q) = %q, want %q", tt.title, tt.body, got, tt.want)
-			}
-		})
 	}
 }
 

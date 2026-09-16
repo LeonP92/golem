@@ -128,8 +128,8 @@ func TestPostApprovalIssueEditRegatesUnclaimedTicket(t *testing.T) {
 	if got.ApprovedBodyHash != "" {
 		t.Errorf("approved_body_hash = %q, want cleared", got.ApprovedBodyHash)
 	}
-	if got.Description != maliciousBody {
-		t.Errorf("description = %q, want the new (source-of-truth) body", got.Description)
+	if want := (github.Issue{Title: "Add rate limiting", Body: maliciousBody}).TicketDescription(); got.Description != want {
+		t.Errorf("description = %q, want the new (source-of-truth) text %q", got.Description, want)
 	}
 
 	// The property that actually matters: absent from the real available
@@ -252,8 +252,9 @@ func TestPostApprovalIssueEditDoesNotYankClaimedTicket(t *testing.T) {
 	if got.AssignedShem == nil || *got.AssignedShem != shem.ID {
 		t.Error("assigned_shem cleared or changed, want unchanged")
 	}
-	if got.Description != editedBody {
-		t.Errorf("description = %q, want the new body — GitHub is still the source of truth for it", got.Description)
+	if want := (github.Issue{Title: "Add rate limiting", Body: editedBody}).TicketDescription(); got.Description != want {
+		t.Errorf("description = %q, want the new text %q — GitHub is still the source of truth for it",
+			got.Description, want)
 	}
 
 	var logs []db.LogEntry
@@ -349,8 +350,8 @@ func TestApprovedTicketEditedAfterClaimNotReclaimableViaRequeue(t *testing.T) {
 		t.Fatalf("setup: expected still claimed/approved after poll (not yanked), got phase=%q intake_approved=%v",
 			afterPoll.Phase, afterPoll.IntakeApproved)
 	}
-	if afterPoll.Description != maliciousBody {
-		t.Fatalf("setup: description = %q, want the edited body", afterPoll.Description)
+	if want := (github.Issue{Title: "t", Body: maliciousBody}).TicketDescription(); afterPoll.Description != want {
+		t.Fatalf("setup: description = %q, want the edited text %q", afterPoll.Description, want)
 	}
 
 	// requeue: a human clicks Re-queue — a routine, single-click action,

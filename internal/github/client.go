@@ -24,6 +24,33 @@ type Issue struct {
 	Labels    []string
 }
 
+// TicketDescription builds the ticket description for this issue: the title,
+// a blank line, then the body — or the title alone when the body is empty.
+//
+// It lives on Issue, in this package, because it is the SINGLE definition of
+// "what text does this issue become". Both paths that turn an issue into a
+// ticket — internal/cli (--from-issue and issue sync) and
+// internal/orchestrator/ghsync (ingest) — call it, so the two cannot produce
+// different bytes from the same issue. They did before: the CLI combined
+// title and body while ingest stored the body alone, which meant an
+// orchestrator agent was never shown the issue title at all, and an issue
+// whose title says everything and whose body is empty became a ticket with an
+// empty description and an agent with an empty task.
+//
+// It takes no arguments precisely so a caller cannot pass title and body in
+// the wrong order, or pass one issue's title with another's body.
+//
+// The composed text is what the approval gate hashes. See
+// ghsync.HashDescription: every byte of untrusted issue text that can reach an
+// agent prompt has to be covered by that hash, and after this method the title
+// is such a byte.
+func (i Issue) TicketDescription() string {
+	if i.Body == "" {
+		return i.Title
+	}
+	return i.Title + "\n\n" + i.Body
+}
+
 // HasLabel reports whether the issue carries the named label.
 func (i Issue) HasLabel(name string) bool {
 	for _, l := range i.Labels {

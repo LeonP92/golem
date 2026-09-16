@@ -49,8 +49,17 @@ func (r BackfillResult) String() string {
 //
 // WHAT IT WRITES, AND WHAT IT MUST NEVER WRITE. body_hash and nothing else.
 // body_hash is ghsync's column: it is the record of what the live issue
-// currently says, and this repair restores the value ingest would have
-// written, computed with the same ghsync.HashBody over the same stored text.
+// currently says, and this repair restores the invariant every other site
+// maintains —
+//
+//	BodyHash == ghsync.HashDescription(Description)
+//
+// — using that same function over that row's own stored description. It must
+// keep using exactly that function over exactly those bytes. Hashing anything
+// else (the issue body alone, say, as an earlier revision of the description
+// format did) would write a value the gate then compares against and rejects,
+// stranding the very rows this exists to rescue.
+//
 // intake_approved and approved_body_hash belong to actionStart alone and are
 // never touched here — writing either would let this tool approve text no
 // human read. For the same reason this must never be wired into actionStart:
@@ -60,6 +69,15 @@ func (r BackfillResult) String() string {
 // Rows that already carry a body_hash are skipped, never recomputed: a
 // non-empty value came from ingest and is the truth about the live issue,
 // while ticket.Description is only Golem's copy of it.
+//
+// A NOTE ON THE DESCRIPTION FORMAT. A row written by a mid-upgrade build
+// holds a body-only description, because the title was not composed into it
+// yet. This repair hashes that stored text as it stands, which is the right
+// thing: it matches the approved_body_hash the operator's approval left
+// behind, so the ticket becomes claimable again immediately. The next poll
+// then re-composes the description with the title and re-hashes it, which
+// re-gates the ticket for one re-read like every other linked ticket in the
+// deployment. Both steps are correct and the order does not matter.
 //
 // Safe to run repeatedly, and safe to run while the orchestrator is up: each
 // row is updated under the same "still empty" condition it was selected by,
@@ -81,7 +99,7 @@ func BackfillBodyHash(gdb *gorm.DB, dryRun bool) (BackfillResult, error) {
 		}
 		result := gdb.Model(&db.Ticket{}).
 			Where("id = ? AND body_hash = ?", ticket.ID, "").
-			Update("body_hash", ghsync.HashBody(ticket.Description))
+			Update("body_hash", ghsync.HashDescription(ticket.Description))
 		if result.Error != nil {
 			return res, fmt.Errorf("write body_hash for ticket %s: %w", ticket.ID, result.Error)
 		}

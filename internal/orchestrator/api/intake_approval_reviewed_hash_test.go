@@ -45,7 +45,7 @@ func seedPendingTicket(t *testing.T, h *api.Handlers, description string) db.Tic
 	number := int(pendingTicketIssueNumber.Add(1))
 	ticket := db.Ticket{
 		RepoRemote: "https://github.com/org/repo", Title: "t", Branch: "b",
-		Description: description, BodyHash: ghsync.HashBody(description),
+		Description: description, BodyHash: ghsync.HashDescription(description),
 		Phase: "pending-approval", IssueNumber: &number,
 	}
 	if err := h.DB.Create(&ticket).Error; err != nil {
@@ -62,7 +62,7 @@ func ingestCommits(t *testing.T, h *api.Handlers, ticketID, newBody string) {
 	if err := h.DB.Model(&db.Ticket{}).Where("id = ?", ticketID).
 		Updates(map[string]any{
 			"description": newBody,
-			"body_hash":   ghsync.HashBody(newBody),
+			"body_hash":   ghsync.HashDescription(newBody),
 		}).Error; err != nil {
 		t.Fatalf("simulate ingest: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestStartRefusesTextTheOperatorNeverSaw(t *testing.T) {
 		t.Error("ticket is claimable after a refused approval")
 	}
 	// body_hash is ghsync's alone; a refused approval must not have touched it.
-	if got.BodyHash != ghsync.HashBody(edited) {
+	if got.BodyHash != ghsync.HashDescription(edited) {
 		t.Errorf("body_hash = %q, want the ingest-written hash of the edited text", got.BodyHash)
 	}
 	var labels int64
@@ -148,7 +148,7 @@ func TestStartRefusesTextTheOperatorNeverSaw(t *testing.T) {
 
 	// Recovery is a reload: the operator re-reads the new text and approves
 	// that. No GitHub edit, no database surgery.
-	if w := startRequest(t, mux, cookie, ticket.ID, ghsync.HashBody(edited)); w.Code != http.StatusNoContent {
+	if w := startRequest(t, mux, cookie, ticket.ID, ghsync.HashDescription(edited)); w.Code != http.StatusNoContent {
 		t.Fatalf("re-approval after reload = %d, want 204: %s", w.Code, w.Body.String())
 	}
 	if err := h.DB.First(&got, "id = ?", ticket.ID).Error; err != nil {
@@ -217,7 +217,7 @@ func TestStartRejectsAMissingOrWrongReviewedHash(t *testing.T) {
 		},
 		{
 			name:     "a hash of some other text",
-			hashFor:  func(string) string { return ghsync.HashBody("text that was never on this ticket") },
+			hashFor:  func(string) string { return ghsync.HashDescription("text that was never on this ticket") },
 			wantCode: http.StatusConflict,
 		},
 		{

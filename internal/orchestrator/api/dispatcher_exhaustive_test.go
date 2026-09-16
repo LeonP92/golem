@@ -191,7 +191,7 @@ func TestEveryDispatcherActionOnPendingApprovalTicket(t *testing.T) {
 			// 409 on "start" regardless of phase, which is exercised
 			// separately in TestStartActionReleasesPendingApprovalTicket.
 			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d",
-				BodyHash: ghsync.HashBody("d"),
+				BodyHash: ghsync.HashDescription("d"),
 				Phase:    "pending-approval", IssueNumber: &n}
 			if err := h.DB.Create(&ticket).Error; err != nil {
 				t.Fatalf("seed ticket: %v", err)
@@ -220,7 +220,7 @@ func TestEveryDispatcherActionOnPendingApprovalTicket(t *testing.T) {
 				// case testing what it is here to test — whether "start"
 				// may release a pending-approval ticket — rather than
 				// stopping at a 400.
-				body["reviewed_body_hash"] = ghsync.HashBody("d")
+				body["reviewed_body_hash"] = ghsync.HashDescription("d")
 			}
 
 			raw, err := json.Marshal(body)

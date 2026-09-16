@@ -56,8 +56,10 @@ func TestIngestNeverOverwritesGolemOwnedFields(t *testing.T) {
 			seed: func(tk *db.Ticket, _ uint) {
 				tk.Phase = "unassigned"
 				tk.IntakeApproved = true
-				tk.ApprovedBodyHash = ghsync.HashBody("edited body")
-				tk.BodyHash = ghsync.HashBody("edited body")
+				// The composed description for this case's issue, so the
+				// poll below genuinely finds nothing changed.
+				tk.ApprovedBodyHash = ghsync.HashDescription("edited title\n\nedited body")
+				tk.BodyHash = ghsync.HashDescription("edited title\n\nedited body")
 			},
 			issue: github.Issue{
 				Number: 7, Title: "edited title", Body: "edited body", State: "open",
@@ -70,8 +72,8 @@ func TestIngestNeverOverwritesGolemOwnedFields(t *testing.T) {
 			seed: func(tk *db.Ticket, _ uint) {
 				tk.Phase = "unassigned"
 				tk.IntakeApproved = true
-				tk.ApprovedBodyHash = ghsync.HashBody("approved body")
-				tk.BodyHash = ghsync.HashBody("approved body")
+				tk.ApprovedBodyHash = ghsync.HashDescription("t\n\napproved body")
+				tk.BodyHash = ghsync.HashDescription("t\n\napproved body")
 			},
 			issue: github.Issue{
 				Number: 7, Title: "t", Body: "edited body", State: "open",
@@ -85,8 +87,8 @@ func TestIngestNeverOverwritesGolemOwnedFields(t *testing.T) {
 				tk.Phase = "implement"
 				tk.AssignedShem = &shemID
 				tk.IntakeApproved = true
-				tk.ApprovedBodyHash = ghsync.HashBody("approved body")
-				tk.BodyHash = ghsync.HashBody("approved body")
+				tk.ApprovedBodyHash = ghsync.HashDescription("t\n\napproved body")
+				tk.BodyHash = ghsync.HashDescription("t\n\napproved body")
 			},
 			issue: github.Issue{
 				Number: 7, Title: "t", Body: "edited body", State: "open",
@@ -168,13 +170,18 @@ func TestIngestNeverOverwritesGolemOwnedFields(t *testing.T) {
 			}
 
 			// The fields GitHub genuinely owns must have moved, or the test
-			// above would pass on an ingest that did nothing at all.
-			if got.Description != tc.issue.Body {
-				t.Errorf("description = %q, want %q — ingest must sync the issue body",
-					got.Description, tc.issue.Body)
+			// above would pass on an ingest that did nothing at all. The
+			// description is the COMPOSED title+body, which is what the CLI
+			// stores too and what an agent is shown.
+			if got.Description != tc.issue.TicketDescription() {
+				t.Errorf("description = %q, want %q — ingest must sync the composed issue text",
+					got.Description, tc.issue.TicketDescription())
 			}
-			if got.BodyHash != ghsync.HashBody(tc.issue.Body) {
-				t.Errorf("body_hash = %q, want the hash of the synced body", got.BodyHash)
+			// The gate's invariant, asserted against the row as stored rather
+			// than against what the test thinks was stored.
+			if got.BodyHash != ghsync.HashDescription(got.Description) {
+				t.Errorf("body_hash does not hash this row's own description; " +
+					"the approval gate compares the two and would refuse every approval")
 			}
 		})
 	}

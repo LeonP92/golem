@@ -71,11 +71,15 @@ type Ticket struct {
 	// otherwise reach a shem under an approval that was never given for
 	// that text. ghsync.applyIssue re-gates (clears both fields, moves the
 	// ticket back to pending-approval) when this no longer matches an
-	// unclaimed ticket's incoming issue body.
+	// unclaimed ticket's incoming issue text.
 	ApprovedBodyHash string `gorm:"not null;default:''" json:"approved_body_hash"`
 	// BodyHash is the hex-encoded SHA-256 hash of the CURRENT Description,
 	// written everywhere Description is written (createTicketFromIssue and
-	// ghsync.applyIssue) — fix round 5. The claim-adjacent predicates in
+	// ghsync.applyIssue) — fix round 5. The name is historical: Description
+	// is the issue's title AND body composed together
+	// (github.Issue.TicketDescription), and this hashes all of it, because
+	// every byte of it reaches an agent prompt. See ghsync.HashDescription.
+	// The claim-adjacent predicates in
 	// api/tickets.go (ClaimTicket, availableTickets, resumableTickets)
 	// require ApprovedBodyHash = BodyHash, not merely IntakeApproved: a
 	// ticket that is claimed while approved deliberately keeps

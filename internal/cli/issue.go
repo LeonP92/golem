@@ -42,7 +42,7 @@ func IssueList(gh github.Client, cfg *config.Config, out io.Writer) error {
 }
 
 // IssueSync pulls the linked issue's current title and body onto the ticket:
-// the ticket description is overwritten with the combined title and body
+// the ticket description is overwritten with github.Issue.TicketDescription()
 // (GitHub is the source of truth) and issue_url is refreshed. All other
 // state.json fields are preserved because this loads and saves through
 // ticket.State rather than editing raw JSON.
@@ -66,7 +66,7 @@ func IssueSync(gh github.Client, cfg *config.Config, ticketDir string) error {
 	if err != nil {
 		return fmt.Errorf("fetching issue #%d: %w", s.IssueNumber, err)
 	}
-	s.Description = combineIssueDescription(issue.Title, issue.Body)
+	s.Description = issue.TicketDescription()
 	s.IssueURL = issue.HTMLURL
 	if err := s.Save(ticketDir); err != nil {
 		return fmt.Errorf("saving ticket state: %w", err)
@@ -79,11 +79,13 @@ func IssueSync(gh github.Client, cfg *config.Config, ticketDir string) error {
 // so it is testable against github.NewFake() without a real token or
 // network access.
 //
-// description is the combined title and body (see combineIssueDescription) —
-// the same value IssueSync computes — so that syncing a ticket immediately
-// after creating it from the same, unchanged issue is a no-op. The branch
-// name is derived from the ticket ID, not from the issue title or
-// description, so this combination has no effect on branch naming.
+// description is github.Issue.TicketDescription() — the same value IssueSync
+// computes, and the same value the orchestrator's ingest stores — so that
+// syncing a ticket immediately after creating it from the same, unchanged
+// issue is a no-op, and so that the CLI and orchestrator paths produce
+// byte-identical descriptions. The branch name is derived from the ticket ID,
+// not from the issue title or description, so this has no effect on branch
+// naming.
 func resolveFromIssue(gh github.Client, cfg *config.Config, n int) (description string, issueNumber int, issueURL string, err error) {
 	owner, name, err := splitRepo(cfg.GitHub.Repo)
 	if err != nil {
@@ -93,21 +95,7 @@ func resolveFromIssue(gh github.Client, cfg *config.Config, n int) (description 
 	if err != nil {
 		return "", 0, "", fmt.Errorf("fetching issue #%d: %w", n, err)
 	}
-	return combineIssueDescription(issue.Title, issue.Body), issue.Number, issue.HTMLURL, nil
-}
-
-// combineIssueDescription builds a ticket description from an issue's title
-// and body: title, a blank line, then the body — or the title alone when the
-// body is empty. Both resolveFromIssue (--from-issue) and IssueSync call
-// this so they cannot drift apart: previously --from-issue set the
-// description to the title while IssueSync overwrote it with the body,
-// so the very first sync after creating a ticket from an issue silently
-// replaced its description instead of leaving it unchanged.
-func combineIssueDescription(title, body string) string {
-	if body == "" {
-		return title
-	}
-	return title + "\n\n" + body
+	return issue.TicketDescription(), issue.Number, issue.HTMLURL, nil
 }
 
 // splitRepo parses an "org/repo" string into its parts.

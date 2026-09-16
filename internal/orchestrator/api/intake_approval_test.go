@@ -233,7 +233,7 @@ func TestStartRecoversTicketStrandedOutsidePendingApproval(t *testing.T) {
 		// (bypassing ghsync), so it must uphold that invariant itself, or
 		// the round-5 claim predicate's approved_body_hash = body_hash
 		// check would never match even after a correct approval.
-		BodyHash:    ghsync.HashBody("d"),
+		BodyHash:    ghsync.HashDescription("d"),
 		Phase:       "pending-approval",
 		IssueNumber: &n,
 	}
