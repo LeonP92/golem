@@ -65,6 +65,32 @@ gate:
 	}
 }
 
+func TestGitHubBlockDefaultsToNoWrite(t *testing.T) {
+	path := writeTempConfig(t, "backend: claude-code\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GitHub.Write {
+		t.Error("GitHub.Write defaults to true; it must default to false so an " +
+			"orchestrator-managed repo has exactly one writer")
+	}
+	if cfg.GitHub.Label != "golem" {
+		t.Errorf("GitHub.Label = %q, want golem", cfg.GitHub.Label)
+	}
+}
+
+func TestGitHubBlockParsed(t *testing.T) {
+	path := writeTempConfig(t, "backend: claude-code\ngithub:\n  repo: org/repo\n  label: agent\n  write: true\n")
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GitHub.Repo != "org/repo" || cfg.GitHub.Label != "agent" || !cfg.GitHub.Write {
+		t.Errorf("GitHub = %+v, want {org/repo agent true}", cfg.GitHub)
+	}
+}
+
 func TestAskAndWaitTimeoutForUnknownBackendFails(t *testing.T) {
 	path := writeTempConfig(t, `
 backend: claude-code

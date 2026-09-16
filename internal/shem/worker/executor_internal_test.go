@@ -11,6 +11,7 @@ import (
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/ticket"
 	"github.com/leonp92/golem/internal/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 // TestBuildRevisePrompt verifies the revise prompt embeds the ticket ID,
@@ -30,6 +31,168 @@ func TestBuildRevisePrompt(t *testing.T) {
 	}
 	if strings.Contains(prompt, "Plan: .golem/tickets") {
 		t.Error("revise prompt must not restate the plan like buildImplementPrompt does")
+	}
+}
+
+// TestSetGitHubWrite_PreservesOtherKeys verifies setGitHubWrite only ever
+// touches github.write, never dropping or reordering-into-loss any other
+// top-level or nested config key — a regression here would silently wipe a
+// user's gate.commands or role_models the next time the shem preflights
+// their repo.
+func TestSetGitHubWrite_PreservesOtherKeys(t *testing.T) {
+	tests := []struct {
+		name       string
+		initial    string
+		write      bool
+		wantWrite  bool
+		wantRepo   string // expected github.repo after the call, "" if absent
+		wantGate   int    // expected len(gate.commands)
+		wantModels int    // expected len(role_models)
+	}{
+		{
+			name: "no github block yet",
+			initial: `backend: claude-code
+gate:
+  commands:
+    - "go build ./..."
+    - "go test ./..."
+role_models:
+  developer: claude-sonnet-5
+`,
+			write:      false,
+			wantWrite:  false,
+			wantGate:   2,
+			wantModels: 1,
+		},
+		{
+			name: "existing github block with a repo set",
+			initial: `backend: claude-code
+gate:
+  commands:
+    - "go vet ./..."
+github:
+  repo: org/repo
+  label: golem
+  write: true
+role_models:
+  developer: claude-sonnet-5
+  reviewer: claude-opus-5
+`,
+			write:      false,
+			wantWrite:  false,
+			wantRepo:   "org/repo",
+			wantGate:   1,
+			wantModels: 2,
+		},
+		{
+			name: "flipping write true on a repo with no other keys",
+			initial: `backend: claude-code
+`,
+			write:     true,
+			wantWrite: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.initial), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
+
+			if err := setGitHubWrite(path, tt.write); err != nil {
+				t.Fatalf("setGitHubWrite: %v", err)
+			}
+
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("ReadFile: %v", err)
+			}
+			var doc map[string]any
+			if err := yaml.Unmarshal(data, &doc); err != nil {
+				t.Fatalf("yaml.Unmarshal result: %v\n%s", err, data)
+			}
+
+			if doc["backend"] != "claude-code" {
+				t.Errorf("backend not preserved: %+v", doc)
+			}
+
+			gh, _ := doc["github"].(map[string]any)
+			if gh == nil {
+				t.Fatalf("expected a github block after setGitHubWrite, got: %+v", doc)
+			}
+			if gh["write"] != tt.wantWrite {
+				t.Errorf("github.write = %v, want %v", gh["write"], tt.wantWrite)
+			}
+			if tt.wantRepo != "" && gh["repo"] != tt.wantRepo {
+				t.Errorf("github.repo = %v, want %v (must be preserved)", gh["repo"], tt.wantRepo)
+			}
+
+			if tt.wantGate > 0 {
+				gate, _ := doc["gate"].(map[string]any)
+				commands, _ := gate["commands"].([]any)
+				if len(commands) != tt.wantGate {
+					t.Errorf("gate.commands = %v, want %d entries preserved", commands, tt.wantGate)
+				}
+			}
+			if tt.wantModels > 0 {
+				models, _ := doc["role_models"].(map[string]any)
+				if len(models) != tt.wantModels {
+					t.Errorf("role_models = %v, want %d entries preserved", models, tt.wantModels)
+				}
+			}
+		})
+	}
+}
+
+// TestEnsureRepoReady_PinsGitHubWriteFalse verifies the two-writer guard end
+// to end through ensureRepoReady: even if the later graph build/update steps
+// fail (there is no "golem" binary on PATH in this test environment),
+// setGitHubWrite must already have run and flipped a pre-existing
+// github.write: true back to false, because this repo is orchestrator-
+// managed once the shem is preflighting it.
+func TestEnsureRepoReady_PinsGitHubWriteFalse(t *testing.T) {
+	repoPath := t.TempDir()
+	golemDir := filepath.Join(repoPath, ".golem")
+	if err := os.MkdirAll(golemDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(golemDir, "config.yaml")
+	initial := "backend: claude-code\ngithub:\n  write: true\n  repo: org/repo\ngate:\n  commands: []\n"
+	if err := os.WriteFile(configPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// The graph build/update steps that follow setGitHubWrite may fail here
+	// (no "golem" binary on PATH) — that is fine; we only assert on what
+	// setGitHubWrite already wrote to disk before that point.
+	_ = ensureRepoReady(context.Background(), repoPath)
+
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		t.Fatalf("yaml.Unmarshal: %v\n%s", err, data)
+	}
+	gh, _ := doc["github"].(map[string]any)
+	if gh == nil || gh["write"] != false {
+		t.Errorf("github.write = %v, want false after ensureRepoReady pins an orchestrator-managed repo", gh)
+	}
+	if gh["repo"] != "org/repo" {
+		t.Errorf("github.repo = %v, want org/repo preserved", gh["repo"])
+	}
+}
+
+// TestSetGitHubWrite_MissingFileErrors verifies a missing config.yaml is
+// reported rather than silently ignored — ensureRepoReady logs this error
+// and continues, but the error itself must be real and wrapped.
+func TestSetGitHubWrite_MissingFileErrors(t *testing.T) {
+	err := setGitHubWrite(filepath.Join(t.TempDir(), "does-not-exist.yaml"), false)
+	if err == nil {
+		t.Fatal("expected an error for a missing config file, got nil")
 	}
 }
 

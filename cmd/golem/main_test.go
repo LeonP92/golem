@@ -23,3 +23,25 @@ func TestDispatchNoArgs(t *testing.T) {
 		t.Fatalf("expected exit code 1, got %d", code)
 	}
 }
+
+func TestIssueDispatch(t *testing.T) {
+	tests := []struct {
+		name string
+		args []string
+	}{
+		{"no subcommand", []string{}},
+		{"unknown subcommand", []string{"bogus"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			code := issueDispatch(tt.args, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("expected exit code 1, got %d", code)
+			}
+			if stderr.String() == "" {
+				t.Fatal("expected a usage or error message on stderr")
+			}
+		})
+	}
+}

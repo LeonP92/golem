@@ -122,6 +122,30 @@ golem wiki search "rate limiting"
 
 When a human resolves a ticket differently from what a role recommended, Golem notices. At `ticket close`, the reviewer generalises the divergence into a durable heuristic and promotes it to `.golem/wiki/soul/`. Future agents find it via wiki search and apply it automatically.
 
+#### GitHub Issues
+
+`golem issue list` and `golem issue sync` pull issues from a GitHub repo onto local tickets — both are read-only against GitHub, they never create, comment on, or close anything:
+
+```sh
+export GOLEM_GITHUB_TOKEN=ghp_...          # required for all `golem issue` commands
+
+golem issue list                           # open issues carrying the trigger label
+golem issue sync --ticket <id>             # refresh a ticket's description from its linked issue
+
+golem ticket new --from-issue 42 --id t1   # create a ticket from issue #42, using its title as the description
+```
+
+Configure the repo and trigger label in `.golem/config.yaml`:
+
+```yaml
+github:
+  repo: your-org/your-repo   # "org/repo"; required, not inferred from the git remote
+  label: golem                # trigger label for `golem issue list`; defaults to "golem"
+  write: true                 # see "Two-writer guard" below
+```
+
+**Two-writer guard:** `github.write` controls whether this repo is allowed to have the CLI act as a GitHub writer. `golem init` sets it to `true` for standalone use. When a shem (see Orchestrator + Shem below) initialises or preflights a repo it manages, it forces `github.write` back to `false` on every run — an orchestrator-managed repo must have exactly one writer, or the CLI and the orchestrator would post duplicate comments and fight over labels. `golem issue list`, `golem issue sync`, and `golem ticket new --from-issue` do not themselves call any GitHub write endpoint, but a repo's `write` setting reflects which side owns write access going forward.
+
 ### Using with Claude Code
 
 `golem init --backend claude-code` generates subagent definitions in `.claude/agents/` and two slash commands:
@@ -151,6 +175,11 @@ graph:
 
 role_models:
   reviewer: claude-opus-4-7
+
+github:
+  repo: your-org/your-repo
+  label: golem
+  write: true
 ```
 
 ### Commands
@@ -172,6 +201,10 @@ golem graph status                             show stale modules
 
 golem wiki search "<query>"
 golem wiki rebuild
+
+golem issue list                               list open issues carrying the trigger label
+golem issue sync --ticket <id>                 refresh a ticket's description from its linked issue
+golem ticket new --from-issue <n>              create a ticket from a GitHub issue's title
 
 golem observer dispatch --ticket <id> --role <role> --commit <sha>
 golem log emit --ticket <id> --role <role> --type <type> <message>
@@ -222,6 +255,12 @@ Create a ticket from the UI. The shem will pick it up within seconds, run brains
 7. You close the ticket from the UI.
 
 At every step the shem tails the ticket's `log.jsonl` and forwards entries to the orchestrator over HTTP, which fans them out to the browser via SSE.
+
+### GitHub Issues
+
+Configure a repo's GitHub sync from the dashboard at `/settings/github`: set the repo (`org/repo`), the trigger label, and a token. Once configured, the orchestrator polls that repo for issues carrying the trigger label every 15 minutes by default (`github.poll_interval` in `orchestrator.yaml`), ingesting new and updated issues as tickets. Click **Sync now** on the settings page to pull immediately instead of waiting for the next poll.
+
+The orchestrator is the sole GitHub writer for any repo it manages: it posts comments, updates labels, and reflects ticket-state changes back onto the linked issue. This is why the shem forces `github.write: false` in that repo's `.golem/config.yaml` (see "Two-writer guard" under CLI Mode above) — the CLI must stay read-only there so the two systems never race each other on the same issue.
 
 ### Shem Configuration
 

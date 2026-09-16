@@ -15,6 +15,10 @@ import (
 
 var supportedBackends = []string{"claude-code"}
 
+// github.write defaults to true here: a standalone `golem init` repo has no
+// orchestrator, so the CLI is the only possible GitHub writer. The shem
+// flips this to false for any repo it manages (see
+// internal/shem/worker/executor.go's setGitHubWrite) so the two never race.
 const defaultConfigTemplate = `backend: %s
 gate:
   commands: []
@@ -24,6 +28,8 @@ tool_policy:
 ask_and_wait_timeout:
   %s: 5m
 role_models: {}
+github:
+  write: true
 `
 
 const golemGitignore = "index/\ntickets/\n"

@@ -16,6 +16,7 @@ import (
 
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"gopkg.in/yaml.v3"
 )
 
 // GolemExecutor runs tickets phase by phase with human approval gates.
@@ -551,6 +552,15 @@ func ensureRepoReady(ctx context.Context, repoPath string) error {
 		log.Printf("executor: ran golem init in %s", repoPath)
 	}
 
+	// This repo is orchestrator-managed: the orchestrator is the only writer
+	// to GitHub. Two writers would post duplicate comments and fight over
+	// labels. Pin this on every pre-flight (not only right after golem
+	// init) so a config that predates this feature, or one a human edited
+	// by hand, is also brought back in line.
+	if err := setGitHubWrite(configPath, false); err != nil {
+		log.Printf("executor: could not pin github.write=false in %s: %v", configPath, err)
+	}
+
 	indexPath := filepath.Join(repoPath, ".golem", "index")
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
 		out, err := exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath).CombinedOutput()
@@ -570,6 +580,39 @@ func ensureRepoReady(ctx context.Context, repoPath string) error {
 		} else {
 			log.Printf("executor: updated graph in %s", repoPath)
 		}
+	}
+	return nil
+}
+
+// setGitHubWrite rewrites the github.write key in the YAML config at path to
+// write, preserving every other key (gate.commands, role_models, etc.) by
+// round-tripping through a generic map rather than the typed Config struct,
+// which would silently drop any key it doesn't know about.
+func setGitHubWrite(path string, write bool) error {
+	data, err := os.ReadFile(path) //nolint:gosec
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", path, err)
+	}
+	var doc map[string]any
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parsing %s: %w", path, err)
+	}
+	if doc == nil {
+		doc = map[string]any{}
+	}
+	githubBlock, _ := doc["github"].(map[string]any)
+	if githubBlock == nil {
+		githubBlock = map[string]any{}
+	}
+	githubBlock["write"] = write
+	doc["github"] = githubBlock
+
+	out, err := yaml.Marshal(doc)
+	if err != nil {
+		return fmt.Errorf("marshaling %s: %w", path, err)
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil { //nolint:gosec
+		return fmt.Errorf("writing %s: %w", path, err)
 	}
 	return nil
 }

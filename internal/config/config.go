@@ -23,6 +23,18 @@ type GraphConfig struct {
 	ExtraExtensions []string `yaml:"extra_extensions"`
 }
 
+// GitHubConfig configures CLI-mode GitHub access.
+//
+// Write defaults to false. An orchestrator-managed repository must have
+// exactly one writer, or the CLI and the orchestrator will post duplicate
+// comments and fight over labels. `golem init` sets Write true for standalone
+// use; the shem sets it false for repos it manages.
+type GitHubConfig struct {
+	Repo  string `yaml:"repo"`  // "org/repo" (required; not inferred from the git remote)
+	Label string `yaml:"label"` // trigger label, default "golem"
+	Write bool   `yaml:"write"`
+}
+
 type Config struct {
 	Backend           string            `yaml:"backend"`
 	Gate              GateConfig        `yaml:"gate"`
@@ -30,6 +42,7 @@ type Config struct {
 	AskAndWaitTimeout map[string]string `yaml:"ask_and_wait_timeout"`
 	RoleModels        map[string]string `yaml:"role_models"`
 	Graph             GraphConfig       `yaml:"graph"`
+	GitHub            GitHubConfig      `yaml:"github"`
 }
 
 // Load reads and validates a Golem config.yaml. Backend is required —
@@ -46,6 +59,9 @@ func Load(path string) (*Config, error) {
 	}
 	if cfg.Backend == "" {
 		return nil, fmt.Errorf("%s: backend is required", path)
+	}
+	if cfg.GitHub.Label == "" {
+		cfg.GitHub.Label = "golem"
 	}
 	return &cfg, nil
 }
