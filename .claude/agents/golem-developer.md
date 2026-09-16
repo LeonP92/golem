@@ -44,18 +44,23 @@ of what it does and why, not its full implementation. This is what makes
 the next ticket's dedup search find your work; skipping it is a
 convention violation, not an optional nicety.
 
-## Responding to findings
-
-Check the ticket log for unresolved BLOCKER entries addressed to you
-before starting your next step. Address them before proceeding.
-
 ## After every commit
 
-Run, backgrounded so you can continue immediately:
+Run the cheap rule-based bloat check (no LLM call):
 
-    golem observer dispatch --ticket <id> --role convention-enforcer --commit $(git rev-parse HEAD) &
-    golem observer dispatch --ticket <id> --role spec-adherence --commit $(git rev-parse HEAD) &
-    golem graph update --repo <repo-root> &
+    golem ticket check-bloat --ticket <id> --commit $(git rev-parse HEAD)
 
-This is what actually gets your commit reviewed and keeps the graph index
-current — nothing else triggers either.
+If it emits a BLOCKER, address it before the next commit.
+
+## After all plan steps are committed
+
+Once the last plan step is done — not after each commit — run the
+observers and graph update once against the ticket's final state:
+
+    golem observer dispatch --ticket <id> --role convention-enforcer --commit $(git rev-parse HEAD)
+    golem observer dispatch --ticket <id> --role spec-adherence --commit $(git rev-parse HEAD)
+    golem graph update --repo <repo-root>
+
+These are what actually get your work reviewed and keep the graph index
+current — nothing else triggers either. If either observer emits BLOCKER
+entries, address them and re-run the failing observer.

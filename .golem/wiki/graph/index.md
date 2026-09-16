@@ -4,13 +4,9 @@
 
 ### [internal/agentrunner](modules/internal_agentrunner.md)
 
-This module abstracts the execution of one-shot AI agent invocations behind a Runner interface, enabling the orchestration core to dispatch role prompts without coupling to a specific backend. It provides a ClaudeCode adapter that shells out to the `claude` CLI, a Mock adapter for test-time scripting, a BuildPrompt function that wraps role prompts and context data in injection-resistant delimiters, and artifact generators that project neutral role files into Claude Code subagent definitions (.claude/agents/*.md), a merged .claude/settings.json permission allow/deny list, and slash-command skill files (new-ticket, tickets).
+This module abstracts the execution of one-shot AI agent invocations behind a Runner interface, enabling the orchestration core to dispatch role prompts without coupling to a specific backend. It provides a ClaudeCode adapter that shells out to the `claude` CLI and generates Claude Code projection artifacts (subagent definitions under .claude/agents, a merged .claude/settings.json permission allow/deny list, and slash-command skill files for new-ticket and tickets workflows), a Mock adapter for scripting deterministic test responses, and a BuildPrompt function that wraps role prompts and log/diff context in explicit data-not-instruction delimiters to raise the bar against prompt injection from log or diff content.
 
 ## api
-
-### [internal/orchestrator/api](modules/internal_orchestrator_api.md)
-
-This module implements the HTTP API layer for the Golem orchestrator server, exposing REST endpoints consumed by both Shem agents (authenticated via API key) and human operators (authenticated via session cookie). It is organized into route groups: ticket lifecycle management (create, list, get, claim, revise-claim, phase/checkpoint updates), Shem registration and WebSocket upgrade, log ingestion and SSE streaming, and human-input CRUD plus a unified ticket action dispatcher that handles approve, requeue, close, needs-attention, request-changes (including a review-time revising transition), and answer actions. The Handlers struct is the central dependency carrier holding a GORM database handle, a WebSocket hub for pushing real-time messages to connected Shems, an SSE broker for streaming log events to browser clients, and an optional HTML renderer for log entries. Ticket claiming and phase/checkpoint updates enforce ownership preconditions atomically via conditional row updates, and most state transitions fan out notifications to relevant Shems via WebSocket broadcast or push.
 
 ### [internal/orchestrator/server](modules/internal_orchestrator_server.md)
 
@@ -44,7 +40,7 @@ This is the main entry point for the golem CLI binary. It owns the top-level com
 
 ### [internal/cli](modules/internal_cli.md)
 
-The cli module is the command layer of Golem, exposing every user-facing subcommand as a top-level Go function that accepts parsed flag arguments and io.Writer streams for stdout/stderr, returning an integer exit code. Each command function loads configuration and ticket state, delegates all domain logic to internal packages (ticket, blog, graph, soul, wiki, workspace, observer, gate, askwait, agentrunner), and wires results back to the caller. The module owns no business logic itself; its role is pure orchestration — selecting backends, sequencing cross-package calls, and surfacing errors.
+The cli module is the command layer of Golem, exposing every user-facing subcommand as a top-level Go function that accepts parsed flag arguments and io.Writer streams for stdout/stderr, returning an integer exit code. Each command function loads configuration and ticket state, delegates all domain logic to internal packages (ticket, blog, graph, soul, wiki, workspace, observer, gate, askwait, agentrunner), and wires results back to the caller. It also implements the code-graph build/update/query subcommands, running structural tree-sitter extraction alongside cached LLM summarization to produce and maintain the wiki graph index. The module owns no business logic itself; its role is pure orchestration — selecting backends, sequencing cross-package calls, and surfacing errors.
 
 ## config
 
@@ -70,12 +66,6 @@ The askwait module implements a question-and-answer coordination protocol over t
 
 This module provides the HTTP and WebSocket client layer that a shem (worker node) uses to communicate with the Golem orchestrator server. The HTTP client wraps all REST API calls behind a retry-on-5xx policy with exponential back-off, covering shem registration/deregistration, ticket claiming (including resuming revising-phase tickets via revise-claim), phase and checkpoint updates, structured log posting, document file streaming, and human-input polling and acknowledgement. The WebSocket client establishes a push channel to receive real-time orchestrator events, maintains connection liveness via periodic heartbeat pings, and dispatches decoded messages to a caller-supplied handler.
 
-## e2e
-
-### [internal/e2e](modules/internal_e2e.md)
-
-End-to-end test suite that validates the full Golem ticket lifecycle from three angles: a unit-level integration test exercising the Go API directly with a mock agent backend, a binary-level test that builds the real golem executable and runs CLI commands against a temporary git repository, and an orchestrator test that exercises concurrent ticket claiming, heartbeat-based shem recovery, and SSE log forwarding using an in-memory SQLite database. The module exists to catch regressions that only surface when all subsystems are wired together, covering workspace creation, ticket persistence, observer dispatch, blog log correctness, and orchestrator coordination primitives.
-
 ## gate
 
 ### [internal/gate](modules/internal_gate.md)
@@ -87,6 +77,12 @@ The gate module executes a configured sequence of shell commands against a worki
 ### [internal/graph](modules/internal_graph.md)
 
 The graph package implements codebase indexing by discovering source files, parsing structured LLM-generated module descriptions, persisting metadata and edges, and writing human-readable wiki documents. It exists to build and maintain a navigable knowledge graph of the repository so that tools and agents can query module relationships, exports, and summaries without re-reading source files from scratch. The package combines tree-sitter-based structural extraction (imports, exported functions and types) across Go, Python, TypeScript, JavaScript, Rust, and Java with an LLM cache backed by atomic JSON persistence to avoid redundant API calls when file contents are unchanged.
+
+## misc
+
+### [internal/orchestrator/api](modules/internal_orchestrator_api.md)
+
+
 
 ## observer
 
@@ -106,7 +102,7 @@ This is the entry point for the shem worker binary — a lightweight agent proce
 
 ### [internal/shem/worker](modules/internal_shem_worker.md)
 
-The worker module implements the Golem shem (agent daemon) execution layer. It contains three cooperating components: a Worker that polls the orchestrator for available tickets, claims them with concurrency control, and dispatches them via a pluggable Executor interface; a GolemExecutor that drives each ticket through brainstorm → plan → implement phases (and a revising phase for post-review feedback) by invoking `claude --print` sessions, posting checkpoints and approval requests to the orchestrator, and tailing the ticket log for real-time forwarding; and a RecoverTicket subsystem that reconstructs local ticket state from a ClaimResponse checkpoint so that shem restarts can resume mid-flight tickets without data loss.
+The worker module implements the Golem shem (agent daemon) execution layer. It contains a Worker that polls the orchestrator for available tickets, claims them with concurrency control, and dispatches them via a pluggable Executor interface; a GolemExecutor that drives each ticket through brainstorm → plan → implement phases (and a revising phase for post-review feedback) by invoking `claude --print` sessions, posting checkpoints and approval requests to the orchestrator, and tailing the ticket log for real-time forwarding; a RecoverTicket subsystem that reconstructs local ticket state from a ClaimResponse checkpoint so shem restarts can resume mid-flight tickets; and a checkpoint helper that wraps client checkpoint posting with configurable retry attempts.
 
 ## orchestrator
 
@@ -140,9 +136,19 @@ The soul module identifies moments where a human overrode a role's blocker with 
 
 ### [internal/orchestrator/db](modules/internal_orchestrator_db.md)
 
-This module provides database connectivity and schema management for the orchestrator server. It exposes a single Open function that selects between PostgreSQL and SQLite drivers based on the DSN prefix, runs GORM AutoMigrate to create or update all model tables, and enables WAL journal mode for SQLite to allow concurrent access. The models it defines — User, Session, Shem, Ticket, LogEntry, and HumanInput — represent the full persistent state of the orchestrator: web UI users and their sessions, registered Shem worker agents, work tickets and their lifecycle phase, structured log entries produced by Shems, and human-input requests that block ticket progress pending operator response.
+This module provides database connectivity and schema management for the orchestrator server. It exposes a single Open function that selects between PostgreSQL and SQLite drivers based on the DSN prefix, runs GORM AutoMigrate to create or update all model tables, and enables WAL journal mode for SQLite to allow concurrent access from multiple processes. The models it defines — User, Session, Shem, Ticket, LogEntry, and HumanInput — represent the full persistent state of the orchestrator: web UI users and their sessions, registered Shem worker agents and the repos they manage, work tickets and their lifecycle phase/checkpoint, structured log entries produced by Shems, and human-input requests that block ticket progress pending operator response. It exists as the single storage layer shared by the API, admin, auth, and UI subsystems.
+
+## testing
+
+### [internal/e2e](modules/internal_e2e.md)
+
+End-to-end test suite that validates the full Golem ticket lifecycle from three angles: a unit-level integration test exercising the Go API directly with a mock agent backend, a binary-level test that builds the real golem executable and runs CLI commands against a temporary git repository, and an orchestrator test that exercises concurrent ticket claiming, heartbeat-based shem recovery, and SSE log forwarding using an in-memory SQLite database. The module exists to catch regressions that only surface when all subsystems are wired together, covering workspace creation, ticket persistence, observer dispatch, blog log correctness, and orchestrator coordination primitives.
 
 ## ticket
+
+### [internal/slug](modules/internal_slug.md)
+
+The slug module converts free-text ticket titles into filesystem- and git-safe strings for use in branch names. It provides a Slug function that lowercases input, collapses non-alphanumeric runs into single hyphens, trims edge hyphens, truncates to 40 characters, and falls back to "untitled" for empty results, plus a Branch function that composes a full ticket branch name from a title and ticket ID using the pattern ticket/<slug>-<id[:8]>.
 
 ### [internal/ticket](modules/internal_ticket.md)
 
@@ -170,5 +176,5 @@ This module implements a TF-IDF vector search index over wiki documents (markdow
 
 ### [internal/workspace](modules/internal_workspace.md)
 
-The workspace module manages Git worktrees for Golem tickets. It provides two operations: creating an isolated worktree and branch for a given ticket ID at a deterministic path under .golem/tickets/, and removing that worktree and branch when the ticket is done. The module shells out to git directly and is tolerant of already-absent worktrees or branches during removal.
+The workspace module manages Git worktrees for Golem tickets, providing an isolated filesystem checkout and branch per ticket so agents can work concurrently without interfering with the main repository state. It shells out directly to the git CLI to create a worktree at a deterministic path under .golem/tickets/<ticketID>/worktree keyed to a branch and base SHA, and to remove that worktree and its branch once the ticket is done, tolerating cases where the worktree or branch has already been removed.
 
