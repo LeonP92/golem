@@ -320,6 +320,18 @@ func (e *githubTestEnv) doPhase(t *testing.T, ticketID, phase string) int {
 	return w.Code
 }
 
+// doClaim POSTs a ticket claim attempt through the real HTTP endpoint
+// (shem-authenticated) and returns the status code.
+func (e *githubTestEnv) doClaim(t *testing.T, ticketID string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticketID+"/claim", nil)
+	req.Header.Set("Authorization", "Bearer "+e.apiKey)
+	req.Header.Set("X-Shem-Name", e.shem.Name)
+	w := httptest.NewRecorder()
+	e.mux.ServeHTTP(w, req)
+	return w.Code
+}
+
 // doBranchPushed POSTs the branch-pushed callback (shem-authenticated).
 func (e *githubTestEnv) doBranchPushed(t *testing.T, ticketID string) int {
 	t.Helper()
@@ -378,6 +390,24 @@ func TestGitHubIssueToTicketToComment(t *testing.T) {
 	}
 
 	env := newGitHubTestEnv(t, gdb)
+
+	// The gate must actually refuse a claim before a human releases the
+	// ticket — asserted through the real claim endpoint, not by reading the
+	// phase column. Going through the gate later without ever trying to go
+	// around it here would not distinguish an enforced gate from one that
+	// merely sets a phase nobody checks.
+	if code := env.doClaim(t, ticket.ID); code != http.StatusConflict {
+		t.Fatalf("claim before start status = %d, want 409 — a pending-approval "+
+			"ticket must not be claimable", code)
+	}
+	var stillGated db.Ticket
+	if err := gdb.First(&stillGated, "id = ?", ticket.ID).Error; err != nil {
+		t.Fatalf("reload ticket: %v", err)
+	}
+	if stillGated.Phase != "pending-approval" || stillGated.AssignedShem != nil {
+		t.Fatalf("ticket mutated by a refused claim: phase=%q assigned_shem=%v",
+			stillGated.Phase, stillGated.AssignedShem)
+	}
 
 	// A human releases the ticket through the real HTTP action dispatcher —
 	// the only writer of IntakeApproved.
