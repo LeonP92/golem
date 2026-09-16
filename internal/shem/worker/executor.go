@@ -478,16 +478,18 @@ Instructions:
    a. Set the step: golem ticket set-step --ticket %s --expected-lines <n>
    b. Implement changes in the worktree directory.
    c. Commit at each logical unit (use git -C .golem/tickets/%s/worktree or cd into it).
-   d. After each commit: golem ticket check-bloat
-   e. Run golem observer dispatch calls per .golem/roles/developer.md
-   f. Check .golem/tickets/%s/log.jsonl for unresolved BLOCKERs before continuing.
-4. When all steps are complete: golem ticket review --ticket %s
+   d. After each commit: golem ticket check-bloat (cheap, no LLM). Address any BLOCKER before the next commit.
+4. After the LAST plan-step commit — not per commit — run the observers
+   and graph update ONCE against the ticket's final state, per
+   .golem/roles/developer.md. If either observer emits BLOCKER entries,
+   address them and re-run the failing observer.
+5. When observers pass: golem ticket review --ticket %s
 
 STOP after the review. Do NOT run golem ticket close.
 A human will review the work in the orchestrator UI and close the ticket.`,
 		ticketID, description,
 		ticketID, ticketID, ticketID, ticketID,
-		ticketID, ticketID, ticketID, ticketID, ticketID)
+		ticketID, ticketID, ticketID, ticketID)
 }
 
 // buildRevisePrompt returns the prompt for a revise session: the ticket
@@ -514,16 +516,18 @@ Instructions:
 1. Read .golem/roles/developer.md and follow the developer identity precisely.
 2. Address every point in the feedback above. Commit at each logical unit
    (use git -C .golem/tickets/%s/worktree or cd into it).
-3. After each commit: golem ticket check-bloat
-4. Run golem observer dispatch calls per .golem/roles/developer.md
-5. Check .golem/tickets/%s/log.jsonl for unresolved BLOCKERs before continuing.
-6. When the feedback is fully addressed: golem ticket review --ticket %s
+3. After each commit: golem ticket check-bloat (cheap, no LLM). Address any BLOCKER before the next commit.
+4. After the LAST commit — not per commit — run the observers and graph
+   update ONCE against the ticket's final state, per
+   .golem/roles/developer.md. If either observer emits BLOCKER entries,
+   address them and re-run the failing observer.
+5. When observers pass: golem ticket review --ticket %s
 
 STOP after the review. Do NOT run golem ticket close.
 A human will review the new changes in the orchestrator UI.`,
 		ticketID, description, ticketID, ticketID,
 		feedback,
-		ticketID, ticketID, ticketID)
+		ticketID, ticketID)
 }
 
 // ensureRepoReady verifies the repo has a .golem setup and a code graph.

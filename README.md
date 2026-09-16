@@ -74,13 +74,13 @@ Four roles ship by default. Each is a markdown prompt in `.golem/roles/` — own
 | Role | When it runs | What it checks |
 |---|---|---|
 | `developer` | During implement | Writes code following YAGNI/KISS identity |
-| `convention-enforcer` | After every commit | Naming, structure, project patterns |
-| `spec-adherence` | After every commit | Scope creep, plan alignment |
+| `convention-enforcer` | After the last plan-step commit | Naming, structure, project patterns |
+| `spec-adherence` | After the last plan-step commit | Scope creep, plan alignment |
 | `reviewer` | At `ticket review` | Full attestation across all categories |
 
 #### Observer
 
-The observer dispatches watcher roles after commits. You call it manually, keeping control of when checks fire:
+The observer dispatches watcher roles once at the end of implementation (after the last plan step is committed), not per commit. You call it manually, keeping control of when checks fire:
 
 ```sh
 golem observer dispatch --ticket <id> --role convention-enforcer --commit $(git rev-parse HEAD)

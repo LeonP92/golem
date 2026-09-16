@@ -16,13 +16,15 @@ Given a one-line description of what to build:
 6. Execute each plan step: before starting, run
    `golem ticket set-step --ticket <id> --expected-lines <n>`; commit
    at each small logical unit; after every commit, run
-   `golem ticket check-bloat` and the two `golem observer dispatch`
-   calls from `.golem/roles/developer.md`; check the log for
-   unresolved BLOCKERs before continuing.
-7. When all steps are done, run
+   `golem ticket check-bloat` (rule-based, no LLM call).
+7. Once the last plan step is committed, run the two
+   `golem observer dispatch` calls and `golem graph update` per
+   `.golem/roles/developer.md`. If either observer emits a BLOCKER,
+   address it and re-run the failing observer.
+8. When observers pass, run
    `golem ticket review --ticket <id>` and report the result to the
    human.
-8. Once the human approves the reviewed work, run
+9. Once the human approves the reviewed work, run
    `golem ticket close --ticket <id>` — this promotes any
    generalized soul entries the reviewer proposed and tears down the
    worktree.
