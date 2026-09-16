@@ -291,10 +291,27 @@ func (h *Handlers) claimTicket(w http.ResponseWriter, r *http.Request) {
 // ReviseClaim resumes a ticket already assigned to shemID that is in the
 // revising phase. Unlike ClaimTicket it does not change phase or
 // assigned_shem — the ticket is already owned by this shem.
+//
+// The approval clause matches resumableTickets' posture (Task 20): a ticket
+// can sit in ready-for-review for hours or days awaiting a human, visible on
+// GitHub the whole time via the golem:ready-for-review label mirror. If the
+// issue is edited during that window and the routine human
+// "request-changes" action moves the ticket to revising, ghsync.applyIssue
+// refreshes Description/BodyHash but — because the ticket is still
+// assigned — deliberately does not yank phase or IntakeApproved back to
+// pending-approval (the running shem may be mid-run). Without this clause,
+// revise-claim would serve that edited, never-reviewed text straight into
+// buildRevisePrompt with no race required. Requiring
+// approved_body_hash = body_hash here means approval means "a human
+// approved THIS text", checked at the point revise-claim actually hands the
+// description to a shem; a mismatch simply refuses the resume and leaves a
+// human to re-approve, exactly as resumableTickets does.
 func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, error) {
 	var ticket db.Ticket
 	result := h.DB.
-		Where("id = ? AND phase = 'revising' AND assigned_shem = ?", ticketID, shemID).
+		Where("id = ? AND phase = 'revising' AND assigned_shem = ? AND "+
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash = body_hash))",
+			ticketID, shemID).
 		First(&ticket)
 	if result.Error != nil {
 		return nil, fmt.Errorf("ticket not available for revision")
