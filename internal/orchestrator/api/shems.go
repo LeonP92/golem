@@ -30,6 +30,13 @@ type Handlers struct {
 	Sync SyncTrigger
 	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
 	ManualSyncCooldown time.Duration
+	// GitHubTokenEnv is the NAME of the environment variable the GitHub token
+	// is read from — config.github.token_env, which a deployment may rename.
+	// It is used only to tell an operator which variable to set when sync is
+	// not running; the value is never read here. Empty falls back to the
+	// documented default, so a handler built without wiring still gives an
+	// answer that is right for almost every deployment.
+	GitHubTokenEnv string
 }
 
 // NewHandlers creates a Handlers with the given dependencies.

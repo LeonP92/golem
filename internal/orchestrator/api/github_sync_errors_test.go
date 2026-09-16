@@ -103,6 +103,51 @@ func TestManualSyncFailuresAreJSON(t *testing.T) {
 	}
 }
 
+// TestManualSyncNamesTheConfiguredTokenVariable: github.token_env is
+// configurable, so a deployment that renamed it must not be told to set
+// GOLEM_GITHUB_TOKEN, which nothing would read.
+func TestManualSyncNamesTheConfiguredTokenVariable(t *testing.T) {
+	tests := []struct {
+		name     string
+		tokenEnv string
+		want     string
+	}{
+		{name: "renamed variable is named", tokenEnv: "ACME_GH_PAT", want: "ACME_GH_PAT"},
+		{name: "unwired falls back to the documented default", tokenEnv: "", want: "GOLEM_GITHUB_TOKEN"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h, mux := setupGitHubSyncTest(t)
+			h.GitHubTokenEnv = tc.tokenEnv // h.Sync stays nil: sync is not running
+			h.ManualSyncCooldown = time.Minute
+			_, cookie := seedSessionUser(t, h.DB, "sync-admin")
+			repo := seedSyncRepo(t, h, true, nil)
+
+			req := httptest.NewRequest(http.MethodPost, syncURL(repo.ID), nil)
+			withSession(req, cookie)
+			rec := httptest.NewRecorder()
+			mux.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusServiceUnavailable {
+				t.Fatalf("status = %d, want 503: %s", rec.Code, rec.Body.String())
+			}
+			var body struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !strings.Contains(body.Error, tc.want) {
+				t.Errorf("error = %q, want it to name %q", body.Error, tc.want)
+			}
+			if tc.tokenEnv != "" && strings.Contains(body.Error, "GOLEM_GITHUB_TOKEN") {
+				t.Errorf("error names GOLEM_GITHUB_TOKEN on a deployment that renamed it: %q", body.Error)
+			}
+		})
+	}
+}
+
 // TestManualSyncInvalidIDIsJSON covers the one refusal that never reaches a
 // repo lookup.
 func TestManualSyncInvalidIDIsJSON(t *testing.T) {

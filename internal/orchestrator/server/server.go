@@ -33,6 +33,10 @@ type Server struct {
 	// cmd/orchestrator/main.go, which validates it; an unset or otherwise
 	// unrecognized value is treated as "enforce" by CSPMiddleware.
 	CSPMode string
+	// GitHubTokenEnv is the name of the environment variable the GitHub token
+	// is read from, passed through to the handlers so a refusal can name the
+	// variable this deployment actually uses.
+	GitHubTokenEnv string
 }
 
 // New creates a Server with the given dependencies. baseURL is the
@@ -57,6 +61,7 @@ func (s *Server) Routes() http.Handler {
 	h.BaseURL = s.BaseURL
 	h.Sync = s.Sync
 	h.ManualSyncCooldown = s.ManualSyncCooldown
+	h.GitHubTokenEnv = s.GitHubTokenEnv
 	h.LogEntryHTML = ui.MakeLogEntryRenderer(tmpls)
 	h.RegisterShemRoutes(mux)
 	h.RegisterTicketRoutes(mux)

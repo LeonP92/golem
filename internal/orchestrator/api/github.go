@@ -30,6 +30,11 @@ type SyncTrigger interface {
 // endpoint (a held-down button could exhaust the hourly GitHub rate limit).
 const defaultManualSyncCooldown = time.Minute
 
+// defaultGitHubTokenEnv mirrors config.defaultTokenEnv. It is only ever used
+// to name the variable in an error message when Handlers.GitHubTokenEnv was
+// not wired; the token itself is never read in this package.
+const defaultGitHubTokenEnv = "GOLEM_GITHUB_TOKEN"
+
 // RegisterGitHubRoutes adds GitHub integration routes to mux. Manual sync is
 // session-authenticated only: it is a deliberate human action, and a shem
 // holding a valid API key must not be able to drive GitHub polling.
@@ -85,11 +90,14 @@ func (h *Handlers) manualSync(w http.ResponseWriter, r *http.Request) {
 	// After the cold-start fix in cmd/orchestrator (githubSyncPlan), the
 	// worker is built whenever a token is present, so the remaining causes of
 	// a nil Sync are an unset token or a client that failed to initialise —
-	// both fixed at startup, neither fixable from this page. Say so.
+	// both fixed at startup, neither fixable from this page. Say so, naming
+	// the variable THIS deployment reads: github.token_env is configurable,
+	// and an operator who renamed it would otherwise be sent to set a
+	// variable nothing looks at.
 	if h.Sync == nil {
 		writeJSONError(w, http.StatusServiceUnavailable,
-			"GitHub sync is not running on this orchestrator — GOLEM_GITHUB_TOKEN "+
-				"was unset or invalid at startup; set it and restart")
+			"GitHub sync is not running on this orchestrator — "+h.githubTokenEnv()+
+				" was unset or invalid at startup; set it and restart")
 		return
 	}
 
@@ -197,6 +205,18 @@ func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(body) //nolint:errcheck
+}
+
+// githubTokenEnv is the name of the environment variable this deployment
+// reads the GitHub token from. The fallback matters: a Handlers built without
+// the field wired (tests, or a future caller that forgets) must still name the
+// variable that is right for every deployment that did not rename it, rather
+// than producing a message with a blank where the name should be.
+func (h *Handlers) githubTokenEnv() string {
+	if h.GitHubTokenEnv == "" {
+		return defaultGitHubTokenEnv
+	}
+	return h.GitHubTokenEnv
 }
 
 // writeJSONError answers a refusal in the one shape a fetch() caller can
