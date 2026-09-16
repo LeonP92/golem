@@ -382,6 +382,15 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 
 	// The close transition and its GitHub close-issue write commit together,
 	// so a close can never be recorded without its follow-up queued.
+	//
+	// The issue-linkage decision below is made from a row re-read inside
+	// this transaction, not from the pre-transaction read above (fix round
+	// 1b, minor m11 — the same defect class as I5). Ingest does not
+	// currently link an already-existing ticket to an issue, so no writer
+	// moves issue_number from NULL to non-NULL today, but deciding a
+	// follow-up write from a snapshot this transaction has already
+	// superseded is the pattern that produced I5, and it is applied
+	// family-wide here rather than left as the one remaining instance.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase != 'closed'", id).
@@ -392,7 +401,11 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		if result.RowsAffected == 0 {
 			return errAlreadyClosed
 		}
-		if ticket.IssueNumber == nil {
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		if fresh.IssueNumber == nil {
 			return nil
 		}
 		if err := ghsync.Enqueue(tx, db.GitHubOutbox{
@@ -478,13 +491,6 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 	// The release transition and its GitHub label write commit together, so a
 	// release can never be recorded without its follow-up queued.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
-		// approvedHash binds this approval to the exact description text a
-		// human is reviewing right now (spec Amendment 1 fix round 4):
-		// ghsync.applyIssue re-gates (clears intake_approved and this hash,
-		// and returns the ticket to pending-approval) if a later poll finds
-		// the live issue body no longer hashes to what was approved here,
-		// for any ticket that has not yet been claimed.
-		approvedHash := ghsync.HashBody(ticket.Description)
 		// assigned_shem IS NULL closes a fix-round-4 double-claim (round 5):
 		// the provenance-based guard below checks intake_approved, not
 		// claim status, so without this a ticket that is claimed and
@@ -500,9 +506,8 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 			Where("id = ? AND issue_number IS NOT NULL AND intake_approved = false "+
 				"AND phase != 'closed' AND assigned_shem IS NULL", id).
 			Updates(map[string]any{
-				"phase":              "unassigned",
-				"intake_approved":    true,
-				"approved_body_hash": approvedHash,
+				"phase":           "unassigned",
+				"intake_approved": true,
 			})
 		if result.Error != nil {
 			return result.Error
@@ -510,7 +515,45 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 		if result.RowsAffected == 0 {
 			return errNotStartable
 		}
-		return enqueueGitHubPhase(tx, ticket, "unassigned", h.BaseURL)
+		// Reload inside the transaction, after its own write, and hash THAT
+		// Description (fix round 1b, finding I5). The ticket read above was
+		// taken with a plain, pre-transaction h.DB.First, which takes no
+		// lock: a ghsync.applyIssue commit landing in the gap meant the
+		// approval was stamped with approved_body_hash = H(old) while
+		// body_hash had already moved to H(new). The claim predicates
+		// require the two to be equal, so that failed closed — but with no
+		// in-product recovery: the ticket showed as released, a second
+		// start 409ed on intake_approved, and requeue excludes unassigned.
+		// Once this transaction has written the row no other writer can
+		// commit against it until we commit, so this read sees every
+		// committed write plus our own and never anything staler. Same
+		// shape as updatePhase (commit 5aaaa5a) and branchPushed.
+		//
+		// This deliberately does NOT write body_hash, and must never be
+		// "tidied up" to do so. body_hash is ghsync's alone — it is the
+		// record of what the live issue currently says. Stamping both
+		// columns from one read here would make the ticket claimable by
+		// construction no matter what the issue had been edited to, which
+		// is precisely the gate this branch exists to build. Writing only
+		// approved_body_hash keeps the invariant one-directional: approval
+		// can only ever certify text that ingest has already hashed.
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		// approvedHash binds this approval to the exact description text
+		// that is on the ticket now (spec Amendment 1 fix round 4):
+		// ghsync.applyIssue re-gates (clears intake_approved and this hash,
+		// and returns the ticket to pending-approval) if a later poll finds
+		// the live issue body no longer hashes to what was approved here,
+		// for any ticket that has not yet been claimed.
+		approvedHash := ghsync.HashBody(fresh.Description)
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", id).
+			Update("approved_body_hash", approvedHash).Error; err != nil {
+			return fmt.Errorf("record approved body hash for ticket %s: %w", id, err)
+		}
+		fresh.ApprovedBodyHash = approvedHash
+		return enqueueGitHubPhase(tx, fresh, "unassigned", h.BaseURL)
 	})
 	if errors.Is(txErr, errNotStartable) {
 		http.Error(w, "ticket is already approved, already claimed, not linked to a GitHub issue, or closed", http.StatusConflict)
