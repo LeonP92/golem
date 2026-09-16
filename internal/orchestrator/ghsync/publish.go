@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"gorm.io/gorm"
 )
@@ -141,7 +142,11 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 		if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
 			return nil, fmt.Errorf("decode label payload for outbox row %d: %w", row.ID, err)
 		}
-		return nil, s.applyPhaseLabel(ctx, repo, number, p.Phase)
+		issue, err := s.GH.GetIssue(ctx, repo.Owner, repo.Name, number)
+		if err != nil {
+			return nil, fmt.Errorf("load issue %s#%d: %w", repo.RepoRemote, number, err)
+		}
+		return nil, s.applyPhaseLabel(ctx, repo, issue, p.Phase)
 
 	case KindClose:
 		if err := s.GH.SetIssueState(ctx, repo.Owner, repo.Name, number, "closed"); err != nil {
@@ -177,13 +182,16 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 // golem:<phase>. Labels outside the golem:* namespace — including the
 // no-colon opt-in trigger label "golem" itself and any human labels — are
 // left completely untouched.
-func (s *Syncer) applyPhaseLabel(ctx context.Context, repo db.GitHubRepo, number int, phase string) error {
+//
+// issue is the caller's own, already-fetched read of the issue — this never
+// re-fetches it. Both call sites (deliver's KindLabel case, and reconcile)
+// already need a current Issue for other reasons before they decide to call
+// this, and fetching it here too would double the GetIssue cost of every
+// reconcile pass over a non-closed linked ticket for no benefit.
+func (s *Syncer) applyPhaseLabel(ctx context.Context, repo db.GitHubRepo, issue github.Issue, phase string) error {
 	want := PhaseLabelPrefix + phase
+	number := issue.Number
 
-	issue, err := s.GH.GetIssue(ctx, repo.Owner, repo.Name, number)
-	if err != nil {
-		return fmt.Errorf("load issue %s#%d: %w", repo.RepoRemote, number, err)
-	}
 	for _, l := range issue.Labels {
 		if l == want || !strings.HasPrefix(l, PhaseLabelPrefix) {
 			continue

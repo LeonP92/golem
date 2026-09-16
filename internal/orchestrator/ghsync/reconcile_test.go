@@ -118,7 +118,12 @@ func TestReconcileClosesIssueForClosedTicket(t *testing.T) {
 			seedTicketOnly(t, gdb, "closed")
 
 			f := github.NewFake()
-			f.AddIssue(github.Issue{Number: 7, State: tt.initialState, Labels: []string{"golem"}})
+			// golem:plan is a stale phase label left over from before the
+			// ticket closed. A closed ticket enqueues only KindClose, never
+			// a label write (see api/human.go's actionClose), so reconcile
+			// must mirror that and never touch labels on the closed branch.
+			f.AddIssue(github.Issue{Number: 7, State: tt.initialState,
+				Labels: []string{"golem", "golem:plan"}})
 
 			s := ghsync.NewSyncer(gdb, f)
 			if err := s.ReconcileRepo(context.Background(), repo); err != nil {
@@ -128,6 +133,10 @@ func TestReconcileClosesIssueForClosedTicket(t *testing.T) {
 			issue, _ := f.GetIssue(context.Background(), "org", "repo", 7)
 			if issue.State != "closed" {
 				t.Errorf("issue state = %q, want closed", issue.State)
+			}
+			if !issue.HasLabel("golem:plan") || !issue.HasLabel("golem") {
+				t.Errorf("labels = %v, want golem:plan and golem to survive — "+
+					"closing a ticket must never touch labels", issue.Labels)
 			}
 
 			called := false
@@ -399,38 +408,75 @@ END;
 	}
 }
 
-// TestIngestRepoSkipsReconcileOnNotModified confirms a 304 response short
-// circuits before reconcile ever runs — reconcile issues one GetIssue call
-// per linked ticket, and paying that cost on every poll even when GitHub
-// reported nothing changed would defeat the point of the ETag check.
-func TestIngestRepoSkipsReconcileOnNotModified(t *testing.T) {
-	gdb, err := db.Open(":memory:")
-	if err != nil {
-		t.Fatalf("Open: %v", err)
-	}
-	repo := newRepo(t, gdb)
-	cursor := time.Now().Add(-time.Hour).Truncate(time.Second)
-	if err := gdb.Model(repo).Updates(map[string]any{
-		"last_issue_sync": cursor, "etag": "match-me",
-	}).Error; err != nil {
-		t.Fatalf("seed cursor/etag: %v", err)
-	}
-	repo.LastIssueSync = &cursor
-	repo.ETag = "match-me"
-
-	f := github.NewFake()
-	f.ETag = "match-me"
-	f.AddIssue(github.Issue{Number: 7, Title: "t", State: "open",
-		UpdatedAt: time.Now(), Labels: []string{"golem"}})
-
-	s := ghsync.NewSyncer(gdb, f)
-	if err := s.IngestRepo(context.Background(), repo); err != nil {
-		t.Fatalf("IngestRepo: %v", err)
+// TestIngestRepoReconcilesOnNotModifiedOnlyWhenOutboxIsParked confirms a 304
+// response short circuits before reconcile runs in the ordinary case —
+// reconcile issues at least one GetIssue call per linked ticket, and paying
+// that cost on every poll even when GitHub reported nothing changed would
+// defeat the point of the ETag check — but that a parked outbox row (a
+// write that failed MaxAttempts times and never actually reached GitHub, so
+// the issue's updated_at never moved and the poll keeps 304ing forever)
+// still gets reconcile a chance to run, since that is the only remaining
+// way such a row's drift can ever be corrected.
+func TestIngestRepoReconcilesOnNotModifiedOnlyWhenOutboxIsParked(t *testing.T) {
+	tests := []struct {
+		name               string
+		seedParkedRow      bool
+		wantGetIssueCalled bool
+	}{
+		{name: "no parked outbox rows: reconcile is skipped", seedParkedRow: false, wantGetIssueCalled: false},
+		{name: "a parked outbox row: reconcile still runs despite the 304", seedParkedRow: true, wantGetIssueCalled: true},
 	}
 
-	for _, c := range f.CallsSnapshot() {
-		if c == "GetIssue" {
-			t.Error("reconcile ran on a NotModified poll — GetIssue should never be called")
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gdb, err := db.Open(":memory:")
+			if err != nil {
+				t.Fatalf("Open: %v", err)
+			}
+			repo := newRepo(t, gdb)
+			cursor := time.Now().Add(-time.Hour).Truncate(time.Second)
+			if err := gdb.Model(repo).Updates(map[string]any{
+				"last_issue_sync": cursor, "etag": "match-me",
+			}).Error; err != nil {
+				t.Fatalf("seed cursor/etag: %v", err)
+			}
+			repo.LastIssueSync = &cursor
+			repo.ETag = "match-me"
+
+			seedTicketOnly(t, gdb, "implement") // t1 -> issue #7
+
+			if tt.seedParkedRow {
+				row := db.GitHubOutbox{
+					TicketID: "t1", Kind: ghsync.KindLabel,
+					Payload:        `{"phase":"implement"}`,
+					IdempotencyKey: ghsync.LabelKey("t1", "implement"),
+					Attempts:       ghsync.MaxAttempts,
+					NextAttempt:    time.Now().Add(-time.Hour),
+				}
+				if err := gdb.Create(&row).Error; err != nil {
+					t.Fatalf("seed parked outbox row: %v", err)
+				}
+			}
+
+			f := github.NewFake()
+			f.ETag = "match-me"
+			f.AddIssue(github.Issue{Number: 7, Title: "t", State: "open",
+				UpdatedAt: time.Now(), Labels: []string{"golem"}})
+
+			s := ghsync.NewSyncer(gdb, f)
+			if err := s.IngestRepo(context.Background(), repo); err != nil {
+				t.Fatalf("IngestRepo: %v", err)
+			}
+
+			called := false
+			for _, c := range f.CallsSnapshot() {
+				if c == "GetIssue" {
+					called = true
+				}
+			}
+			if called != tt.wantGetIssueCalled {
+				t.Errorf("GetIssue called = %v, want %v", called, tt.wantGetIssueCalled)
+			}
+		})
 	}
 }

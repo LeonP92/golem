@@ -81,8 +81,28 @@ func (s *Syncer) reconcileTicket(ctx context.Context, repo *db.GitHubRepo, ticke
 		return nil
 	}
 
-	if err := s.applyPhaseLabel(ctx, *repo, number, ticket.Phase); err != nil {
+	if err := s.applyPhaseLabel(ctx, *repo, issue, ticket.Phase); err != nil {
 		return fmt.Errorf("apply phase label for issue #%d: %w", number, err)
 	}
 	return nil
+}
+
+// hasParkedOutboxRows reports whether repoRemote has any outbox row parked
+// at MaxAttempts (done_at still NULL — Drain gives up retrying but never
+// marks a parked row done). A parked row never reached GitHub, so it is the
+// one kind of drift a page.NotModified response cannot rule out: the
+// issue's updated_at never moved, so the ETag keeps matching and every
+// later poll keeps getting the same 304 GitHub gave this one. IngestRepo
+// uses this to decide whether reconcile still needs to run despite the 304.
+func (s *Syncer) hasParkedOutboxRows(repoRemote string) (bool, error) {
+	var count int64
+	err := s.DB.Model(&db.GitHubOutbox{}).
+		Joins("JOIN tickets ON tickets.id = git_hub_outboxes.ticket_id").
+		Where("tickets.repo_remote = ? AND git_hub_outboxes.done_at IS NULL AND git_hub_outboxes.attempts >= ?",
+			repoRemote, MaxAttempts).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("count parked outbox rows for %s: %w", repoRemote, err)
+	}
+	return count > 0, nil
 }

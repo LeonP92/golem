@@ -54,6 +54,32 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 		}).Error; err != nil {
 			return fmt.Errorf("record not-modified poll for %s: %w", repo.RepoRemote, err)
 		}
+
+		// A 304 means nothing GitHub-visible changed since the last poll: any
+		// GitHub-side drift (a human edits a label, closes an issue) bumps
+		// the issue's updated_at, which would have broken the ETag — so
+		// skipping reconcile here is safe for that case, and skipping it
+		// also avoids paying one GetIssue call per linked ticket on every
+		// poll of an otherwise-quiet repo.
+		//
+		// The one drift this skip cannot see is Golem-side: an outbox row
+		// (say, a KindLabel write) that failed MaxAttempts times and parked
+		// was never actually applied to GitHub, so the issue's updated_at
+		// never moved, the ETag keeps matching, and every future poll keeps
+		// returning 304 — forever, on a quiet repo, with nothing to break
+		// the loop. Reconcile is the only thing that can still correct that,
+		// so it gets a chance to run anyway when this repo has any parked
+		// row, at the cost of one cheap COUNT query per 304.
+		parked, err := s.hasParkedOutboxRows(repo.RepoRemote)
+		if err != nil {
+			return fmt.Errorf("check parked outbox rows for %s: %w", repo.RepoRemote, err)
+		}
+		if !parked {
+			return nil
+		}
+		if err := s.ReconcileRepo(ctx, repo); err != nil {
+			return fmt.Errorf("reconcile %s: %w", repo.RepoRemote, err)
+		}
 		return nil
 	}
 
@@ -116,8 +142,10 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 	// already-committed row, so a ticket whose own write just failed is
 	// reconciled against its last known-good state, not against anything the
 	// failed write would have changed — there is nothing "half-applied" for
-	// reconcile to see. Rides the slow ingest ticker: drift from downtime, a
-	// parked outbox row, or a hand-edited label self-heals within one cycle.
+	// reconcile to see. Rides the slow ingest ticker: drift from downtime or
+	// a hand-edited label self-heals within one cycle. A parked outbox row
+	// is a separate case — see the page.NotModified branch above for why a
+	// quiet, 304-ing repo needs its own check to still self-heal one.
 	if err := s.ReconcileRepo(ctx, repo); err != nil {
 		return fmt.Errorf("reconcile %s: %w", repo.RepoRemote, err)
 	}
