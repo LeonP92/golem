@@ -36,24 +36,33 @@ type Shem struct {
 
 // Ticket represents a work ticket assigned to a Shem.
 type Ticket struct {
-	ID              string    `gorm:"primaryKey" json:"id"`
-	RepoRemote      string    `gorm:"not null;index;uniqueIndex:idx_repo_issue" json:"repo_remote"`
-	Title           string    `gorm:"not null;default:''" json:"title"`
-	BaseBranch      string    `gorm:"not null;default:'main'" json:"base_branch"`
-	Branch          string    `gorm:"not null" json:"branch"`
-	Description     string    `gorm:"not null" json:"description"`
-	Phase           string    `gorm:"not null;default:'unassigned'" json:"phase"`
-	AssignedShem    *uint     `gorm:"index" json:"assigned_shem"`
-	CreatedByUserID *uint     `gorm:"index" json:"created_by_user_id"`
-	CheckpointPhase *string   `json:"checkpoint_phase"`
-	CheckpointSHA   *string   `json:"checkpoint_sha"`
-	IssueNumber     *int      `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
-	IssueURL        string    `json:"issue_url"`
-	PRNumber        *int      `json:"pr_number"`
-	PRURL           string    `json:"pr_url"`
-	BranchPushed    bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string  `gorm:"primaryKey" json:"id"`
+	RepoRemote      string  `gorm:"not null;index;uniqueIndex:idx_repo_issue" json:"repo_remote"`
+	Title           string  `gorm:"not null;default:''" json:"title"`
+	BaseBranch      string  `gorm:"not null;default:'main'" json:"base_branch"`
+	Branch          string  `gorm:"not null" json:"branch"`
+	Description     string  `gorm:"not null" json:"description"`
+	Phase           string  `gorm:"not null;default:'unassigned'" json:"phase"`
+	AssignedShem    *uint   `gorm:"index" json:"assigned_shem"`
+	CreatedByUserID *uint   `gorm:"index" json:"created_by_user_id"`
+	CheckpointPhase *string `json:"checkpoint_phase"`
+	CheckpointSHA   *string `json:"checkpoint_sha"`
+	IssueNumber     *int    `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
+	IssueURL        string  `json:"issue_url"`
+	// IntakeApproved records that a human released this externally-sourced
+	// ticket from pending-approval via actionStart — the ONLY writer of this
+	// column. It is provenance, not phase: no sequence of phase transitions
+	// (close, needs-attention, requeue, ...) can flip it, so claimability
+	// (spec Amendment 1) is enforced at the claim predicate regardless of
+	// how many phase writers exist now or get added later. Tickets created
+	// through the web form (nil IssueNumber) are unaffected by construction
+	// — see the claim/available predicates in api/tickets.go.
+	IntakeApproved bool      `gorm:"not null;default:false" json:"intake_approved"`
+	PRNumber       *int      `json:"pr_number"`
+	PRURL          string    `json:"pr_url"`
+	BranchPushed   bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {

@@ -25,6 +25,23 @@ import (
 // instead of silently inheriting "safe" behaviour by omission — which is
 // exactly how actionNeedsAttention's pending-approval hole (fix round 2)
 // went unnoticed.
+//
+// Two hardenings, both found by a reviewer demonstrating they make this
+// extractor pass vacuously while a real hole is open:
+//
+//  1. A switch is only accepted as THE dispatcher switch if its tag is the
+//     selector body.Action. Without this check, the first *ast.SwitchStmt
+//     found inside ticketAction is assumed to be the dispatcher — so
+//     nesting the real switch one level inside an unrelated outer switch
+//     (e.g. an authz check) would silently extract that outer switch's case
+//     labels instead: bogus action names, an exhaustiveness test with 0 real
+//     actions, all green.
+//  2. A case expression that isn't a plain string literal (e.g. a named
+//     constant introduced by a partial refactor) now fails the test loudly
+//     instead of being silently skipped. Skipping is exactly as dangerous as
+//     the vacuous-switch case: a partial conversion — some cases literals,
+//     some constants — would silently drop the converted ones from the
+//     enumeration while still reporting a "passing", just incomplete, run.
 func dispatcherActions(t *testing.T) []string {
 	t.Helper()
 
@@ -41,16 +58,29 @@ func dispatcherActions(t *testing.T) []string {
 	}
 
 	var actions []string
+	var foundDispatcherSwitch bool
 	ast.Inspect(file, func(n ast.Node) bool {
 		fn, isFunc := n.(*ast.FuncDecl)
 		if !isFunc || fn.Name.Name != "ticketAction" {
 			return true
 		}
 		ast.Inspect(fn.Body, func(n ast.Node) bool {
+			if foundDispatcherSwitch {
+				return false // already located and processed it; stop looking.
+			}
 			sw, isSwitch := n.(*ast.SwitchStmt)
 			if !isSwitch {
 				return true
 			}
+			sel, isSel := sw.Tag.(*ast.SelectorExpr)
+			if !isSel || sel.Sel == nil || sel.Sel.Name != "Action" {
+				// Not the switch on body.Action — keep descending. This is
+				// what lets a switch on body.Action nested inside some other
+				// switch still be found, instead of stopping at whichever
+				// switch is encountered first.
+				return true
+			}
+			foundDispatcherSwitch = true
 			for _, stmt := range sw.Body.List {
 				clause, isCase := stmt.(*ast.CaseClause)
 				if !isCase || clause.List == nil {
@@ -60,23 +90,31 @@ func dispatcherActions(t *testing.T) []string {
 				for _, expr := range clause.List {
 					lit, isLit := expr.(*ast.BasicLit)
 					if !isLit || lit.Kind != token.STRING {
-						continue
+						t.Fatalf("dispatcherActions: a case expression in "+
+							"ticketAction's switch on body.Action is %T, not a "+
+							"string literal — teach this parser to resolve it "+
+							"(e.g. named constants) or keep dispatcher cases as "+
+							"plain string literals", expr)
 					}
 					action, err := strconv.Unquote(lit.Value)
 					if err != nil {
-						continue
+						t.Fatalf("dispatcherActions: could not unquote case %q: %v", lit.Value, err)
 					}
 					actions = append(actions, action)
 				}
 			}
-			return false // ticketAction has one switch; no need to recurse further.
+			return false // found and processed the dispatcher switch.
 		})
 		return false // found ticketAction; stop descending elsewhere.
 	})
 
-	if len(actions) == 0 {
-		t.Fatal("dispatcherActions: found no case clauses in ticketAction's switch " +
+	if !foundDispatcherSwitch {
+		t.Fatal("dispatcherActions: no switch on body.Action found in ticketAction " +
 			"— human.go's shape changed and this parser needs updating")
+	}
+	if len(actions) == 0 {
+		t.Fatal("dispatcherActions: found the dispatcher switch but no case " +
+			"clauses in it — human.go's shape changed and this parser needs updating")
 	}
 	return actions
 }

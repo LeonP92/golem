@@ -47,9 +47,15 @@ type ClaimResponse struct {
 
 // ClaimTicket atomically claims a ticket for shemID. Exactly one concurrent
 // caller wins; all others receive a non-nil error.
+//
+// The intake_approved half of the predicate (spec Amendment 1) is provenance,
+// not phase: an externally-sourced ticket (non-nil issue_number) must have
+// been explicitly released by actionStart, regardless of what phase
+// gymnastics (close, needs-attention, requeue, ...) it has been through
+// since. A web-form ticket has a nil issue_number and is unaffected.
 func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, error) {
 	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase = 'unassigned'", ticketID).
+		Where("id = ? AND phase = 'unassigned' AND (issue_number IS NULL OR intake_approved)", ticketID).
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
 	if result.Error != nil {
 		return nil, result.Error
@@ -217,9 +223,11 @@ func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// availableTickets lists claimable tickets. See ClaimTicket's doc comment for
+// why intake_approved, not phase alone, gates externally-sourced tickets.
 func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
-	query := h.DB.Where("phase = 'unassigned'")
+	query := h.DB.Where("phase = 'unassigned' AND (issue_number IS NULL OR intake_approved)")
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
 	}

@@ -380,6 +380,15 @@ var errAlreadyClosed = errors.New("ticket already closed")
 // from pending-approval to unassigned so a shem can claim it. This is the
 // human checkpoint required before any agent prompt is built from an issue
 // body written by a stranger (spec Amendment 1).
+//
+// actionStart is the ONLY writer of intake_approved. Claimability is
+// enforced against that column, not against phase (see ClaimTicket and
+// availableTickets in tickets.go): phase is a transient UX/GitHub-label
+// concern that other handlers legitimately move a ticket through (close,
+// needs-attention, requeue, ...), so guarding phase transitions one at a
+// time cannot close this off for good — a ticket that legitimately leaves
+// pending-approval by any path still carries whatever intake_approved was
+// before that transition.
 func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string) {
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
@@ -392,7 +401,7 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id string
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = 'pending-approval'", id).
-			Update("phase", "unassigned")
+			Updates(map[string]any{"phase": "unassigned", "intake_approved": true})
 		if result.Error != nil {
 			return result.Error
 		}
@@ -442,7 +451,10 @@ func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, 
 	}
 	if result.RowsAffected == 0 {
 		var count int64
-		h.DB.Model(&db.Ticket{}).Where("id = ?", id).Count(&count)
+		if err := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Count(&count).Error; err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		if count == 0 {
 			http.Error(w, "ticket not found", http.StatusNotFound)
 			return
