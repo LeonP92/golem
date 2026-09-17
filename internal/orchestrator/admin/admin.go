@@ -267,12 +267,16 @@ func ReposList(gdb *gorm.DB) ([]db.GitHubRepo, error) {
 // UI, not here — so a row saved once was permanent short of hand-written SQL
 // against the database file.
 func ReposRemove(gdb *gorm.DB, remote string, force bool) error {
-	var repo db.GitHubRepo
-	if err := gdb.Where("repo_remote = ?", remote).First(&repo).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return fmt.Errorf("no repo row for %q (a remote a shem declares has no row until you save its settings)", remote)
-		}
+	// Find rather than First: "no such repo" is an ordinary outcome here, and
+	// First logs a scary "record not found" line at error level before we get
+	// to turn it into a sentence the operator can act on. Same reasoning as
+	// ensureAdmin in the db package.
+	var found []db.GitHubRepo
+	if err := gdb.Where("repo_remote = ?", remote).Limit(1).Find(&found).Error; err != nil {
 		return err
+	}
+	if len(found) == 0 {
+		return fmt.Errorf("no repo row for %q (a remote a shem declares has no row until you save its settings)", remote)
 	}
 
 	var tickets int64
