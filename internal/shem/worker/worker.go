@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"path/filepath"
 	"sync"
@@ -140,11 +141,36 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("worker: ticket %s resume error: %v", claim.TicketID, err)
-			if phaseErr := w.client.PostPhase(claim.TicketID, "needs-attention"); phaseErr != nil {
-				log.Printf("worker: post phase error: %v", phaseErr)
-			}
+			w.failTicket(claim.TicketID, fmt.Errorf("resuming the ticket: %w", err))
 		}
+	}
+}
+
+// failTicket records why a ticket stopped and then parks it in
+// needs-attention.
+//
+// The phase change used to be the only trace: the error went to the shem's
+// stdout via log.Printf and nowhere else, so the dashboard showed a red
+// "Needs Attention" badge above an activity log whose last line was whatever
+// step had been announced before the failure — "Initializing repository…",
+// say. The reason existed, but only for someone with shell access to the
+// shem host, and the one place a human is actually looking said nothing.
+//
+// BLOCKER rather than STATUS: this is the entry type the UI renders as a
+// problem, and it is what the phase badge is claiming.
+func (w *Worker) failTicket(ticketID string, cause error) {
+	log.Printf("worker: ticket %s error: %v", ticketID, cause)
+	if _, logErr := w.client.PostLog(ticketID, client.LogPayload{
+		EntryType: "BLOCKER",
+		FromRole:  "shem",
+		Message:   cause.Error(),
+	}); logErr != nil {
+		// Best effort, and reported: if this fails the operator is back to
+		// an unexplained badge, so the shem log should say why.
+		log.Printf("worker: ticket %s: could not record the failure on the ticket: %v", ticketID, logErr)
+	}
+	if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
+		log.Printf("worker: post phase error: %v", phaseErr)
 	}
 }
 
@@ -250,10 +276,7 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 				log.Printf("worker: ticket %s stopped (context cancelled)", ticketID)
 				return
 			}
-			log.Printf("worker: ticket %s error: %v", ticketID, err)
-			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
-				log.Printf("worker: post phase error: %v", phaseErr)
-			}
+			w.failTicket(ticketID, err)
 		} else {
 			log.Printf("worker: ticket %s finished", ticketID)
 		}
@@ -308,10 +331,7 @@ func (w *Worker) tryReviseAndRun(ticketID string) {
 				log.Printf("worker: ticket %s stopped (context cancelled)", ticketID)
 				return
 			}
-			log.Printf("worker: ticket %s revise error: %v", ticketID, err)
-			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
-				log.Printf("worker: post phase error: %v", phaseErr)
-			}
+			w.failTicket(ticketID, fmt.Errorf("revising the ticket: %w", err))
 		} else {
 			log.Printf("worker: ticket %s revision finished", ticketID)
 		}
