@@ -92,6 +92,17 @@ func (f *Fake) ListIssuesSince(_ context.Context, _, _, label string, since time
 	if err := f.record("ListIssuesSince"); err != nil {
 		return IssuePage{}, err
 	}
+	// A zero `since` is legal at this interface and means "everything": the
+	// UpdatedAt filter below lets every issue through, which is what a first
+	// poll wants. It is the WIRE format that GitHub is strict about — a zero
+	// time.Time formatted as 0001-01-01T00:00:00Z draws a 422 — and the real
+	// client answers that by omitting the parameter rather than by refusing
+	// the argument. Rejecting it here would make this fake stricter than the
+	// thing it stands in for, and would have failed every caller that quite
+	// correctly asks for the full history.
+	//
+	// That distinction is pinned where it actually lives, against an HTTP
+	// server: TestListIssuesSinceOmitsAZeroCursor in pagination_test.go.
 	if f.ETag != "" && etag == f.ETag {
 		return IssuePage{ETag: f.ETag, NotModified: true}, nil
 	}

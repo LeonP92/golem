@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,5 +79,63 @@ func TestListIssuesSincePagination(t *testing.T) {
 	}
 	if page.NotModified {
 		t.Error("NotModified set on a 200 response")
+	}
+}
+
+// TestListIssuesSinceOmitsAZeroCursor pins the parameter that stopped the
+// integration working against real GitHub on its very first request.
+//
+// The cursor starts as a zero time.Time, which RFC3339-formats to
+// 0001-01-01T00:00:00Z. GitHub answers that with
+//
+//	422 The since parameter needs to be in ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ
+//
+// and the failure is not self-healing: the cursor only advances after a
+// successful poll, so a repository that has never synced can never sync. No
+// test caught it because github.Fake records the argument rather than
+// validating it, and every test in the tree runs against the fake — the kind
+// of gap that only a real server finds.
+func TestListIssuesSinceOmitsAZeroCursor(t *testing.T) {
+	tests := []struct {
+		name     string
+		since    time.Time
+		wantSent bool
+	}{
+		{"first poll, no cursor yet", time.Time{}, false},
+		{"a real cursor is still sent", time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var raw string
+			var present bool
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				raw = r.URL.Query().Get("since")
+				_, present = r.URL.Query()["since"]
+				// Reject exactly as GitHub does, so this test fails on the
+				// symptom the operator saw and not merely on a string compare.
+				if present && strings.HasPrefix(raw, "0001-01-01") {
+					w.WriteHeader(http.StatusUnprocessableEntity)
+					_, _ = w.Write([]byte(`{"message":"The since parameter needs to be in ISO 8601 format: YYYY-MM-DDTHH:MM:SSZ"}`))
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`[]`))
+			}))
+			defer srv.Close()
+
+			c, err := github.New("token", srv.URL+"/")
+			if err != nil {
+				t.Fatalf("github.New: %v", err)
+			}
+			if _, err = c.ListIssuesSince(context.Background(), "o", "r", "golem", tt.since, ""); err != nil {
+				t.Fatalf("ListIssuesSince: %v", err)
+			}
+			if present != tt.wantSent {
+				t.Errorf("since present = %v, want %v (raw %q)", present, tt.wantSent, raw)
+			}
+			if tt.wantSent && raw != "2026-03-04T05:06:07Z" {
+				t.Errorf("since = %q, want the cursor in RFC3339", raw)
+			}
+		})
 	}
 }

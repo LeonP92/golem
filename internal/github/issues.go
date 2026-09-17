@@ -33,7 +33,16 @@ func (c *client) ListIssuesSince(ctx context.Context, owner, repo, label string,
 		if label != "" {
 			q.Set("labels", label)
 		}
-		q.Set("since", since.Format(time.RFC3339))
+		// Omitted entirely when there is no cursor yet. A zero time.Time
+		// formats to 0001-01-01T00:00:00Z, which GitHub rejects with
+		// "422 The since parameter needs to be in ISO 8601 format" — and
+		// because the cursor only advances after a SUCCESSFUL poll, a
+		// repository that has never synced could then never sync at all.
+		// Leaving it off asks for the full history, which is exactly what a
+		// first poll wants.
+		if !since.IsZero() {
+			q.Set("since", since.Format(time.RFC3339))
+		}
 		q.Set("per_page", "100")
 		if pageNum != 0 {
 			q.Set("page", strconv.Itoa(pageNum))
