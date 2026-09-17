@@ -569,6 +569,13 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Newest first for display. The scan above stays ASCENDING on purpose —
+	// "the last one of each type wins" for SPEC and PLAN depends on that
+	// order — so the reversal happens here, on the display slice only.
+	for i, j := 0, len(logEntries)-1; i < j; i, j = i+1, j-1 {
+		logEntries[i], logEntries[j] = logEntries[j], logEntries[i]
+	}
+
 	// Find rather than First: most tickets have no pending question, and
 	// First logs "record not found" at error level for every one of them —
 	// on a page that polls, so the log fills with a red line describing the

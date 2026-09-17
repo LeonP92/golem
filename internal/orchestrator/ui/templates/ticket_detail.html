@@ -221,7 +221,9 @@
           hx-ext="sse"
           sse-connect="/sse/tickets/{{.Ticket.ID}}/log"
           sse-swap="message"
-          hx-swap="beforeend">
+          {{/* afterbegin, not beforeend: the feed reads newest-first, so a
+               live entry belongs at the top next to the others of its age. */}}
+          hx-swap="afterbegin">
           {{if not .LogEntries}}
           <div id="log-empty" class="text-base-content/40 text-sm py-4 text-center">
             <span class="iconify text-2xl animate-pulse" data-icon="heroicons:signal"></span>
@@ -243,11 +245,16 @@
   var logFeed = document.getElementById('log-feed');
   if (!logFeed) return;
 
-  logFeed.scrollTop = logFeed.scrollHeight;
+  // The newest entry is at the top, so the interesting end of the feed is
+  // where the browser already starts; there is nothing to scroll to on load.
 
-  var userScrolledUp = false;
+  // Whether the reader has scrolled away from the newest entries to read
+  // older ones. While they have, the feed is left alone — yanking it back to
+  // the top because something arrived is the thing that makes a live log
+  // unreadable.
+  var readingOlder = false;
   logFeed.addEventListener('scroll', function() {
-    userScrolledUp = logFeed.scrollTop + logFeed.clientHeight < logFeed.scrollHeight - 60;
+    readingOlder = logFeed.scrollTop > 60;
   });
 
   var logEmptyRemoved = false;
@@ -256,9 +263,9 @@
       var empty = document.getElementById('log-empty');
       if (empty) { empty.remove(); logEmptyRemoved = true; }
     }
-    if (!userScrolledUp) {
-      // defer one tick so the appended node is in the DOM before measuring
-      setTimeout(function() { logFeed.scrollTop = logFeed.scrollHeight; }, 10);
+    if (!readingOlder) {
+      // Defer one tick so the prepended node is in the DOM first.
+      setTimeout(function() { logFeed.scrollTop = 0; }, 10);
     }
   });
 })();
