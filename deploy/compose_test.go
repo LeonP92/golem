@@ -140,3 +140,74 @@ func TestEnvExampleDocumentsBothGitHubTokens(t *testing.T) {
 		})
 	}
 }
+
+// shemRepoPaths is the subset needed to check that every repository the shem
+// is configured to work in has somewhere durable to live.
+type shemRepoPaths struct {
+	Services map[string]struct {
+		Volumes []string `yaml:"volumes"`
+	} `yaml:"services"`
+	Volumes map[string]any `yaml:"volumes"`
+}
+
+type shemConfig struct {
+	Repos []struct {
+		Path   string `yaml:"path"`
+		Remote string `yaml:"remote"`
+	} `yaml:"repos"`
+}
+
+// Every repository in the shem's config must resolve to a mount, or its
+// checkout lives in the container's own writable layer.
+//
+// deploy/shem.yaml named /repos/omnicore-platform while docker-compose.yml
+// mounted only /repos/test and /repos/golem, so the clone, the .golem ticket
+// state and the worktrees were all discarded on the next container recreate
+// and the entire repository was cloned again. Nothing failed visibly — the
+// work simply disappeared — which is why this is a test and not a comment.
+func TestEveryShemRepoHasAMount(t *testing.T) {
+	var compose shemRepoPaths
+	if err := yaml.Unmarshal([]byte(repoFile(t, "docker-compose.yml")), &compose); err != nil {
+		t.Fatalf("parse docker-compose.yml: %v", err)
+	}
+	var cfg shemConfig
+	if err := yaml.Unmarshal([]byte(repoFile(t, "deploy/shem.yaml")), &cfg); err != nil {
+		t.Fatalf("parse deploy/shem.yaml: %v", err)
+	}
+	if len(cfg.Repos) == 0 {
+		t.Fatal("deploy/shem.yaml declares no repos; this test would pass vacuously")
+	}
+
+	// Container-side mount targets the shem has, e.g. "/repos", "/repos/test".
+	var targets []string
+	for _, v := range compose.Services["shem"].Volumes {
+		parts := strings.Split(v, ":")
+		if len(parts) < 2 {
+			continue
+		}
+		targets = append(targets, parts[1])
+		// A named volume must also be declared, or compose refuses to start.
+		if !strings.HasPrefix(parts[0], ".") && !strings.HasPrefix(parts[0], "/") &&
+			!strings.HasPrefix(parts[0], "$") {
+			if _, ok := compose.Volumes[parts[0]]; !ok {
+				t.Errorf("shem mounts named volume %q, which is not declared under volumes:", parts[0])
+			}
+		}
+	}
+
+	for _, repo := range cfg.Repos {
+		covered := false
+		for _, target := range targets {
+			if repo.Path == target || strings.HasPrefix(repo.Path, strings.TrimSuffix(target, "/")+"/") {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("shem.yaml repo %q (%s) is under no mount in docker-compose.yml: "+
+				"its checkout would live in the container's writable layer and be lost "+
+				"on the next recreate. Mount a volume at /repos or at that path.",
+				repo.Path, repo.Remote)
+		}
+	}
+}

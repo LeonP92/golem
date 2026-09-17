@@ -75,6 +75,13 @@ services:
     volumes:
       - ./deploy/shem.yaml:/etc/golem/shem.yaml:ro
       # Test repo the shem works on by default.
+      # Every repository Golem clones for itself lives here. Without it a
+      # repo named in shem.yaml but not mounted — which is every repo an
+      # operator adds — landed in the container's own writable layer, so the
+      # clone, the .golem ticket state and the worktrees were all discarded on
+      # the next container recreate and the whole repository cloned again.
+      # The two more specific mounts below still win over this one.
+      - shem-repos:/repos
       - test-repo:/repos/test
       # Optional: mount a real repo (e.g. your project) for real tickets.
       # Set GOLEM_REPO_PATH to the absolute path on the host.
@@ -115,4 +122,5 @@ services:
 volumes:
   orchestrator-data:
   test-repo:
+  shem-repos:    # repositories golem clones on demand (see the shem's /repos)
   shem-claude:   # fallback volume when CLAUDE_HOME is not set
