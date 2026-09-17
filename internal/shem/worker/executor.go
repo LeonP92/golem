@@ -79,6 +79,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		return fmt.Errorf("preparing %s: %w", repoPath, err)
 	}
 
+	// Before initRepo, which runs `golem graph build` and therefore invokes
+	// the agent: an untrusted workspace makes Claude Code ignore the
+	// repository's own permission allow-list.
+	trustWorkspace(repoPath)
+
 	if err := e.initRepo(ctx, repoPath); err != nil {
 		log.Printf("executor: repo pre-flight warning: %v", err)
 	}
