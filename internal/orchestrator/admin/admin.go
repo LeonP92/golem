@@ -236,3 +236,69 @@ func ChangePassword(gdb *gorm.DB, userID uint, oldPass, newPass string) error {
 	}
 	return gdb.Model(&user).Update("password_hash", string(hash)).Error
 }
+
+// ErrRepoInUse is returned when removing a GitHub repo row would orphan
+// tickets that were ingested from it.
+var ErrRepoInUse = errors.New("repo still has tickets")
+
+// ReposList returns every persisted GitHub repo row, oldest first.
+//
+// The settings page shows the union of these rows and the remotes registered
+// shems declare, so a remote can appear there without a row existing yet.
+// Only rows are removable — a remote a shem declares comes back on its next
+// registration, and the way to be rid of that one is to stop the shem
+// declaring it.
+func ReposList(gdb *gorm.DB) ([]db.GitHubRepo, error) {
+	var repos []db.GitHubRepo
+	err := gdb.Order("id asc").Find(&repos).Error
+	return repos, err
+}
+
+// ReposRemove deletes the GitHub repo row for remote, along with any outbox
+// rows queued against its tickets.
+//
+// Refuses while tickets from that repo exist unless force is set: those
+// tickets keep their issue_number and repo_remote, and the claim predicates
+// require a matching approval, so deleting the row underneath them leaves
+// work that can never sync and whose provenance no longer resolves. The
+// caller is told the count so the choice is an informed one.
+//
+// This exists because there was no way to remove a repo at all — not in the
+// UI, not here — so a row saved once was permanent short of hand-written SQL
+// against the database file.
+func ReposRemove(gdb *gorm.DB, remote string, force bool) error {
+	var repo db.GitHubRepo
+	if err := gdb.Where("repo_remote = ?", remote).First(&repo).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return fmt.Errorf("no repo row for %q (a remote a shem declares has no row until you save its settings)", remote)
+		}
+		return err
+	}
+
+	var tickets int64
+	if err := gdb.Model(&db.Ticket{}).Where("repo_remote = ?", remote).Count(&tickets).Error; err != nil {
+		return err
+	}
+	if tickets > 0 && !force {
+		return fmt.Errorf("%w: %d ticket(s) came from %s; re-run with --force to remove it anyway",
+			ErrRepoInUse, tickets, remote)
+	}
+
+	return gdb.Transaction(func(tx *gorm.DB) error {
+		// Outbox rows are keyed by ticket, not by repo, so they are cleared
+		// via the tickets that belong to this remote. Left behind they would
+		// retry forever against a repo whose settings no longer exist.
+		var ticketIDs []string
+		if err := tx.Model(&db.Ticket{}).Where("repo_remote = ?", remote).
+			Pluck("id", &ticketIDs).Error; err != nil {
+			return err
+		}
+		if len(ticketIDs) > 0 {
+			if err := tx.Where("ticket_id IN ?", ticketIDs).
+				Delete(&db.GitHubOutbox{}).Error; err != nil {
+				return err
+			}
+		}
+		return tx.Where("repo_remote = ?", remote).Delete(&db.GitHubRepo{}).Error
+	})
+}

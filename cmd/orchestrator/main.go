@@ -32,8 +32,11 @@ func main() {
 	//   orchestrator users remove <username>
 	//   orchestrator shems add --name <name>
 	//   orchestrator shems remove <name>
+	//   orchestrator repos list
+	//   orchestrator repos remove <remote> [--force]
 	//   orchestrator backfill body-hash [--dry-run]
-	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems" || args[0] == "backfill") {
+	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems" ||
+		args[0] == "repos" || args[0] == "backfill") {
 		dsn := os.Getenv("ORCHESTRATOR_DB")
 		if dsn == "" {
 			dsn = "orchestrator.db"
@@ -114,6 +117,42 @@ func main() {
 				fmt.Printf("Shem %q removed.\n", args[2])
 			default:
 				log.Fatalf("unknown shems subcommand %q; expected add|remove", args[1])
+			}
+		case "repos":
+			switch args[1] {
+			case "list":
+				repos, err := admin.ReposList(gdb)
+				if err != nil {
+					log.Fatalf("repos list: %v", err)
+				}
+				if len(repos) == 0 {
+					fmt.Println("No repo rows. A remote a shem declares appears on " +
+						"/settings/github without a row until you save its settings.")
+					break
+				}
+				for _, rp := range repos {
+					state := "disabled"
+					if rp.Enabled {
+						state = "enabled"
+					}
+					fmt.Printf("%s\t%s\tlabel=%s\n", rp.RepoRemote, state, rp.Label)
+				}
+			case "remove":
+				if len(args) < 3 {
+					log.Fatal("usage: orchestrator repos remove <remote> [--force]")
+				}
+				force := false
+				for _, a := range args[3:] {
+					if a == "--force" {
+						force = true
+					}
+				}
+				if err := admin.ReposRemove(gdb, args[2], force); err != nil {
+					log.Fatalf("repos remove: %v", err)
+				}
+				fmt.Printf("Repo %q removed.\n", args[2])
+			default:
+				log.Fatalf("unknown repos subcommand %q; expected list|remove", args[1])
 			}
 		case "backfill":
 			// One-shot repair for databases written by a deployment made

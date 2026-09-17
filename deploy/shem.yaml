@@ -36,11 +36,6 @@ no_push: true
 max_concurrent: 3
 
 repos:
-  # Local test repo — created automatically by the repo-init service.
-  # Use this for testing the full shem workflow without a real remote.
-  - path: /repos/test
-    remote: local://test
-
   # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.
-  - path: /repos/golem
-    remote: https://github.com/LeonP92/golem
+  - path: /repos/omnicore-platform
+    remote: https://github.com/zenithflowinc/omnicore-platform

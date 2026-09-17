@@ -288,6 +288,34 @@ A ticket's description is the issue's **title and body**: the title, a blank lin
 
 Poll interval, drain interval, manual-sync cooldown, and a GitHub Enterprise `api_base` are all under `github:` in `orchestrator.yaml`.
 
+##### Removing a repository
+
+`/settings/github` shows the union of two things: repositories you have saved
+settings for, and every remote your registered shems declare. A remote a shem
+declares has no database row until you save its settings, and it disappears
+from the page once that shem stops declaring it — remove it from the shem's
+`repos:` and restart the shem.
+
+A repository you *saved* settings for has a row, and the row outlives the shem
+config. Remove it with:
+
+```bash
+orchestrator repos list
+orchestrator repos remove https://github.com/owner/name
+# in Docker:
+docker compose exec orchestrator orchestrator repos remove https://github.com/owner/name
+```
+
+Removal is refused while tickets ingested from that repository still exist —
+they keep their issue number and repository remote, and deleting the settings
+underneath them leaves work that can never sync. Pass `--force` to remove it
+anyway; queued GitHub writes for those tickets are cleared in the same
+transaction, since otherwise they would retry forever against settings that no
+longer exist.
+
+Unticking **Enabled** is the lighter option: a disabled repository is never
+polled and never written to.
+
 #### The intake approval gate
 
 **An ingested ticket is not claimable until a human approves it.** It arrives in phase `pending-approval`, and no shem can take it until someone opens it in the dashboard, reads the description, and presses **Approve & Start**.
