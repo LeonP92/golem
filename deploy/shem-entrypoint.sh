@@ -46,6 +46,21 @@ if { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ ! 
   mkdir -p "$CLAUDE_DIR"
   printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$CLAUDE_JSON"
   echo "shem: bootstrapped $CLAUDE_JSON for headless auth"
+elif { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ -n "$CLAUDE_HOME" ]; then
+  # Both auth modes configured at once. The bootstrap above is skipped
+  # because CLAUDE_HOME brought a .claude.json with it, and Claude Code then
+  # prefers the session in that file — which on a macOS host is a reference
+  # to credentials kept in the Keychain and therefore absent here, giving
+  #
+  #   Failed to authenticate: OAuth session expired and could not be refreshed
+  #
+  # while the token sitting in the environment is never tried. Saying so is
+  # the difference between a two-minute fix and a long afternoon.
+  echo "shem: WARNING both CLAUDE_HOME and a headless auth variable are set." >&2
+  echo "shem:   Claude Code will use the session from the mounted CLAUDE_HOME," >&2
+  echo "shem:   not ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN. If that session" >&2
+  echo "shem:   is expired or its credentials live in the host keychain (macOS)," >&2
+  echo "shem:   comment out CLAUDE_HOME in .env and recreate this container." >&2
 fi
 
 # --- Git push credential ------------------------------------------------------

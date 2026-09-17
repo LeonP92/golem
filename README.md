@@ -240,7 +240,7 @@ Browser ──► Orchestrator (dashboard, approval gates)
 ./run.sh
 ```
 
-On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` and one Claude Code auth option (`CLAUDE_HOME`, `CLAUDE_CODE_OAUTH_TOKEN`, or `ANTHROPIC_API_KEY`), then run it again. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
+On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` (8+ characters) and one Claude Code auth option, then run it again. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` are the ones to reach for. `CLAUDE_HOME`, which mounts your own `~/.claude`, does not carry your login on macOS — Claude Code keeps OAuth credentials in the system keychain rather than in that directory — and it also brings your hooks and MCP commands in with host absolute paths that do not resolve inside the container. See the comments in `.env.example`. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
 
 `GOLEM_GITHUB_TOKEN` in the same file is optional and turns on the GitHub Issues integration — see [GitHub Issues](#github-issues-1) below for what else it needs.
 
