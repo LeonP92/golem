@@ -320,3 +320,27 @@ func (s *Syncer) recordFailure(row db.GitHubOutbox, cause error) {
 			row.ID, cause, err)
 	}
 }
+
+// DefaultTriggerLabel is the opt-in label Golem looks for when no other is
+// configured. Issues carrying it are ingested; everything else is ignored.
+const DefaultTriggerLabel = "golem"
+
+// ValidateTriggerLabel rejects a trigger label inside the golem:* namespace.
+//
+// Lives here rather than in the UI because two callers need the same answer:
+// the per-repo settings form, and the startup check on the configured default.
+// A label inside the namespace is self-defeating — applyPhaseLabel removes
+// every golem:* label it does not currently want, so the trigger would be
+// stripped from the issue on its first phase change, un-enrolling it from the
+// very label that enrolled it. Only that exact prefix is rejected: "golem",
+// "golem-adjacent", "golemite", "Golem" and "team:golem" are all outside it
+// and work correctly.
+func ValidateTriggerLabel(label string) error {
+	if strings.HasPrefix(label, PhaseLabelPrefix) {
+		return fmt.Errorf("trigger label %q is inside the %s namespace Golem uses for phase labels, "+
+			"so it would be removed from the issue on its first phase change, "+
+			"un-enrolling it from its own trigger; choose a label outside that "+
+			"namespace (the default is %q)", label, PhaseLabelPrefix, DefaultTriggerLabel)
+	}
+	return nil
+}

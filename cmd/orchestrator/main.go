@@ -271,6 +271,16 @@ func main() {
 	// loud log message, not a silent no-op, and a missing token never
 	// prevents the rest of the orchestrator from serving.
 	var ghWorker *ghsync.Worker
+	// Validated eagerly, and fatally: a trigger label inside the golem:*
+	// namespace is stripped from the issue on its first phase change, which
+	// un-enrols it from the very label that enrolled it. The settings form
+	// already refuses one; an operator who sets it through the environment
+	// deserves the same answer, and at startup rather than on the first
+	// phase transition hours later.
+	if err := ghsync.ValidateTriggerLabel(cfg.GitHub.TriggerLabel()); err != nil {
+		log.Fatalf("github sync: %v", err)
+	}
+
 	token := os.Getenv(cfg.GitHub.TokenEnv)
 	var enabledRepos int64
 	if err := gdb.Model(&db.GitHubRepo{}).Where("enabled = ?", true).Count(&enabledRepos).Error; err != nil {
@@ -313,6 +323,7 @@ func main() {
 	srv.ManualSyncCooldown = cfg.GitHub.ManualSyncCooldownDuration()
 	srv.CSPMode = cfg.CSP.Mode
 	srv.GitHubTokenEnv = cfg.GitHub.TokenEnv
+	srv.GitHubDefaultLabel = cfg.GitHub.TriggerLabel()
 	// Only assign Sync when the worker was actually started. ghWorker is a
 	// *ghsync.Worker; assigning a nil *ghsync.Worker to the api.SyncTrigger
 	// interface field would produce a non-nil interface holding a nil

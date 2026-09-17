@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -27,6 +28,7 @@ type CSPConfig struct {
 // back to the documented default rather than failing startup.
 type GitHubConfig struct {
 	TokenEnv           string `yaml:"token_env"`
+	DefaultLabel       string `yaml:"default_label"`
 	PollInterval       string `yaml:"poll_interval"`
 	DrainInterval      string `yaml:"drain_interval"`
 	ManualSyncCooldown string `yaml:"manual_sync_cooldown"`
@@ -38,8 +40,38 @@ const (
 	defaultDrainInterval      = 20 * time.Second
 	defaultManualSyncCooldown = time.Minute
 	defaultTokenEnv           = "GOLEM_GITHUB_TOKEN"
-	defaultCSPMode            = "enforce"
+	defaultLabelEnv           = "GOLEM_GITHUB_LABEL"
+	// defaultTriggerLabel mirrors ghsync.DefaultTriggerLabel. Duplicated
+	// rather than imported to keep config free of a dependency on the sync
+	// engine, the same way api.defaultGitHubTokenEnv mirrors defaultTokenEnv
+	// here. ghsync's TestDefaultTriggerLabelMatchesConfig pins them equal.
+	defaultTriggerLabel = "golem"
+	defaultCSPMode      = "enforce"
 )
+
+// TriggerLabel returns the label a newly registered repository starts with,
+// resolved in order: the GOLEM_GITHUB_LABEL environment variable, then
+// github.default_label in the config file, then "golem".
+//
+// The environment wins because that is where a Docker deployment sets it —
+// orchestrator.yaml is bind-mounted read-only and .env is the file an
+// operator already edits. It is not a secret, so it is read directly rather
+// than through a token_env-style indirection.
+//
+// This is a DEFAULT, not an override: it seeds the Label column when a
+// repository is first registered and is what the settings page offers for one
+// that is not registered yet. A repository whose label was already saved keeps
+// it, because that value is a deliberate per-repo choice and silently
+// rewriting it from the environment would discard it.
+func (g GitHubConfig) TriggerLabel() string {
+	if env := strings.TrimSpace(os.Getenv(defaultLabelEnv)); env != "" {
+		return env
+	}
+	if g.DefaultLabel != "" {
+		return g.DefaultLabel
+	}
+	return defaultTriggerLabel
+}
 
 // PollIntervalDuration returns the ingest interval, defaulting to 15 minutes.
 func (g GitHubConfig) PollIntervalDuration() time.Duration {

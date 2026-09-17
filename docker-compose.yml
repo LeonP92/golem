@@ -25,6 +25,9 @@ services:
       # env_file here on purpose — .env also holds the Claude credentials, and
       # only the two variables below belong in a container.
       - GOLEM_GITHUB_TOKEN=${GOLEM_GITHUB_TOKEN:-}
+      # Empty is the same as unset here: config.TriggerLabel trims and ignores
+      # a blank value, falling back to github.default_label and then "golem".
+      - GOLEM_GITHUB_LABEL=${GOLEM_GITHUB_LABEL:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s

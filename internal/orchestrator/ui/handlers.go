@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
@@ -135,10 +136,26 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 
 // Handlers holds the shared dependencies for the UI HTTP handlers.
 type Handlers struct {
-	DB           *gorm.DB
+	DB *gorm.DB
+
+	// GitHubDefaultLabel seeds the trigger label for a repository that has
+	// no saved settings yet, and is what the settings page offers for one a
+	// shem declares but nobody has registered. Empty falls back to "golem",
+	// so a Handlers built without it (every test that does not care) behaves
+	// as before. Set from config.GitHubConfig.TriggerLabel.
+	GitHubDefaultLabel string
+
 	secureCookie bool
 	tmpl         *template.Template // kept for backward compat; nil = use tmpls map
 	tmpls        map[string]*template.Template
+}
+
+// defaultLabel returns the configured trigger-label default, or "golem".
+func (h *Handlers) defaultLabel() string {
+	if h.GitHubDefaultLabel != "" {
+		return h.GitHubDefaultLabel
+	}
+	return ghsync.DefaultTriggerLabel
 }
 
 // NewHandlers creates a Handlers.  Pass tmpl=nil in tests that do not exercise

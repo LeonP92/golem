@@ -288,6 +288,31 @@ A ticket's description is the issue's **title and body**: the title, a blank lin
 
 Poll interval, drain interval, manual-sync cooldown, and a GitHub Enterprise `api_base` are all under `github:` in `orchestrator.yaml`.
 
+##### Changing the trigger label
+
+The label defaults to `golem`. To use a different one everywhere without
+setting it per repository, set `GOLEM_GITHUB_LABEL` in `.env` (or
+`github.default_label` in `orchestrator.yaml`; the environment wins, since that
+file is bind-mounted read-only in Docker):
+
+```bash
+GOLEM_GITHUB_LABEL=needs-golem
+```
+
+This is a **default, not an override**. It seeds the label when a repository is
+first registered, and is what `/settings/github` offers for a repository no
+shem has registered yet. A repository whose label you already saved keeps that
+value — it is a deliberate per-repo choice, and the environment silently
+rewriting it would discard it. Change those on the settings page, where each
+repository can differ.
+
+The label must not start with `golem:`. That namespace belongs to the phase
+labels Golem writes back, and `applyPhaseLabel` removes every `golem:*` label
+it does not currently want — so a trigger inside it would be stripped from the
+issue on its first phase change, un-enrolling the issue from the label that
+enrolled it. The settings form refuses one, and the orchestrator now refuses to
+start with one configured.
+
 ##### Removing a repository
 
 `/settings/github` shows the union of two things: repositories you have saved

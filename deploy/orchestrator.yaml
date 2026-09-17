@@ -22,6 +22,18 @@ db_path: /data/orchestrator.db
 
 github:
   token_env: GOLEM_GITHUB_TOKEN
+
+  # The opt-in label an issue must carry to be ingested. GOLEM_GITHUB_LABEL in
+  # the environment overrides this, which is the path a Docker deployment uses
+  # — this file is bind-mounted read-only, .env is not. Unset on both means
+  # "golem".
+  #
+  # A default only: it seeds the label when a repository is first registered
+  # and is what /settings/github offers for an unregistered one. A saved
+  # per-repo label is left alone. Must not start with "golem:" — that is the
+  # phase-label namespace, and a trigger inside it would be stripped from the
+  # issue on its first phase change.
+  # default_label: golem
   poll_interval: 15m
   drain_interval: 20s
   manual_sync_cooldown: 60s

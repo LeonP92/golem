@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"fmt"
 	"log"
 	"net/http"
 	"strconv"
@@ -40,7 +39,7 @@ func (h *Handlers) renderGitHubSettings(w http.ResponseWriter, r *http.Request, 
 		}
 		owner, name := splitRemote(remote)
 		repos = append(repos, db.GitHubRepo{
-			RepoRemote: remote, Owner: owner, Name: name, Label: "golem",
+			RepoRemote: remote, Owner: owner, Name: name, Label: h.defaultLabel(),
 		})
 	}
 	// Parked outbox rows are rendered here because this is the only page
@@ -91,31 +90,6 @@ func (h *Handlers) retryParkedOutboxRow(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/settings/github", http.StatusSeeOther)
 }
 
-// validateTriggerLabel rejects a trigger label inside the golem:* namespace
-// Golem owns for phase labels.
-//
-// applyPhaseLabel removes every golem:* label from an issue except the one
-// it is about to apply, deliberately leaving the no-colon default "golem"
-// and every human label alone. A trigger label that is itself inside that
-// namespace — "golem:triage", say — is therefore stripped on the issue's
-// first phase transition, silently un-enrolling it from the very filter that
-// brought it in. Verified against the real Drain + applyPhaseLabel:
-// trigger="golem:triage" on labels [golem:triage bug golem:brainstorm] left
-// [bug golem:implement].
-//
-// Only that exact prefix is rejected. The default "golem" and near-misses
-// like "golem-adjacent", "golemite", "Golem" and "team:golem" are outside the
-// namespace, work correctly today, and must keep working.
-func validateTriggerLabel(label string) error {
-	if strings.HasPrefix(label, ghsync.PhaseLabelPrefix) {
-		return fmt.Errorf("trigger label %q is inside the %s namespace Golem uses for phase labels, "+
-			"so it would be removed from the issue on its first phase change, "+
-			"un-enrolling it from its own trigger; choose a label outside that "+
-			"namespace (the default is %q)", label, ghsync.PhaseLabelPrefix, "golem")
-	}
-	return nil
-}
-
 // githubSettingsSubmit upserts one repo's settings from the form.
 func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
@@ -132,7 +106,7 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 	}
 	label := strings.TrimSpace(r.PostForm.Get("label"))
 	if label != "" {
-		if err := validateTriggerLabel(label); err != nil {
+		if err := ghsync.ValidateTriggerLabel(label); err != nil {
 			h.renderGitHubSettings(w, r, err.Error())
 			return
 		}
@@ -149,7 +123,7 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	repo := db.GitHubRepo{RepoRemote: remote, Owner: owner, Name: name, Label: "golem"}
+	repo := db.GitHubRepo{RepoRemote: remote, Owner: owner, Name: name, Label: h.defaultLabel()}
 	if len(found) > 0 {
 		repo = found[0]
 	}

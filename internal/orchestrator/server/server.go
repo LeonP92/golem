@@ -37,6 +37,10 @@ type Server struct {
 	// is read from, passed through to the handlers so a refusal can name the
 	// variable this deployment actually uses.
 	GitHubTokenEnv string
+
+	// GitHubDefaultLabel is the trigger label a newly registered repository
+	// starts with (config.GitHubConfig.TriggerLabel).
+	GitHubDefaultLabel string
 }
 
 // New creates a Server with the given dependencies. baseURL is the
@@ -70,6 +74,7 @@ func (s *Server) Routes() http.Handler {
 	h.RegisterGitHubRoutes(mux)
 
 	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls, s.SecureCookie)
+	uiHandlers.GitHubDefaultLabel = s.GitHubDefaultLabel
 	uiHandlers.RegisterRoutes(mux)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
