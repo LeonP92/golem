@@ -75,6 +75,7 @@ func (s *Server) Routes() http.Handler {
 
 	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls, s.SecureCookie)
 	uiHandlers.GitHubDefaultLabel = s.GitHubDefaultLabel
+	uiHandlers.Hub = s.Hub
 	uiHandlers.RegisterRoutes(mux)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {

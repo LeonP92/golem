@@ -1,14 +1,17 @@
 package ui
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
+	"github.com/leonp92/golem/internal/orchestrator/ws"
 )
 
 // githubSettings renders per-repo GitHub sync settings. Repos are discovered
@@ -95,6 +98,60 @@ func (h *Handlers) retryParkedOutboxRow(w http.ResponseWriter, r *http.Request) 
 	if retried {
 		log.Printf("ui: outbox row %d un-parked by an operator", id64)
 	}
+	http.Redirect(w, r, "/settings/github", http.StatusSeeOther)
+}
+
+// buildGraph asks a shem serving this repository to run `golem graph build`.
+//
+// The orchestrator cannot do this itself — only the shem has the checkout —
+// so the button claims the slot in the database and pushes a message over the
+// websocket the shem already holds. Hub.Broadcast targets shems by the repos
+// they declared at registration, so a shem that does not serve this remote
+// never sees it.
+//
+// Fire and record, not fire and forget: a build over a large repository takes
+// minutes and there is no ticket to stream into, so the outcome lands on the
+// repo row and the page shows it.
+func (h *Handlers) buildGraph(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad request", http.StatusBadRequest)
+		return
+	}
+	// PostForm, not FormValue: nothing here should be settable from a link.
+	remote := urlnorm.Normalize(r.PostForm.Get("repo_remote"))
+	if remote == "" {
+		http.Error(w, "repo_remote is required", http.StatusBadRequest)
+		return
+	}
+
+	repo, err := ghsync.StartGraphBuild(h.DB, remote, time.Now().UTC())
+	switch {
+	case errors.Is(err, ghsync.ErrGraphBuildRunning):
+		// Not an error worth a page: the operator double-clicked, or a
+		// colleague got there first. The row already says it is building.
+		h.renderGitHubSettings(w, r, "A graph build is already running for "+repo.Owner+"/"+repo.Name+".")
+		return
+	case errors.Is(err, ghsync.ErrNoRepo):
+		h.renderGitHubSettings(w, r, "Enable that repository before building its graph.")
+		return
+	case err != nil:
+		log.Printf("ui: start graph build for %s: %v", remote, err)
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
+	if h.Hub == nil {
+		// Recorded as failed rather than left reading "building…" for the
+		// timeout: nothing is going to pick this up.
+		if ferr := ghsync.FinishGraphBuild(h.DB, remote,
+			"the orchestrator has no websocket hub, so no shem could be asked", time.Now().UTC()); ferr != nil {
+			log.Printf("ui: recording the unreachable-hub graph build failure: %v", ferr)
+		}
+		h.renderGitHubSettings(w, r, "No shem connection is available to run the build.")
+		return
+	}
+	h.Hub.Broadcast(remote, ws.WSMessage{Type: "graph_build", Repo: remote})
+	log.Printf("ui: graph build requested for %s", remote)
 	http.Redirect(w, r, "/settings/github", http.StatusSeeOther)
 }
 

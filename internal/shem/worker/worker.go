@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -29,6 +31,12 @@ type Worker struct {
 	stop     chan struct{}
 	mu       sync.Mutex
 	running  map[string]context.CancelFunc // ticketID → cancel for each active ticket
+
+	// graphBuildMu serialises `golem graph build` runs on this shem. Two of
+	// them over one checkout would fight over the graph index, and the
+	// orchestrator's claim cannot prevent that on its own across a shem
+	// restart.
+	graphBuildMu sync.Mutex
 }
 
 // New creates a new Worker. exec may be nil for testing (skips actual execution).
@@ -180,6 +188,15 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 	case "ticket_available":
 		if msg.TicketID != nil {
 			go w.tryClaimAndRun(*msg.TicketID)
+		}
+	case "graph_build":
+		// Serialised per repository by graphBuildMu: the orchestrator claims
+		// the slot before broadcasting, so a second request for the same repo
+		// is refused there — but a shem restart could overlap with a
+		// still-running build, and two `golem graph build` runs over one
+		// checkout would fight over the index.
+		if msg.Repo != "" {
+			go w.runGraphBuild(msg.Repo)
 		}
 	case "ticket_requeued":
 		if msg.TicketID != nil {
@@ -391,5 +408,49 @@ func (w *Worker) Shutdown() {
 
 	if err := w.client.Deregister(); err != nil {
 		log.Printf("worker: deregister error: %v", err)
+	}
+}
+
+// runGraphBuild runs `golem graph build` for one repository and reports the
+// outcome, which is what the repos view displays.
+//
+// The error text is the agent's own — agentrunner reports both of Claude's
+// streams now — so a failure an operator can act on ("Failed to
+// authenticate", a missing permission) reaches the page rather than an exit
+// status.
+func (w *Worker) runGraphBuild(remote string) {
+	repoPath := repoLocalPath(w.cfg, remote)
+	if repoPath == "" {
+		w.reportGraphBuild(remote, fmt.Sprintf("this shem has no local path configured for %s", remote))
+		return
+	}
+
+	w.graphBuildMu.Lock()
+	defer w.graphBuildMu.Unlock()
+
+	log.Printf("worker: building the code graph for %s in %s", remote, repoPath)
+	out, err := exec.Command("golem", "graph", "build", "--repo", repoPath).CombinedOutput() //nolint:gosec
+	if err != nil {
+		// CombinedOutput rather than the error alone: `golem graph build`
+		// prints why it failed and exits 1, so the exit status on its own
+		// would tell an operator nothing.
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		log.Printf("worker: graph build for %s failed: %v\n%s", remote, err, msg)
+		w.reportGraphBuild(remote, msg)
+		return
+	}
+	log.Printf("worker: graph build for %s finished", remote)
+	w.reportGraphBuild(remote, "")
+}
+
+// reportGraphBuild posts the outcome, and says so locally if it cannot. A
+// dropped report leaves the row reading "building…" until it goes stale,
+// which is recoverable but confusing, so it is worth a line in the log.
+func (w *Worker) reportGraphBuild(remote, buildErr string) {
+	if err := w.client.PostGraphBuildResult(remote, buildErr); err != nil {
+		log.Printf("worker: could not report the graph build result for %s: %v", remote, err)
 	}
 }

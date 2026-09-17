@@ -19,6 +19,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
+	"github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/slug"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -64,6 +65,9 @@ func MakeLogEntryRenderer(tmpls map[string]*template.Template) func(sse.LogEntry
 }
 
 var tmplFuncs = template.FuncMap{
+	// now is passed to the GraphBuildRunning/GraphBuildStale methods, which
+	// take a time so they are testable without a clock stub.
+	"now": func() time.Time { return time.Now().UTC() },
 	"firstLine": func(s string) string {
 		for i, c := range s {
 			if c == '\n' {
@@ -146,6 +150,11 @@ type Handlers struct {
 	// as before. Set from config.GitHubConfig.TriggerLabel.
 	GitHubDefaultLabel string
 
+	// Hub is the websocket hub used to ask a shem to run a graph build. Nil
+	// in tests that do not exercise it, and the handler reports that rather
+	// than leaving a row reading "building…" that nothing will finish.
+	Hub *ws.Hub
+
 	secureCookie bool
 	tmpl         *template.Template // kept for backward compat; nil = use tmpls map
 	tmpls        map[string]*template.Template
@@ -193,6 +202,8 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /settings/github", h.sessionWriteRoute(rbac.PermShemManage, h.githubSettingsSubmit))
 	mux.Handle("POST /settings/github/outbox/{id}/retry",
 		h.sessionWriteRoute(rbac.PermShemManage, h.retryParkedOutboxRow))
+	mux.Handle("POST /settings/github/graph-build",
+		h.sessionWriteRoute(rbac.PermShemManage, h.buildGraph))
 	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
 	mux.Handle("POST /tickets/new", h.sessionWriteRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
 	mux.Handle("GET /tickets/{id}", h.sessionRoute(rbac.PermTicketView, h.ticketDetail))

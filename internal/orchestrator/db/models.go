@@ -196,7 +196,50 @@ type GitHubRepo struct {
 	LastManualSync *time.Time `json:"last_manual_sync"`
 	ETag           string     `gorm:"column:etag" json:"-"`
 	LastError      string     `json:"last_error"`
+
+	// Graph-build state, recorded rather than a live stream: a build over a
+	// large repository takes minutes, and there is no ticket to stream into.
+	//
+	// No state column. "Building" is started-and-not-finished, "built" is
+	// finished with no error, "failed" is finished with one — all derived, so
+	// there is no enum that can disagree with the timestamps beside it.
+	GraphBuildStartedAt  *time.Time `json:"graph_build_started_at"`
+	GraphBuildFinishedAt *time.Time `json:"graph_build_finished_at"`
+	GraphBuildError      string     `json:"graph_build_error"`
 }
+
+// GraphBuildStale reports whether a build has been running longer than is
+// plausible, which in practice means the shem died holding it.
+//
+// Without this a crashed build leaves the row reading "building…" forever and
+// the button disabled forever — the same shape as an outbox row that parks
+// with nothing able to un-park it. The UI offers the button again past this
+// point rather than requiring someone to edit the database.
+func (r GitHubRepo) GraphBuildStale(now time.Time) bool {
+	if r.GraphBuildStartedAt == nil {
+		return false
+	}
+	if r.GraphBuildFinishedAt != nil && r.GraphBuildFinishedAt.After(*r.GraphBuildStartedAt) {
+		return false
+	}
+	return now.Sub(*r.GraphBuildStartedAt) > GraphBuildTimeout
+}
+
+// GraphBuildRunning reports whether a build is in flight and not yet stale.
+func (r GitHubRepo) GraphBuildRunning(now time.Time) bool {
+	if r.GraphBuildStartedAt == nil {
+		return false
+	}
+	if r.GraphBuildFinishedAt != nil && r.GraphBuildFinishedAt.After(*r.GraphBuildStartedAt) {
+		return false
+	}
+	return !r.GraphBuildStale(now)
+}
+
+// GraphBuildTimeout bounds how long a build is believed to still be running.
+// Generous: a first build over a thousand modules involves an agent call per
+// batch, and calling a slow build dead is worse than waiting.
+const GraphBuildTimeout = 45 * time.Minute
 
 // GitHubOutbox is a pending write to GitHub. Rows are inserted in the same
 // transaction as the ticket change that caused them, and drained by the

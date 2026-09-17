@@ -30,6 +30,7 @@
             <th>Label</th>
             <th>Last polled</th>
             <th>Status</th>
+            <th>Code graph</th>
             <th class="w-8"></th>
           </tr>
         </thead>
@@ -59,6 +60,43 @@
             </td>
             <td class="text-sm">
               {{if .LastError}}<span class="text-error" title="{{.LastError}}">{{truncate 40 .LastError}}</span>{{else}}<span class="text-success">ok</span>{{end}}
+            </td>
+            {{/* Recorded state rather than live output: a build over a large
+                 repository takes minutes and there is no ticket to stream
+                 into. "Building" is started-and-unfinished, and goes stale
+                 after GraphBuildTimeout so a shem that died holding one does
+                 not disable the button forever. */}}
+            <td class="text-sm">
+              {{if not .ID}}
+                <span class="text-base-content/40">—</span>
+              {{else if .GraphBuildRunning now}}
+                <span class="inline-flex items-center gap-1 text-info">
+                  <span class="iconify animate-pulse" data-icon="heroicons:arrow-path"></span>
+                  building… (started {{.GraphBuildStartedAt.Format "15:04"}})
+                </span>
+              {{else}}
+                <div class="flex flex-col items-start gap-1">
+                  {{if .GraphBuildStale now}}
+                    <span class="text-warning" title="No result was reported within the timeout; the shem running it probably went away.">
+                      stalled since {{.GraphBuildStartedAt.Format "15:04"}}
+                    </span>
+                  {{else if .GraphBuildError}}
+                    <span class="text-error" title="{{.GraphBuildError}}">
+                      failed {{if .GraphBuildFinishedAt}}{{.GraphBuildFinishedAt.Format "15:04"}}{{end}} —
+                      {{truncate 60 (firstLine .GraphBuildError)}}
+                    </span>
+                  {{else if .GraphBuildFinishedAt}}
+                    <span class="text-success">built {{.GraphBuildFinishedAt.Format "2006-01-02 15:04"}}</span>
+                  {{else}}
+                    <span class="text-base-content/40">never built</span>
+                  {{end}}
+                  <form method="post" action="/settings/github/graph-build">
+                    <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
+                    <button type="submit" class="btn btn-xs">Build graph</button>
+                  </form>
+                </div>
+              {{end}}
             </td>
             <td class="text-right">
               {{if .ID}}

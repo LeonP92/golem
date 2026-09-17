@@ -474,3 +474,26 @@ func (c *Client) GetAvailable(repo string) (*string, error) {
 
 	return &id, nil
 }
+
+// GraphBuildResult is the body of a graph-build outcome report.
+type GraphBuildResult struct {
+	RepoRemote string `json:"repo_remote"`
+	Error      string `json:"error,omitempty"`
+}
+
+// PostGraphBuildResult records the outcome of a graph build the orchestrator
+// asked for. An empty buildErr means it succeeded.
+func (c *Client) PostGraphBuildResult(repoRemote, buildErr string) error {
+	resp, err := c.do("POST", "/api/github/graph-build-result", GraphBuildResult{
+		RepoRemote: repoRemote,
+		Error:      buildErr,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("post graph build result: unexpected status %d", resp.StatusCode)
+	}
+	return nil
+}

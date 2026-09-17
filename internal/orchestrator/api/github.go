@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
+	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	"gorm.io/gorm"
 )
 
@@ -43,6 +45,47 @@ func (h *Handlers) RegisterGitHubRoutes(mux *http.ServeMux) {
 		auth.RequireSession(h.DB)(auth.RequireCSRF(http.HandlerFunc(h.manualSync))))
 	mux.Handle("POST /api/tickets/{id}/branch-pushed",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.branchPushed)))
+	mux.Handle("POST /api/github/graph-build-result",
+		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.graphBuildResult)))
+}
+
+// graphBuildResult records the outcome of a graph build the orchestrator
+// asked a shem to run, so the repos view can show it.
+//
+// API-key authenticated: this is a shem reporting, not a human acting. It is
+// deliberately NOT scoped to the repositories the calling shem declared —
+// a shem that declares a repo can already claim and run its tickets, so a
+// tighter check here would guard nothing a hostile shem could not do anyway,
+// and would break a shem whose declared set changed mid-build.
+func (h *Handlers) graphBuildResult(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		RepoRemote string `json:"repo_remote"`
+		Error      string `json:"error"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	remote := urlnorm.Normalize(body.RepoRemote)
+	if remote == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "repo_remote is required"})
+		return
+	}
+	if err := ghsync.FinishGraphBuild(h.DB, remote, body.Error, time.Now().UTC()); err != nil {
+		if errors.Is(err, ghsync.ErrNoRepo) {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such repository"})
+			return
+		}
+		log.Printf("api: recording the graph build result for %s: %v", remote, err)
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "internal error"})
+		return
+	}
+	if body.Error == "" {
+		log.Printf("api: graph build for %s reported successful", remote)
+	} else {
+		log.Printf("api: graph build for %s reported failed", remote)
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // manualSync triggers an out-of-band ingest pass for one repo, subject to a

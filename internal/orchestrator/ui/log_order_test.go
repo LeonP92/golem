@@ -76,7 +76,7 @@ func TestActivityLogIsNewestFirst(t *testing.T) {
 	if third == -1 || second == -1 || first == -1 {
 		t.Fatalf("an entry is missing from the page (third=%d second=%d first=%d)", third, second, first)
 	}
-	if !(third < second && second < first) {
+	if third >= second || second >= first {
 		t.Errorf("entries render oldest-first: positions third=%d second=%d first=%d", third, second, first)
 	}
 
