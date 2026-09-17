@@ -1,7 +1,6 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -11,7 +10,6 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
-	"gorm.io/gorm"
 )
 
 // githubSettings renders per-repo GitHub sync settings. Repos are discovered
@@ -141,14 +139,19 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 	}
 	owner, name := splitRemote(remote)
 
-	var repo db.GitHubRepo
-	err := h.DB.Where("repo_remote = ?", remote).First(&repo).Error
-	switch {
-	case errors.Is(err, gorm.ErrRecordNotFound):
-		repo = db.GitHubRepo{RepoRemote: remote, Owner: owner, Name: name, Label: "golem"}
-	case err != nil:
+	// Find rather than First: "no row yet" is the NORMAL case here — it is
+	// what every first save of a shem-declared repo looks like — and First
+	// logs a red "record not found" at error level for it. An operator
+	// enabling their first repository should not see what reads like a
+	// failure in the log at the exact moment it worked.
+	var found []db.GitHubRepo
+	if err := h.DB.Where("repo_remote = ?", remote).Limit(1).Find(&found).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	repo := db.GitHubRepo{RepoRemote: remote, Owner: owner, Name: name, Label: "golem"}
+	if len(found) > 0 {
+		repo = found[0]
 	}
 
 	// A checkbox that is off is simply absent from the form body.
