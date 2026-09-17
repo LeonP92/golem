@@ -173,7 +173,17 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ? AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
 		shem.ID,
-		[]string{"unassigned", "ready-for-review", "revising", "closed"},
+		// needs-attention is excluded for the reason the phase exists: it
+		// means a run failed and a human has to look. Resuming it
+		// automatically re-ran the failed work on every shem restart — a
+		// ticket whose agent stopped for a reason the restart cannot change
+		// (an unauthenticated nested `claude`, a question only a person can
+		// answer) burned a full implementation pass per restart, forever, and
+		// appended another round of near-identical entries each time.
+		//
+		// The way out of needs-attention is a human: Re-queue, which clears
+		// the checkpoint and starts the ticket over, or Close.
+		[]string{"unassigned", "ready-for-review", "revising", "closed", "needs-attention"},
 	).Find(&tickets)
 
 	claims := make([]ClaimResponse, 0, len(tickets))
