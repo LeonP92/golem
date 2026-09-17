@@ -85,6 +85,7 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 
 	newest := since
 	var failure error
+	applied := 0
 	for _, issue := range page.Issues {
 		if err := s.applyIssue(ctx, repo, issue); err != nil {
 			// One bad issue must not abandon the rest of the page — the
@@ -100,9 +101,23 @@ func (s *Syncer) IngestRepo(ctx context.Context, repo *db.GitHubRepo) error {
 			}
 			continue
 		}
+		applied++
 		if issue.UpdatedAt.After(newest) {
 			newest = issue.UpdatedAt
 		}
+	}
+
+	// Logged on success, not only on failure. A pass that finds nothing and a
+	// pass that ingests fifty issues used to look identical from outside —
+	// both silent — so an operator watching a 15-minute background job had no
+	// way to tell "working, nothing matched the label" from "not running at
+	// all". Naming the label matters: the most common reason for a legitimate
+	// zero is that no issue carries it.
+	if applied == 0 && failure == nil {
+		log.Printf("ghsync: %s: polled, no issues carrying label %q", repo.RepoRemote, repo.Label)
+	} else if failure == nil {
+		log.Printf("ghsync: %s: polled, %d issue(s) with label %q applied",
+			repo.RepoRemote, applied, repo.Label)
 	}
 
 	updates := map[string]any{"last_polled_at": now}

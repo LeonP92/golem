@@ -130,12 +130,30 @@ func main() {
 						"/settings/github without a row until you save its settings.")
 					break
 				}
+				// Reports what an operator asking "did the sync work?"
+				// actually needs: whether it has ever polled, how many
+				// tickets came out, and the last error if any. The log is
+				// not enough on its own — a pass that matched nothing and a
+				// pass that never ran look the same from outside.
 				for _, rp := range repos {
 					state := "disabled"
 					if rp.Enabled {
 						state = "enabled"
 					}
-					fmt.Printf("%s\t%s\tlabel=%s\n", rp.RepoRemote, state, rp.Label)
+					polled := "never"
+					if rp.LastPolledAt != nil {
+						polled = rp.LastPolledAt.Format(time.RFC3339)
+					}
+					var tickets int64
+					if err := gdb.Model(&db.Ticket{}).
+						Where("repo_remote = ?", rp.RepoRemote).Count(&tickets).Error; err != nil {
+						log.Fatalf("repos list: count tickets for %s: %v", rp.RepoRemote, err)
+					}
+					fmt.Printf("%s\t%s\tlabel=%s\tpolled=%s\ttickets=%d\n",
+						rp.RepoRemote, state, rp.Label, polled, tickets)
+					if rp.LastError != "" {
+						fmt.Printf("  last error: %s\n", rp.LastError)
+					}
 				}
 			case "remove":
 				if len(args) < 3 {
