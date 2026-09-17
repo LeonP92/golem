@@ -29,9 +29,14 @@ name: shem-local
 # GOLEM_SHEM_GITHUB_TOKEN is a different variable from the orchestrator's
 # GOLEM_GITHUB_TOKEN on purpose, and it is empty by default. This container
 # runs the agent on issue text a stranger can write, so it is handed a
-# repository credential only when someone has decided it needs one — i.e. here,
-# at the same moment they turn this setting off. A push-only token is better
-# than reusing the orchestrator's.
+# repository credential only when someone has decided it needs one. A separate
+# token is better than reusing the orchestrator's.
+#
+# Note that a PRIVATE repository needs GOLEM_SHEM_GITHUB_TOKEN even while
+# no_push stays true: the shem clones the repository itself the first time it
+# works a ticket for it, and a clone needs Contents: Read. Pushing additionally
+# needs Contents: Read and write. Pre-cloning the repository onto the host and
+# mounting it is the way to keep this container credential-free.
 no_push: true
 max_concurrent: 3
 
