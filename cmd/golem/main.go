@@ -137,6 +137,12 @@ func graphDispatch(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	switch args[0] {
+	case "help", "-h", "--help":
+		// Asked for by hand far more often than the bare `golem graph`, and
+		// answering with "unknown graph subcommand" for it is needlessly rude.
+		fmt.Fprintln(stdout, "usage: golem graph <build|update|status|who-imports|check-boundary|deps> [flags]")
+		fmt.Fprintln(stdout, "run any subcommand with --help for its own flags")
+		return 0
 	case "build":
 		return cli.GraphBuild(args[1:], stdout, stderr)
 	case "update":
