@@ -29,7 +29,16 @@ CLAUDE_DIR="${HOME}/.claude"
 # Restore .claude.json from the latest backup if it's missing.
 # This happens when CLAUDE_HOME is mounted but the .claude.json lives one
 # level above the directory (at the user home root on the host machine).
-if [ ! -f "$CLAUDE_JSON" ]; then
+#
+# Gated on CLAUDE_HOME, which is what the paragraph above always meant but the
+# condition never said. Without the gate, /root/.claude is the throwaway
+# shem-claude volume, which keeps whatever Claude Code left there on an
+# earlier run — so switching from CLAUDE_HOME to a headless token restored a
+# STALE session on the next start, and because the bootstrap below only runs
+# when .claude.json is absent, the token never got its clean config. The
+# symptom is a container that has a perfectly good CLAUDE_CODE_OAUTH_TOKEN and
+# still reports "Not logged in".
+if [ -n "$CLAUDE_HOME" ] && [ ! -f "$CLAUDE_JSON" ]; then
   latest=$(ls -t "$CLAUDE_DIR/backups/.claude.json.backup."* 2>/dev/null | head -1)
   if [ -n "$latest" ]; then
     cp "$latest" "$CLAUDE_JSON"
