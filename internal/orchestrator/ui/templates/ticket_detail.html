@@ -1,5 +1,22 @@
 {{define "page_content"}}
-<div id="ticket-live">
+{{/* Polled so the phase badge, the action buttons and the Details block
+     follow the ticket without a manual refresh. The activity log below
+     arrives over SSE and needs none of this; everything OUTSIDE the log was
+     simply never refreshed, which is why a ticket could sit on screen
+     showing a phase it had already left.
+
+     hx-select pulls this same element out of the full page the handler
+     renders, and #log-feed carries hx-preserve so the swap moves the
+     existing node — with its live SSE connection and scroll position —
+     into the new content rather than replacing it. layout.html's
+     htmx:beforeSwap/afterSwap pair preserves the open/closed state of the
+     collapses across the same swap; it was written for these polls and had
+     nothing to do until now. */}}
+<div id="ticket-live"
+     hx-get="/tickets/{{.Ticket.ID}}"
+     hx-trigger="every 5s"
+     hx-select="#ticket-live"
+     hx-swap="outerHTML">
 
   <div class="mb-5">
     <a href="/dashboard" class="btn btn-ghost btn-sm gap-1.5 -ml-2 mb-3 text-base-content/60">
