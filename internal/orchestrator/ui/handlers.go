@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"html/template"
 	"io/fs"
+	"log"
 	"net/http"
 	"time"
 
@@ -568,11 +569,17 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Find rather than First: most tickets have no pending question, and
+	// First logs "record not found" at error level for every one of them —
+	// on a page that polls, so the log fills with a red line describing the
+	// normal case. Same reason as ReposRemove and ensureAdmin.
 	var pending *db.HumanInput
-	var hi db.HumanInput
-	if h.DB.Where("ticket_id = ? AND resolved_at IS NULL AND kind != 'feedback'", rawID).
-		Order("created_at asc").First(&hi).Error == nil {
-		pending = &hi
+	var found []db.HumanInput
+	if err := h.DB.Where("ticket_id = ? AND resolved_at IS NULL AND kind != 'feedback'", rawID).
+		Order("created_at asc").Limit(1).Find(&found).Error; err != nil {
+		log.Printf("ui: load pending human input for %s: %v", rawID, err)
+	} else if len(found) > 0 {
+		pending = &found[0]
 	}
 
 	// nav="" keeps the ticket detail page's current nav-less layout.

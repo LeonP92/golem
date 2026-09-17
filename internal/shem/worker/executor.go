@@ -65,6 +65,20 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		return fmt.Errorf("no local path for repo %q", claim.RepoRemote)
 	}
 
+	// Cloned here, not only on the checkpoint-resume path. CloneIfMissing was
+	// reachable solely from RecoverTicket, so a repository the shem had never
+	// seen was never cloned for a FRESH ticket — which is every first ticket
+	// after adding a repository to the shem's config. The directory existed
+	// (the /repos volume mount), so nothing complained until `golem ticket
+	// new` reached `git worktree add` and failed with "not a git repository".
+	//
+	// Fatal rather than a warning, unlike the pre-flight below: without a
+	// repository on disk every later step fails, and doing so here names the
+	// cause instead of leaving a git exit status to explain it.
+	if err := CloneIfMissing(ctx, repoPath, claim.RepoRemote); err != nil {
+		return fmt.Errorf("preparing %s: %w", repoPath, err)
+	}
+
 	if err := e.initRepo(ctx, repoPath); err != nil {
 		log.Printf("executor: repo pre-flight warning: %v", err)
 	}
