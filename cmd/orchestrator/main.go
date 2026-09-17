@@ -167,7 +167,28 @@ func main() {
 			username = "admin"
 		}
 		if err := admin.UsersAddOrUpdate(gdb, username, password, string(rbac.RoleAdmin)); err != nil {
-			log.Printf("warn: auto-provision admin user %q: %v", username, err)
+			// Fatal only when it leaves the dashboard with no way in. An
+			// operator who set GOLEM_ADMIN_PASSWORD asked for an account; a
+			// warning they never read, plus a login page saying "Invalid
+			// username or password", is the worst of both worlds — the most
+			// common cause is a password under the 8-character minimum, and
+			// nothing on screen says so.
+			//
+			// An existing admin means the deployment is still usable, so a
+			// bad value there is a warning and not a crash loop on upgrade.
+			var admins int64
+			if cerr := gdb.Model(&db.User{}).Where("role = ?", string(rbac.RoleAdmin)).
+				Count(&admins).Error; cerr != nil {
+				log.Fatalf("auto-provision admin user %q: %v (and counting existing admins failed: %v)",
+					username, err, cerr)
+			}
+			if admins == 0 {
+				log.Fatalf("auto-provision admin user %q: %v\n"+
+					"       No admin account exists, so nobody could sign in. "+
+					"Fix GOLEM_ADMIN_PASSWORD and restart.", username, err)
+			}
+			log.Printf("warn: auto-provision admin user %q: %v (keeping the %d existing admin(s))",
+				username, err, admins)
 		} else {
 			log.Printf("auto-provisioned admin user %q", username)
 		}

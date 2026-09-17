@@ -11,7 +11,10 @@ services:
     environment:
       - ORCHESTRATOR_DB=/data/orchestrator.db
       # Auto-provision admin user on startup. Override with GOLEM_ADMIN_USERNAME.
-      - GOLEM_ADMIN_PASSWORD=${GOLEM_ADMIN_PASSWORD:-admin}
+      # No default: "admin" is 5 characters and the account creation requires
+      # 8, so the old fallback could only ever produce an orchestrator nobody
+      # could sign in to. Failing here names the problem instead.
+      - GOLEM_ADMIN_PASSWORD=${GOLEM_ADMIN_PASSWORD:?set GOLEM_ADMIN_PASSWORD in .env (8+ characters)}
       - GOLEM_ADMIN_USERNAME=${GOLEM_ADMIN_USERNAME:-admin}
       # Auto-register the shem. Override with GOLEM_SHEM_NAME.
       - GOLEM_SHEM_API_KEY=${GOLEM_SHEM_API_KEY:-changeme-set-golem-shem-api-key-in-env}

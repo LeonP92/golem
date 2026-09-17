@@ -250,22 +250,37 @@
       if (golemCSRFToken) e.detail.headers['X-CSRF-Token'] = golemCSRFToken;
     });
 
-    // Theme toggle
+    // Theme toggle.
+    //
+    // The button and its icon live in the nav, which the layout renders only
+    // when the page supplies a Nav key — so they are absent on every nav-less
+    // page (the login page, and the ticket detail page, which renders with
+    // an empty Nav). Dereferencing them
+    // unconditionally threw "Cannot read properties of null", and because an
+    // uncaught throw abandons the rest of the script block, it silently took
+    // the collapse-state preservation below with it. That is why collapsed
+    // sections on a ticket page sprang open on every poll.
+    //
+    // html-root is on the <html> element and is always present, so the theme
+    // itself still applies on those pages; only the control is optional.
     (function() {
       var root = document.getElementById('html-root');
       var btn = document.getElementById('theme-toggle');
       var icon = document.getElementById('theme-icon');
+      if (!root) return;
       var dark = root.getAttribute('data-theme') === 'dark';
       function apply(isDark) {
         root.setAttribute('data-theme', isDark ? 'dark' : 'nord');
-        icon.setAttribute('data-icon', isDark ? 'heroicons:sun' : 'heroicons:moon');
-        localStorage.setItem('golem-theme', isDark ? 'dark' : 'nord');
+        if (icon) icon.setAttribute('data-icon', isDark ? 'heroicons:sun' : 'heroicons:moon');
+        try { localStorage.setItem('golem-theme', isDark ? 'dark' : 'nord'); } catch (e) { /* private mode */ }
       }
       apply(dark);
-      btn.addEventListener('click', function() {
-        dark = !dark;
-        apply(dark);
-      });
+      if (btn) {
+        btn.addEventListener('click', function() {
+          dark = !dark;
+          apply(dark);
+        });
+      }
     })();
 
     // Preserve collapse open/closed state across #ticket-live polls.

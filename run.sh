@@ -20,6 +20,17 @@ if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ] && [ -z "$CLAUDE_CODE_OA
   exit 1
 fi
 : "${GOLEM_ADMIN_PASSWORD:?Set GOLEM_ADMIN_PASSWORD in .env}"
+
+# Length is checked here, not just by the orchestrator, because the failure is
+# otherwise invisible: the container logs a warning, starts anyway, and the
+# only symptom is a login page answering "Invalid username or password" for
+# credentials the operator can see sitting in their own .env.
+if [ "${#GOLEM_ADMIN_PASSWORD}" -lt 8 ]; then
+  echo "Error: GOLEM_ADMIN_PASSWORD is ${#GOLEM_ADMIN_PASSWORD} characters; the minimum is 8." >&2
+  echo "       Shorter passwords are rejected when the admin account is created," >&2
+  echo "       which leaves the dashboard with no account to sign in to." >&2
+  exit 1
+fi
 : "${GOLEM_SHEM_API_KEY:?Set GOLEM_SHEM_API_KEY in .env}"
 
 # Generate a random shem key if still using the placeholder.
