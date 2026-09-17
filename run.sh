@@ -41,6 +41,25 @@ if [ -n "$CLAUDE_HOME" ]; then
       export CLAUDE_HOME
       ;;
   esac
+
+  # Checked here because Docker's own message for a missing bind-mount source
+  # is actively misleading: it reports the path as "not shared from the host"
+  # and points at Preferences -> Resources -> File Sharing, which diagnoses a
+  # permissions problem when the real one is that the directory does not
+  # exist. That sends people to configure sharing for a path they never meant
+  # to mount.
+  if [ ! -d "$CLAUDE_HOME" ]; then
+    echo "Error: CLAUDE_HOME points at $CLAUDE_HOME, which is not a directory." >&2
+    if [ "$CLAUDE_HOME" != "${CLAUDE_HOME#/c/Users/YourName}" ]; then
+      echo "       That is the placeholder from .env.example. Set it to your own" >&2
+      echo "       ~/.claude directory, or comment it out and use" >&2
+      echo "       CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY instead." >&2
+    else
+      echo "       Set it to your ~/.claude directory, or comment it out to use a" >&2
+      echo "       throwaway volume with CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY." >&2
+    fi
+    exit 1
+  fi
 fi
 
 docker compose up -d
