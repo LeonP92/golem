@@ -300,10 +300,16 @@ A repository you *saved* settings for has a row, and the row outlives the shem
 config. Remove it with:
 
 ```bash
-orchestrator repos list
-orchestrator repos remove https://github.com/owner/name
-# in Docker:
-docker compose exec orchestrator orchestrator repos remove https://github.com/owner/name
+golem-orchestrator repos list
+golem-orchestrator repos remove https://github.com/owner/name
+```
+
+In Docker, the image's entrypoint is the binary, so pass only the subcommand —
+the same shape as `backfill` below:
+
+```bash
+docker compose run --rm orchestrator repos list
+docker compose run --rm orchestrator repos remove https://github.com/owner/name
 ```
 
 Removal is refused while tickets ingested from that repository still exist —
