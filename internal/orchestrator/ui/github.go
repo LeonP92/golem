@@ -60,9 +60,17 @@ func (h *Handlers) renderGitHubSettings(w http.ResponseWriter, r *http.Request, 
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.WriteHeader(http.StatusBadRequest)
 	}
-	h.render(w, r, "github_settings", map[string]any{
-		"Repos": repos, "Parked": parked, "Nav": "github", "Error": errMsg,
-	})
+	// Built from h.base like every other page: it supplies the identity and
+	// permission flags the nav gates its controls on. This page used a
+	// literal map — it predates base() — so an admin viewing it lost the
+	// Users link, the New Ticket button and their own account menu, with no
+	// error to indicate why. ui/nav_test.go now asserts this for every
+	// nav-bearing route.
+	data := h.base(r, "github")
+	data["Repos"] = repos
+	data["Parked"] = parked
+	data["Error"] = errMsg
+	h.render(w, r, "github_settings", data)
 }
 
 // retryParkedOutboxRow returns one parked outbox row to the queue. Nothing
