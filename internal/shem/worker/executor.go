@@ -237,36 +237,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
 				return err
 			}
-			postStatus(c, ticketID, "Implementation complete — ready for review")
-			finalPhase, sha, _ := readState(ticketDir)
-			if finalPhase == "" {
-				finalPhase = "implement"
-			}
-			orchPhase := toOrchestratorPhase(finalPhase)
-			if orchPhase == "ready-for-review" && !cfg.NoPush {
-				worktree := filepath.Join(ticketDir, "worktree")
-				if pushErr := pushTicketBranch(ctx, worktree, claim.Branch); pushErr != nil {
-					// A failed push must not block the lifecycle: the ticket
-					// still reaches ready-for-review, just without a PR.
-					postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
-				} else {
-					postStatus(c, ticketID, "Pushed "+claim.Branch+" to origin")
-					if pErr := c.PostBranchPushed(claim.TicketID); pErr != nil {
-						log.Printf("executor: post branch-pushed: %v", pErr)
-					}
-				}
-			}
-			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
-				if errors.Is(phErr, client.ErrNotOwner) {
-					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-					return nil
-				}
-				log.Printf("executor: post phase error: %v", phErr)
-			}
-			if sha != "" {
-				PostCheckpointWithRetry(c, claim.TicketID, finalPhase, sha, 5) //nolint:errcheck
-			}
-			return nil
+			return finishWorkPhase(ctx, cfg, c, claim, ticketDir, "Implementation", claim.Branch)
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
@@ -274,36 +245,9 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
 				return err
 			}
-			postStatus(c, ticketID, "Revision complete — ready for review")
-			finalPhase, sha, _ := readState(ticketDir)
-			if finalPhase == "" {
-				finalPhase = "ready-for-review"
-			}
-			orchPhase := toOrchestratorPhase(finalPhase)
-			if orchPhase == "ready-for-review" && !cfg.NoPush {
-				worktree := filepath.Join(ticketDir, "worktree")
-				if pushErr := pushTicketBranch(ctx, worktree, claim.Branch); pushErr != nil {
-					// A failed push must not block the lifecycle: the ticket
-					// still reaches ready-for-review, just without a PR.
-					postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
-				} else {
-					postStatus(c, ticketID, "Pushed "+claim.Branch+" to origin")
-					if pErr := c.PostBranchPushed(claim.TicketID); pErr != nil {
-						log.Printf("executor: post branch-pushed: %v", pErr)
-					}
-				}
-			}
-			if phErr := c.PostPhase(claim.TicketID, orchPhase); phErr != nil {
-				if errors.Is(phErr, client.ErrNotOwner) {
-					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-					return nil
-				}
-				log.Printf("executor: post phase error: %v", phErr)
-			}
-			if sha != "" {
-				PostCheckpointWithRetry(c, claim.TicketID, finalPhase, sha, 5) //nolint:errcheck
-			}
-			return nil
+			// Previously defaulted an unreadable state to "ready-for-review",
+			// so a revise run that left no state reported success outright.
+			return finishWorkPhase(ctx, cfg, c, claim, ticketDir, "Revision", claim.Branch)
 
 		default:
 			log.Printf("executor: unknown start phase %q, falling through to implement", phase)
@@ -455,6 +399,81 @@ func postDocumentEntry(c *client.Client, ticketID string, entryType, filePath st
 // toOrchestratorPhase maps the local golem state.json phase to the orchestrator
 // phase name. "review" and "closed" both become "ready-for-review" because humans
 // close tickets via the UI — the shem never auto-closes.
+// finishWorkPhase closes out an implement or revise run: it works out what the
+// agent actually left behind, reports that, and only then moves the ticket.
+//
+// The order matters and used to be wrong. Both branches posted
+// "… complete — ready for review" BEFORE reading the local state, then derived
+// the orchestrator phase from that state and posted it — and
+// toOrchestratorPhase passes anything that is not "review" or "closed"
+// straight through. So an agent that stopped without running
+// `golem ticket review` left state.json at, say, "plan", and the shem posted
+// phase "plan": the ticket moved BACKWARDS while the log above it claimed it
+// was ready for review.
+//
+// That combination also looped. "plan" is in the resumable set, so every shem
+// restart resumed the ticket, nextPhaseAfterCheckpoint sent it to implement
+// again, and the whole pass re-ran and re-appended its entries indefinitely.
+//
+// An agent that did not advance the local ticket has not finished, whatever
+// the reason — a question for a human, a refusal, a crash after the last
+// commit. That is for a human to look at, so this returns an error and lets
+// the worker park the ticket in needs-attention with the reason attached,
+// rather than inventing a phase for it.
+func finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
+	claim *client.ClaimResponse, ticketDir, what, branch string,
+) error {
+	ticketID := claim.TicketID
+
+	localPhase, sha, stateErr := readState(ticketDir)
+	orchPhase := toOrchestratorPhase(localPhase)
+
+	// Written either way, and before the early return: the checkpoint is what
+	// lets a requeue resume this phase instead of starting the ticket over
+	// from brainstorm.
+	if sha != "" {
+		PostCheckpointWithRetry(c, ticketID, localPhase, sha, 5) //nolint:errcheck
+	}
+
+	if orchPhase != "ready-for-review" {
+		// The local phase is named because it is the whole diagnosis: "plan"
+		// means the agent stopped at the planning gate, "implement" means it
+		// never ran `golem ticket review`.
+		if stateErr != nil {
+			return fmt.Errorf("%s did not complete: no readable ticket state in %s (%v), "+
+				"so there is nothing to review", what, ticketDir, stateErr)
+		}
+		return fmt.Errorf("%s did not complete: the agent left the local ticket at phase %q "+
+			"instead of advancing it, so it is not ready for review — see the log above for "+
+			"what it was waiting on", what, localPhase)
+	}
+
+	postStatus(c, ticketID, what+" complete — ready for review")
+
+	if !cfg.NoPush {
+		worktree := filepath.Join(ticketDir, "worktree")
+		if pushErr := pushTicketBranch(ctx, worktree, branch); pushErr != nil {
+			// A failed push must not block the lifecycle: the ticket still
+			// reaches ready-for-review, just without a pull request.
+			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
+		} else {
+			postStatus(c, ticketID, "Pushed "+branch+" to origin")
+			if pErr := c.PostBranchPushed(ticketID); pErr != nil {
+				log.Printf("executor: post branch-pushed: %v", pErr)
+			}
+		}
+	}
+
+	if phErr := c.PostPhase(ticketID, orchPhase); phErr != nil {
+		if errors.Is(phErr, client.ErrNotOwner) {
+			log.Printf("executor: ticket %s was requeued, stopping", ticketID)
+			return nil
+		}
+		log.Printf("executor: post phase error: %v", phErr)
+	}
+	return nil
+}
+
 func toOrchestratorPhase(localPhase string) string {
 	switch localPhase {
 	case "review", "closed":
