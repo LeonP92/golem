@@ -228,6 +228,85 @@ const (
 	}
 }
 
+func TestExtract_typescript_extended(t *testing.T) {
+	src := []byte(`/**
+ * Module doc.
+ */
+import { thing } from 'mod';
+const util = require('other');
+
+/** Doc for PublicFn */
+export function PublicFn(x: number): string { return ""; }
+
+/** Doc for MyClass */
+export class MyClass {
+  a: number = 0;
+  b: string;
+  greet() {}
+}
+
+/** Doc for MyIface */
+export interface MyIface {
+  x: number;
+  y: string;
+}
+
+export const MY_CONST = 5;
+`)
+	d, err := Extract(src, "typescript")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(d.PackageDoc, "Module doc.") {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	if !containsStr(d.Imports, "mod") {
+		t.Errorf("missing import mod: %v", d.Imports)
+	}
+	if !containsStr(d.Imports, "other") {
+		t.Errorf("missing require other: %v", d.Imports)
+	}
+	var pf *ExportedFunc
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == "PublicFn" {
+			pf = &d.ExportedFuncs[i]
+		}
+	}
+	if pf == nil {
+		t.Fatalf("PublicFn not found: %+v", d.ExportedFuncs)
+	}
+	if !strings.Contains(pf.Signature, "function PublicFn") {
+		t.Errorf("PublicFn.Signature = %q", pf.Signature)
+	}
+	if !strings.Contains(pf.Doc, "Doc for PublicFn") {
+		t.Errorf("PublicFn.Doc = %q", pf.Doc)
+	}
+	foundClass, foundIface := false, false
+	for _, tp := range d.ExportedTypes {
+		if tp.Name == "MyClass" {
+			foundClass = true
+			if !strings.Contains(tp.Doc, "Doc for MyClass") {
+				t.Errorf("MyClass.Doc = %q", tp.Doc)
+			}
+			if len(tp.Fields) < 2 {
+				t.Errorf("MyClass.Fields = %v", tp.Fields)
+			}
+		}
+		if tp.Name == "MyIface" {
+			foundIface = true
+			if len(tp.Fields) != 2 {
+				t.Errorf("MyIface.Fields = %v", tp.Fields)
+			}
+		}
+	}
+	if !foundClass || !foundIface {
+		t.Errorf("classes = %+v", d.ExportedTypes)
+	}
+	if !containsStr(d.Consts, "MY_CONST") {
+		t.Errorf("missing MY_CONST: %v", d.Consts)
+	}
+}
+
 func TestExtract_python_extended(t *testing.T) {
 	src := []byte(`"""Module docstring.
 
