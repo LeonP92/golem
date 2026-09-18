@@ -1,8 +1,10 @@
 package graph
 
 import (
-	"embed"
+	"fmt"
+	"go/token"
 	"strings"
+	"unsafe"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 	golang "github.com/tree-sitter/tree-sitter-go/bindings/go"
@@ -13,9 +15,6 @@ import (
 	rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
-
-//go:embed queries/*.scm
-var queryFS embed.FS
 
 // StructuralData holds the tree-sitter-extracted structural information for a
 // source file. `ExportFns` / `ExportTypes` remain as name-only slices for
@@ -35,7 +34,7 @@ var extToLang = map[string]string{
 	".go":   "golang",
 	".py":   "python",
 	".ts":   "typescript",
-	".tsx":  "typescript",
+	".tsx":  "tsx",
 	".js":   "javascript",
 	".jsx":  "javascript",
 	".mjs":  "javascript",
@@ -49,131 +48,126 @@ func LangForExt(ext string) string {
 	return extToLang[ext]
 }
 
-func tsLanguage(name string) *sitter.Language {
-	switch name {
-	case "golang":
-		return sitter.NewLanguage(golang.Language())
-	case "python":
-		return sitter.NewLanguage(python.Language())
-	case "typescript":
-		return sitter.NewLanguage(typescript.LanguageTypescript())
-	case "javascript":
-		return sitter.NewLanguage(javascript.Language())
-	case "rust":
-		return sitter.NewLanguage(rust.Language())
-	case "java":
-		return sitter.NewLanguage(java.Language())
-	case "ruby":
-		return sitter.NewLanguage(ruby.Language())
-	}
-	return nil
+// langSpec pairs a tree-sitter grammar with the extractor that walks it.
+type langSpec struct {
+	grammar func() unsafe.Pointer
+	extract func(source []byte, root *sitter.Node) *StructuralData
 }
 
-// Extract runs tree-sitter parsing against source to extract imports and
-// exported symbols. Returns empty StructuralData (not an error) for unknown
-// languages. Languages with an extended extractor produce doc comments,
-// signatures, type fields, and consts; other languages fall back to the
-// generic name-only query path.
+var languages = map[string]langSpec{
+	"golang":     {golang.Language, extractGo},
+	"python":     {python.Language, extractPython},
+	"typescript": {typescript.LanguageTypescript, extractJSTS},
+	"tsx":        {typescript.LanguageTSX, extractJSTS},
+	"javascript": {javascript.Language, extractJSTS},
+	"rust":       {rust.Language, extractRust},
+	"java":       {java.Language, extractJava},
+	"ruby":       {ruby.Language, extractRuby},
+}
+
+// Extract parses source with the tree-sitter grammar for langName and
+// returns its package doc, imports, consts, and exported functions/types
+// (with signatures, docs, and fields). Returns empty StructuralData (not an
+// error) for unknown languages.
 func Extract(source []byte, langName string) (*StructuralData, error) {
-	lang := tsLanguage(langName)
-	if lang == nil {
+	spec, ok := languages[langName]
+	if !ok {
 		return &StructuralData{}, nil
 	}
 
 	parser := sitter.NewParser()
 	defer parser.Close()
-	if err := parser.SetLanguage(lang); err != nil {
+	if err := parser.SetLanguage(sitter.NewLanguage(spec.grammar())); err != nil {
 		return nil, err
 	}
 	tree := parser.Parse(source, nil)
+	if tree == nil {
+		return nil, fmt.Errorf("graph: parsing %s source failed", langName)
+	}
 	defer tree.Close()
-	root := tree.RootNode()
 
-	switch langName {
-	case "golang":
-		return extractGo(source, root), nil
-	case "python":
-		return extractPython(source, root), nil
-	case "javascript", "typescript":
-		return extractJSTS(source, root), nil
-	case "java":
-		return extractJava(source, root), nil
-	case "rust":
-		return extractRust(source, root), nil
-	case "ruby":
-		return extractRuby(source, root), nil
+	d := spec.extract(source, tree.RootNode())
+	for _, f := range d.ExportedFuncs {
+		d.ExportFns = append(d.ExportFns, f.Name)
 	}
-
-	// Generic fallback: single .scm query, name-only captures.
-	return extractGeneric(source, lang, langName, root)
-}
-
-func extractGeneric(source []byte, lang *sitter.Language, langName string, root *sitter.Node) (*StructuralData, error) {
-	queryBytes, err := queryFS.ReadFile("queries/" + langName + ".scm")
-	if err != nil {
-		return &StructuralData{}, nil
-	}
-	q, qErr := sitter.NewQuery(lang, string(queryBytes))
-	if qErr != nil {
-		return nil, qErr
-	}
-	defer q.Close()
-
-	cursor := sitter.NewQueryCursor()
-	defer cursor.Close()
-	matches := cursor.Matches(q, root, source)
-	captureNames := q.CaptureNames()
-
-	d := &StructuralData{}
-	seen := make(map[string]bool)
-
-	for match := matches.Next(); match != nil; match = matches.Next() {
-		if !match.SatisfiesTextPredicate(q, nil, nil, source) {
-			continue
-		}
-		for _, cap := range match.Captures {
-			name := captureNames[cap.Index]
-			node := cap.Node
-			text := strings.TrimSpace(string(source[node.StartByte():node.EndByte()]))
-			text = strings.Trim(text, `"`)
-			text = strings.TrimSpace(text)
-			if text == "" || seen[name+":"+text] {
-				continue
-			}
-			seen[name+":"+text] = true
-			switch name {
-			case "import":
-				d.Imports = append(d.Imports, text)
-			case "export_fn":
-				d.ExportFns = append(d.ExportFns, text)
-			case "export_type":
-				d.ExportTypes = append(d.ExportTypes, text)
-			}
-		}
+	for _, t := range d.ExportedTypes {
+		d.ExportTypes = append(d.ExportTypes, t.Name)
 	}
 	return d, nil
 }
 
-// collectDocAbove walks previous siblings of node while they are comment
-// nodes and returns the joined doc-comment text with delimiters stripped.
-// Comments are only associated when they are directly line-adjacent to the
+// nodeText returns the source text spanned by n.
+func nodeText(source []byte, n *sitter.Node) string {
+	return string(source[n.StartByte():n.EndByte()])
+}
+
+// collapse trims s and folds whitespace runs to single spaces.
+func collapse(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// fieldText returns the collapsed text of n's named field, or "".
+func fieldText(source []byte, n *sitter.Node, field string) string {
+	f := n.ChildByFieldName(field)
+	if f == nil {
+		return ""
+	}
+	return collapse(nodeText(source, f))
+}
+
+// childrenByField returns every child of n in the named field.
+func childrenByField(n *sitter.Node, field string) []sitter.Node {
+	cursor := n.Walk()
+	defer cursor.Close()
+	return n.ChildrenByFieldName(field, cursor)
+}
+
+// signatureBefore returns the collapsed text from the start of from up to
+// (excluding) body, or all of from when body is nil.
+func signatureBefore(source []byte, from, body *sitter.Node) string {
+	end := from.EndByte()
+	if body != nil {
+		end = body.StartByte()
+	}
+	return collapse(string(source[from.StartByte():end]))
+}
+
+// docStyle describes how collectDocAbove recognises a language's doc comments.
+type docStyle struct {
+	// line returns the stripped text of a comment sibling, or ok=false to
+	// end the doc run.
+	line func(kind, text string) (doc string, ok bool)
+	// skip reports siblings that may sit between a doc and its declaration
+	// (e.g. Rust attributes). May be nil.
+	skip func(kind string) bool
+}
+
+// collectDocAbove walks previous siblings of node and returns the joined
+// doc-comment text. Comments are only associated when line-adjacent to the
 // declaration (no blank line between). Returns "" if none.
-func collectDocAbove(source []byte, node *sitter.Node, commentKind string, strip func(string) string) string {
+func collectDocAbove(source []byte, node *sitter.Node, st docStyle) string {
 	var lines []string
-	prev := node.PrevSibling()
 	lastStartRow := node.StartPosition().Row
-	for prev != nil && prev.Kind() == commentKind {
-		endRow := prev.EndPosition().Row
-		if endRow+1 < lastStartRow {
+	for prev := node.PrevSibling(); prev != nil; prev = prev.PrevSibling() {
+		if prev.EndPosition().Row+1 < lastStartRow {
 			break
 		}
-		text := string(source[prev.StartByte():prev.EndByte()])
-		lines = append([]string{strip(text)}, lines...)
 		lastStartRow = prev.StartPosition().Row
-		prev = prev.PrevSibling()
+		if st.skip != nil && st.skip(prev.Kind()) {
+			continue
+		}
+		doc, ok := st.line(prev.Kind(), nodeText(source, prev))
+		if !ok {
+			break
+		}
+		lines = append([]string{doc}, lines...)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
+
+var goDoc = docStyle{line: func(kind, text string) (string, bool) {
+	return stripGoComment(text), kind == "comment"
+}}
 
 // stripGoComment strips "// " or "/* ... */" delimiters from a Go comment.
 func stripGoComment(s string) string {
@@ -187,28 +181,16 @@ func stripGoComment(s string) string {
 	return s
 }
 
-// extractGo produces a full StructuralData from a parsed Go source file
-// using the tree-sitter Go grammar directly (no .scm query needed). It
-// captures the package doc, imports, exported function signatures with
-// docs, exported type fields with docs, and top-level const names.
+// extractGo captures the package doc, imports, exported function signatures
+// with docs, exported types with docs and exported fields/methods, and
+// exported const names from a parsed Go source file.
 func extractGo(source []byte, root *sitter.Node) *StructuralData {
 	d := &StructuralData{}
-	cursor := root.Walk()
-	defer cursor.Close()
-
-	children := root.NamedChildren(cursor)
-
-	// Package doc: comment(s) immediately preceding the package_clause.
-	for i, c := range children {
-		if c.Kind() == "package_clause" {
-			d.PackageDoc = collectDocAbove(source, &children[i], "comment", stripGoComment)
-			break
-		}
-	}
-
-	for i := range children {
-		c := &children[i]
+	for i := uint(0); i < root.NamedChildCount(); i++ {
+		c := root.NamedChild(i)
 		switch c.Kind() {
+		case "package_clause":
+			d.PackageDoc = collectDocAbove(source, c, goDoc)
 		case "import_declaration":
 			extractGoImports(source, c, d)
 		case "function_declaration", "method_declaration":
@@ -219,32 +201,18 @@ func extractGo(source []byte, root *sitter.Node) *StructuralData {
 			extractGoConsts(source, c, d)
 		}
 	}
-
-	// Populate name-only slices for downstream consumers.
-	for _, f := range d.ExportedFuncs {
-		d.ExportFns = append(d.ExportFns, f.Name)
-	}
-	for _, t := range d.ExportedTypes {
-		d.ExportTypes = append(d.ExportTypes, t.Name)
-	}
 	return d
 }
 
 func extractGoImports(source []byte, decl *sitter.Node, d *StructuralData) {
-	cursor := decl.Walk()
-	defer cursor.Close()
 	for i := uint(0); i < decl.NamedChildCount(); i++ {
 		child := decl.NamedChild(i)
-		if child == nil {
-			continue
-		}
 		switch child.Kind() {
 		case "import_spec":
 			addGoImport(source, child, d)
 		case "import_spec_list":
 			for j := uint(0); j < child.NamedChildCount(); j++ {
-				spec := child.NamedChild(j)
-				if spec != nil && spec.Kind() == "import_spec" {
+				if spec := child.NamedChild(j); spec.Kind() == "import_spec" {
 					addGoImport(source, spec, d)
 				}
 			}
@@ -253,107 +221,153 @@ func extractGoImports(source []byte, decl *sitter.Node, d *StructuralData) {
 }
 
 func addGoImport(source []byte, spec *sitter.Node, d *StructuralData) {
-	path := spec.ChildByFieldName("path")
-	if path == nil {
-		return
-	}
-	text := strings.Trim(string(source[path.StartByte():path.EndByte()]), `"`)
-	if text != "" {
+	if text := strings.Trim(fieldText(source, spec, "path"), "\"`"); text != "" {
 		d.Imports = append(d.Imports, text)
 	}
 }
 
 func extractGoFunc(source []byte, decl *sitter.Node, d *StructuralData) {
-	name := decl.ChildByFieldName("name")
-	if name == nil {
+	nm := fieldText(source, decl, "name")
+	if !token.IsExported(nm) {
 		return
 	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	if !isExportedGo(nm) {
-		return
+	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{
+		Name:      nm,
+		Signature: signatureBefore(source, decl, decl.ChildByFieldName("body")),
+		Doc:       collectDocAbove(source, decl, goDoc),
+	})
+}
+
+// goSpecs returns the specs of a type/const declaration, whether written
+// singly or as a parenthesised group.
+func goSpecs(decl *sitter.Node, kind string) []*sitter.Node {
+	var specs []*sitter.Node
+	for i := uint(0); i < decl.NamedChildCount(); i++ {
+		c := decl.NamedChild(i)
+		switch c.Kind() {
+		case kind:
+			specs = append(specs, c)
+		case kind + "_list": // newer grammars wrap groups in a list node
+			for j := uint(0); j < c.NamedChildCount(); j++ {
+				if s := c.NamedChild(j); s.Kind() == kind {
+					specs = append(specs, s)
+				}
+			}
+		}
 	}
-	// Signature = text from decl start to body start (exclusive).
-	body := decl.ChildByFieldName("body")
-	end := decl.EndByte()
-	if body != nil {
-		end = body.StartByte()
-	}
-	sig := strings.TrimSpace(string(source[decl.StartByte():end]))
-	// Collapse whitespace runs.
-	sig = strings.Join(strings.Fields(sig), " ")
-	doc := collectDocAbove(source, decl, "comment", stripGoComment)
-	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, Signature: sig, Doc: doc})
+	return specs
 }
 
 func extractGoTypes(source []byte, decl *sitter.Node, d *StructuralData) {
-	// A type_declaration contains one or more type_spec children.
-	docForDecl := collectDocAbove(source, decl, "comment", stripGoComment)
-	for i := uint(0); i < decl.NamedChildCount(); i++ {
-		spec := decl.NamedChild(i)
-		if spec == nil || spec.Kind() != "type_spec" {
+	specs := goSpecs(decl, "type_spec")
+	for _, spec := range specs {
+		nm := fieldText(source, spec, "name")
+		if !token.IsExported(nm) {
 			continue
 		}
-		name := spec.ChildByFieldName("name")
-		if name == nil {
-			continue
+		// Each grouped spec carries its own doc; the declaration's doc only
+		// applies when it documents a single spec.
+		doc := collectDocAbove(source, spec, goDoc)
+		if doc == "" && len(specs) == 1 {
+			doc = collectDocAbove(source, decl, goDoc)
 		}
-		nm := string(source[name.StartByte():name.EndByte()])
-		if !isExportedGo(nm) {
-			continue
-		}
-		typeNode := spec.ChildByFieldName("type")
-		fields := extractGoStructFields(source, typeNode)
-		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: docForDecl, Fields: fields})
+		d.ExportedTypes = append(d.ExportedTypes, ExportedType{
+			Name:   nm,
+			Doc:    doc,
+			Fields: extractGoTypeMembers(source, spec.ChildByFieldName("type")),
+		})
 	}
 }
 
-func extractGoStructFields(source []byte, typeNode *sitter.Node) []string {
-	if typeNode == nil || typeNode.Kind() != "struct_type" {
+// extractGoTypeMembers returns exported struct fields or interface method
+// set entries (including embedded exported types).
+func extractGoTypeMembers(source []byte, typeNode *sitter.Node) []string {
+	if typeNode == nil {
 		return nil
 	}
 	var out []string
-	// struct_type -> field_declaration_list -> field_declaration*
-	for i := uint(0); i < typeNode.NamedChildCount(); i++ {
-		list := typeNode.NamedChild(i)
-		if list == nil || list.Kind() != "field_declaration_list" {
-			continue
-		}
-		for j := uint(0); j < list.NamedChildCount(); j++ {
-			fd := list.NamedChild(j)
-			if fd == nil || fd.Kind() != "field_declaration" {
+	switch typeNode.Kind() {
+	case "struct_type":
+		for i := uint(0); i < typeNode.NamedChildCount(); i++ {
+			list := typeNode.NamedChild(i)
+			if list.Kind() != "field_declaration_list" {
 				continue
 			}
-			text := strings.TrimSpace(string(source[fd.StartByte():fd.EndByte()]))
-			text = strings.Join(strings.Fields(text), " ")
-			if text != "" {
-				out = append(out, text)
+			for j := uint(0); j < list.NamedChildCount(); j++ {
+				if fd := list.NamedChild(j); fd.Kind() == "field_declaration" {
+					if f := goExportedField(source, fd); f != "" {
+						out = append(out, f)
+					}
+				}
+			}
+		}
+	case "interface_type":
+		for i := uint(0); i < typeNode.NamedChildCount(); i++ {
+			m := typeNode.NamedChild(i)
+			switch m.Kind() {
+			case "method_elem":
+				if token.IsExported(fieldText(source, m, "name")) {
+					out = append(out, collapse(nodeText(source, m)))
+				}
+			case "type_elem":
+				if text := collapse(nodeText(source, m)); token.IsExported(goEmbeddedName(text)) {
+					out = append(out, text)
+				}
 			}
 		}
 	}
 	return out
 }
 
-func extractGoConsts(source []byte, decl *sitter.Node, d *StructuralData) {
-	for i := uint(0); i < decl.NamedChildCount(); i++ {
-		spec := decl.NamedChild(i)
-		if spec == nil || spec.Kind() != "const_spec" {
-			continue
+// goExportedField renders a struct field declaration keeping only its
+// exported names, or "" when none are exported.
+func goExportedField(source []byte, fd *sitter.Node) string {
+	names := childrenByField(fd, "name")
+	if len(names) == 0 { // embedded field
+		text := collapse(nodeText(source, fd))
+		if token.IsExported(goEmbeddedName(text)) {
+			return text
 		}
-		name := spec.ChildByFieldName("name")
-		if name == nil {
-			continue
-		}
-		nm := string(source[name.StartByte():name.EndByte()])
-		if isExportedGo(nm) {
-			d.Consts = append(d.Consts, nm)
+		return ""
+	}
+	var keep []string
+	for i := range names {
+		if nm := nodeText(source, &names[i]); token.IsExported(nm) {
+			keep = append(keep, nm)
 		}
 	}
+	if len(keep) == 0 {
+		return ""
+	}
+	rest := ""
+	if t := fd.ChildByFieldName("type"); t != nil {
+		rest = collapse(string(source[t.StartByte():fd.EndByte()]))
+	}
+	return strings.Join(keep, ", ") + " " + rest
 }
 
-func isExportedGo(name string) bool {
-	if name == "" {
-		return false
+// goEmbeddedName returns the type name of an embedded field or interface
+// element, e.g. "*pkg.Name[T]" -> "Name".
+func goEmbeddedName(text string) string {
+	text = strings.TrimLeft(text, "*~")
+	if i := strings.IndexAny(text, "[ "); i >= 0 {
+		text = text[:i]
 	}
-	c := name[0]
-	return c >= 'A' && c <= 'Z'
+	if i := strings.LastIndex(text, "."); i >= 0 {
+		text = text[i+1:]
+	}
+	return text
+}
+
+func extractGoConsts(source []byte, decl *sitter.Node, d *StructuralData) {
+	for _, spec := range goSpecs(decl, "const_spec") {
+		for _, n := range childrenByField(spec, "name") {
+			if n.Kind() != "identifier" {
+				continue
+			}
+			if nm := nodeText(source, &n); token.IsExported(nm) {
+				d.Consts = append(d.Consts, nm)
+			}
+		}
+	}
 }

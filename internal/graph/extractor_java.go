@@ -6,163 +6,108 @@ import (
 	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-// extractJava walks a parsed Java compilation unit. Java has no "module
-// doc" concept; PackageDoc is set from the block_comment immediately
-// preceding the first top-level class/interface, which is the closest
-// analogue in idiomatic Java sources.
+// javaDoc accepts only `/** */` Javadoc blocks, so license headers and
+// plain comments are never attached to declarations.
+var javaDoc = docStyle{line: func(kind, text string) (string, bool) {
+	if kind != "block_comment" || !strings.HasPrefix(text, "/**") {
+		return "", false
+	}
+	return stripJSDoc(text), true
+}}
+
+// extractJava walks a parsed Java compilation unit. PackageDoc is the
+// Javadoc on the package declaration (package-info.java) or, failing that,
+// the Javadoc of the first public top-level type.
 func extractJava(source []byte, root *sitter.Node) *StructuralData {
 	d := &StructuralData{}
-	cursor := root.Walk()
-	defer cursor.Close()
-	children := root.NamedChildren(cursor)
-
-	packageDocSet := false
-	for i := range children {
-		c := &children[i]
+	for i := uint(0); i < root.NamedChildCount(); i++ {
+		c := root.NamedChild(i)
 		switch c.Kind() {
+		case "package_declaration":
+			d.PackageDoc = collectDocAbove(source, c, javaDoc)
 		case "import_declaration":
-			extractJavaImport(source, c, d)
-		case "class_declaration":
-			if !packageDocSet {
-				d.PackageDoc = javaDocAbove(source, c)
-				packageDocSet = true
+			if c.NamedChildCount() > 0 {
+				if text := collapse(nodeText(source, c.NamedChild(0))); text != "" {
+					d.Imports = append(d.Imports, text)
+				}
 			}
-			extractJavaClass(source, c, d)
-		case "interface_declaration":
-			if !packageDocSet {
-				d.PackageDoc = javaDocAbove(source, c)
-				packageDocSet = true
+		case "class_declaration", "interface_declaration", "enum_declaration", "record_declaration":
+			first := len(d.ExportedTypes) == 0
+			extractJavaType(source, c, d)
+			if first && d.PackageDoc == "" && len(d.ExportedTypes) > 0 {
+				d.PackageDoc = d.ExportedTypes[0].Doc
 			}
-			extractJavaInterface(source, c, d)
 		}
-	}
-
-	for _, f := range d.ExportedFuncs {
-		d.ExportFns = append(d.ExportFns, f.Name)
-	}
-	for _, t := range d.ExportedTypes {
-		d.ExportTypes = append(d.ExportTypes, t.Name)
 	}
 	return d
 }
 
-func extractJavaImport(source []byte, decl *sitter.Node, d *StructuralData) {
-	// The named child is the scoped_identifier we want verbatim.
-	if decl.NamedChildCount() == 0 {
+// extractJavaType records a public class/interface/enum/record with its
+// public fields (interface: method signatures; enum: constants; record:
+// components) and adds its public methods to ExportedFuncs.
+func extractJavaType(source []byte, decl *sitter.Node, d *StructuralData) {
+	nm := fieldText(source, decl, "name")
+	if nm == "" || !javaHasModifier(source, decl, "public") {
 		return
 	}
-	child := decl.NamedChild(0)
-	if child == nil {
-		return
-	}
-	text := strings.TrimSpace(string(source[child.StartByte():child.EndByte()]))
-	if text != "" {
-		d.Imports = append(d.Imports, text)
-	}
-}
-
-func extractJavaClass(source []byte, decl *sitter.Node, d *StructuralData) {
-	if !javaHasModifier(source, decl, "public") {
-		return
-	}
-	name := decl.ChildByFieldName("name")
-	if name == nil {
-		return
-	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	body := decl.ChildByFieldName("body")
 	var fields []string
-	if body != nil {
+	if params := decl.ChildByFieldName("parameters"); params != nil { // record components
+		for i := uint(0); i < params.NamedChildCount(); i++ {
+			fields = append(fields, collapse(nodeText(source, params.NamedChild(i))))
+		}
+	}
+	isInterface := decl.Kind() == "interface_declaration"
+	var walk func(body *sitter.Node)
+	walk = func(body *sitter.Node) {
 		for i := uint(0); i < body.NamedChildCount(); i++ {
 			ch := body.NamedChild(i)
-			if ch == nil {
-				continue
-			}
 			switch ch.Kind() {
-			case "field_declaration":
-				if !javaHasModifier(source, ch, "public") {
-					continue
+			case "enum_constant":
+				fields = append(fields, fieldText(source, ch, "name"))
+			case "enum_body_declarations":
+				walk(ch)
+			case "field_declaration", "constant_declaration":
+				if isInterface || javaHasModifier(source, ch, "public") {
+					fields = append(fields, collapse(nodeText(source, ch)))
 				}
-				text := strings.TrimSpace(string(source[ch.StartByte():ch.EndByte()]))
-				text = strings.Join(strings.Fields(text), " ")
-				fields = append(fields, text)
 			case "method_declaration":
-				if !javaHasModifier(source, ch, "public") {
-					continue
+				if isInterface {
+					fields = append(fields, collapse(nodeText(source, ch)))
+				} else if javaHasModifier(source, ch, "public") {
+					extractJavaMethod(source, ch, d)
 				}
-				extractJavaMethod(source, ch, d)
 			}
 		}
 	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: javaDocAbove(source, decl), Fields: fields})
-}
-
-func extractJavaInterface(source []byte, decl *sitter.Node, d *StructuralData) {
-	name := decl.ChildByFieldName("name")
-	if name == nil {
-		return
+	if body := decl.ChildByFieldName("body"); body != nil {
+		walk(body)
 	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	body := decl.ChildByFieldName("body")
-	var fields []string
-	if body != nil {
-		for i := uint(0); i < body.NamedChildCount(); i++ {
-			ch := body.NamedChild(i)
-			if ch == nil {
-				continue
-			}
-			if ch.Kind() == "method_declaration" {
-				text := strings.TrimSpace(string(source[ch.StartByte():ch.EndByte()]))
-				text = strings.Join(strings.Fields(text), " ")
-				fields = append(fields, text)
-			}
-		}
-	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: javaDocAbove(source, decl), Fields: fields})
+	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: collectDocAbove(source, decl, javaDoc), Fields: fields})
 }
 
 func extractJavaMethod(source []byte, decl *sitter.Node, d *StructuralData) {
-	name := decl.ChildByFieldName("name")
-	if name == nil {
+	nm := fieldText(source, decl, "name")
+	if nm == "" {
 		return
 	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	body := decl.ChildByFieldName("body")
-	end := decl.EndByte()
-	if body != nil {
-		end = body.StartByte()
-	}
-	sig := strings.TrimSpace(string(source[decl.StartByte():end]))
-	sig = strings.Join(strings.Fields(sig), " ")
-	doc := javaDocAbove(source, decl)
-	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, Signature: sig, Doc: doc})
+	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{
+		Name:      nm,
+		Signature: signatureBefore(source, decl, decl.ChildByFieldName("body")),
+		Doc:       collectDocAbove(source, decl, javaDoc),
+	})
 }
 
 func javaHasModifier(source []byte, decl *sitter.Node, want string) bool {
 	for i := uint(0); i < decl.NamedChildCount(); i++ {
 		ch := decl.NamedChild(i)
-		if ch == nil || ch.Kind() != "modifiers" {
+		if ch.Kind() != "modifiers" {
 			continue
 		}
-		text := string(source[ch.StartByte():ch.EndByte()])
-		for _, tok := range strings.Fields(text) {
+		for _, tok := range strings.Fields(nodeText(source, ch)) {
 			if tok == want {
 				return true
 			}
 		}
 	}
 	return false
-}
-
-// javaDocAbove finds a block_comment sibling immediately preceding node
-// (line-adjacent) and returns its stripped text, or "".
-func javaDocAbove(source []byte, node *sitter.Node) string {
-	prev := node.PrevSibling()
-	if prev == nil || prev.Kind() != "block_comment" {
-		return ""
-	}
-	if prev.EndPosition().Row+1 < node.StartPosition().Row {
-		return ""
-	}
-	return stripJSDoc(string(source[prev.StartByte():prev.EndByte()]))
 }

@@ -10,7 +10,7 @@ func TestLangForExt(t *testing.T) {
 		{".go", "golang"},
 		{".py", "python"},
 		{".ts", "typescript"},
-		{".tsx", "typescript"},
+		{".tsx", "tsx"},
 		{".js", "javascript"},
 		{".jsx", "javascript"},
 		{".rs", "rust"},
@@ -608,4 +608,351 @@ func containsStr(ss []string, s string) bool {
 		}
 	}
 	return false
+}
+
+func findFunc(d *StructuralData, name string) *ExportedFunc {
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == name {
+			return &d.ExportedFuncs[i]
+		}
+	}
+	return nil
+}
+
+func findType(d *StructuralData, name string) *ExportedType {
+	for i := range d.ExportedTypes {
+		if d.ExportedTypes[i].Name == name {
+			return &d.ExportedTypes[i]
+		}
+	}
+	return nil
+}
+
+func mustExtract(t *testing.T, src, lang string) *StructuralData {
+	t.Helper()
+	d, err := Extract([]byte(src), lang)
+	if err != nil {
+		t.Fatalf("Extract(%s): %v", lang, err)
+	}
+	return d
+}
+
+func TestExtract_python_decoratedAndShebang(t *testing.T) {
+	d := mustExtract(t, `#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""Module doc."""
+
+@dataclass
+class Point:
+    """A point."""
+    x: int
+
+@functools.cache
+def compute(n):
+    """Computes."""
+    return n
+
+@decorator
+def _hidden():
+    pass
+
+@dataclass
+class _Private:
+    pass
+`, "python")
+	if d.PackageDoc != "Module doc." {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	if p := findType(d, "Point"); p == nil || p.Doc != "A point." || len(p.Fields) != 1 {
+		t.Errorf("Point = %+v", p)
+	}
+	if f := findFunc(d, "compute"); f == nil || f.Signature != "def compute(n)" || f.Doc != "Computes." {
+		t.Errorf("compute = %+v", f)
+	}
+	if findFunc(d, "_hidden") != nil || findType(d, "_Private") != nil {
+		t.Errorf("private decorated symbols leaked: %v %v", d.ExportFns, d.ExportTypes)
+	}
+}
+
+func TestExtract_rust_visibilityAttrsEnumsAliases(t *testing.T) {
+	d := mustExtract(t, `/// Doc for Shape.
+#[derive(Debug, Clone)]
+#[non_exhaustive]
+pub enum Shape {
+    Circle(f64),
+    Square { side: f64 },
+}
+
+/// Doc for Id.
+pub type Id = u64;
+
+/// Crate only.
+pub(crate) fn crate_fn() {}
+pub(super) struct SuperStruct;
+pub(in crate::a) const SCOPED: u8 = 1;
+enum PrivEnum { A }
+type PrivAlias = u8;
+
+/// Doc for run.
+#[inline]
+pub fn run() {}
+`, "rust")
+	if s := findType(d, "Shape"); s == nil || s.Doc != "Doc for Shape." || len(s.Fields) != 2 {
+		t.Errorf("Shape = %+v", s)
+	}
+	if id := findType(d, "Id"); id == nil || id.Doc != "Doc for Id." {
+		t.Errorf("Id = %+v", id)
+	}
+	if f := findFunc(d, "run"); f == nil || f.Doc != "Doc for run." {
+		t.Errorf("run = %+v", f)
+	}
+	if findFunc(d, "crate_fn") != nil {
+		t.Errorf("pub(crate) fn should not be exported")
+	}
+	for _, n := range []string{"SuperStruct", "PrivEnum", "PrivAlias"} {
+		if findType(d, n) != nil {
+			t.Errorf("%s should not be exported", n)
+		}
+	}
+	if containsStr(d.Consts, "SCOPED") {
+		t.Errorf("SCOPED should not be exported: %v", d.Consts)
+	}
+}
+
+func TestExtract_ruby_magicCommentsAndMethods(t *testing.T) {
+	d := mustExtract(t, `#!/usr/bin/env ruby
+# frozen_string_literal: true
+# -*- mode: ruby -*-
+
+# Library doc.
+require 'json'
+
+# frozen_string_literal: true
+class Foo
+  # Doc for bar.
+  def bar(x)
+  end
+
+  def self.build; end
+
+  private
+
+  def secret; end
+
+  public
+
+  def visible; end
+
+  protected
+
+  def guarded; end
+
+  module Inner
+    def helper; end
+  end
+end
+`, "ruby")
+	if d.PackageDoc != "Library doc." {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	if foo := findType(d, "Foo"); foo == nil || foo.Doc != "" {
+		t.Errorf("Foo = %+v (magic comment must not be its doc)", foo)
+	}
+	if f := findFunc(d, "Foo#bar"); f == nil || f.Signature != "def bar(x)" || f.Doc != "Doc for bar." {
+		t.Errorf("Foo#bar = %+v", f)
+	}
+	if f := findFunc(d, "Foo.build"); f == nil || f.Signature != "def self.build" {
+		t.Errorf("Foo.build = %+v", f)
+	}
+	if findFunc(d, "Foo#visible") == nil || findFunc(d, "Foo::Inner#helper") == nil || findType(d, "Foo::Inner") == nil {
+		t.Errorf("funcs = %v types = %v", d.ExportFns, d.ExportTypes)
+	}
+	if findFunc(d, "Foo#secret") != nil || findFunc(d, "Foo#guarded") != nil {
+		t.Errorf("private/protected methods leaked: %v", d.ExportFns)
+	}
+}
+
+func TestExtract_go_groupsConstsFieldsInterfaces(t *testing.T) {
+	d := mustExtract(t, `package p
+
+// Group doc.
+type (
+	// A is a.
+	A struct {
+		X, y int
+		Emb
+		*pkg.Ptr
+		lower
+		z string
+		Tagged int `+"`json:\"t\"`"+`
+	}
+	// B is b.
+	B interface {
+		Do(x int) error
+		io.Reader
+		hidden()
+	}
+	C int
+	d int
+)
+
+// Single doc.
+type (
+	Single int
+)
+
+const X, y, Z = 1, 2, 3
+
+const (
+	Ä = 1
+)
+`, "golang")
+	a := findType(d, "A")
+	if a == nil || a.Doc != "A is a." {
+		t.Fatalf("A = %+v", a)
+	}
+	wantA := []string{"X int", "Emb", "*pkg.Ptr", "Tagged int `json:\"t\"`"}
+	if strings.Join(a.Fields, "|") != strings.Join(wantA, "|") {
+		t.Errorf("A.Fields = %q, want %q", a.Fields, wantA)
+	}
+	if b := findType(d, "B"); b == nil || b.Doc != "B is b." || strings.Join(b.Fields, "|") != "Do(x int) error|io.Reader" {
+		t.Errorf("B = %+v", b)
+	}
+	if c := findType(d, "C"); c == nil || c.Doc != "" {
+		t.Errorf("C must not inherit the group doc: %+v", c)
+	}
+	if s := findType(d, "Single"); s == nil || s.Doc != "Single doc." {
+		t.Errorf("Single = %+v", s)
+	}
+	if findType(d, "d") != nil {
+		t.Errorf("unexported d leaked")
+	}
+	for _, want := range []string{"X", "Z", "Ä"} {
+		if !containsStr(d.Consts, want) {
+			t.Errorf("missing const %s: %v", want, d.Consts)
+		}
+	}
+	if containsStr(d.Consts, "y") {
+		t.Errorf("unexported y leaked: %v", d.Consts)
+	}
+}
+
+func TestExtract_typescript_arrowsAliasesEnumsClauses(t *testing.T) {
+	d := mustExtract(t, `/* eslint-disable */
+// license
+/**
+ * Module doc.
+ */
+import { x } from 'x';
+export { y } from './y';
+
+/** Adds. */
+export const add = (a: number, b: number): number => a + b;
+export const mul = function (a, b) { return a * b; };
+export type Opts = { a: number; b?: string };
+export enum Color { Red, Green = 2 }
+export const { destructured, other } = obj;
+export const [first] = arr;
+function local(a: string) {}
+class Local {}
+function notExported() {}
+const inner = () => 1;
+export { local, Local as Renamed };
+`, "typescript")
+	if d.PackageDoc != "Module doc." {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	if !containsStr(d.Imports, "./y") {
+		t.Errorf("re-export source missing from imports: %v", d.Imports)
+	}
+	if f := findFunc(d, "add"); f == nil || f.Signature != "const add = (a: number, b: number): number =>" || f.Doc != "Adds." {
+		t.Errorf("add = %+v", f)
+	}
+	if f := findFunc(d, "mul"); f == nil || f.Signature != "const mul = function (a, b)" {
+		t.Errorf("mul = %+v", f)
+	}
+	if o := findType(d, "Opts"); o == nil || len(o.Fields) != 2 {
+		t.Errorf("Opts = %+v", o)
+	}
+	if c := findType(d, "Color"); c == nil || strings.Join(c.Fields, "|") != "Red|Green = 2" {
+		t.Errorf("Color = %+v", c)
+	}
+	if findFunc(d, "local") == nil || findType(d, "Local") == nil {
+		t.Errorf("export clause names missing: %v %v", d.ExportFns, d.ExportTypes)
+	}
+	if findFunc(d, "notExported") != nil || findFunc(d, "inner") != nil {
+		t.Errorf("non-exported leaked: %v", d.ExportFns)
+	}
+	for _, n := range append(append([]string{}, d.ExportFns...), d.Consts...) {
+		if strings.ContainsAny(n, "{[") {
+			t.Errorf("destructuring pattern recorded as name: %q", n)
+		}
+	}
+}
+
+func TestExtract_js_packageDocBelongsToDecl(t *testing.T) {
+	d := mustExtract(t, `/* Copyright ACME */
+
+/** Doc for f. */
+export function f() {}
+`, "javascript")
+	if d.PackageDoc != "" {
+		t.Errorf("PackageDoc = %q, want empty", d.PackageDoc)
+	}
+	if f := findFunc(d, "f"); f == nil || f.Doc != "Doc for f." {
+		t.Errorf("f = %+v", f)
+	}
+}
+
+func TestExtract_tsx(t *testing.T) {
+	d := mustExtract(t, `export const App = (p: Props) => <div>{p.x}</div>;
+export function Button(): JSX.Element { return <button/>; }
+`, LangForExt(".tsx"))
+	if findFunc(d, "App") == nil || findFunc(d, "Button") == nil {
+		t.Errorf("tsx funcs = %+v", d.ExportedFuncs)
+	}
+}
+
+func TestExtract_java_licenseEnumsRecords(t *testing.T) {
+	d := mustExtract(t, `/*
+ * Licensed under Apache 2.0.
+ */
+package com.example;
+
+/* not javadoc */
+public class Foo {}
+
+/** Colors. */
+public enum Color { RED, GREEN; public int code() { return 1; } }
+
+public record Pair(int a, String b) {}
+
+interface Hidden { void x(); }
+enum PrivEnum { A }
+`, "java")
+	if d.PackageDoc != "" {
+		t.Errorf("PackageDoc = %q, license must not be used", d.PackageDoc)
+	}
+	if foo := findType(d, "Foo"); foo == nil || foo.Doc != "" {
+		t.Errorf("Foo = %+v", foo)
+	}
+	if c := findType(d, "Color"); c == nil || c.Doc != "Colors." || strings.Join(c.Fields, "|") != "RED|GREEN" {
+		t.Errorf("Color = %+v", c)
+	}
+	if findFunc(d, "code") == nil {
+		t.Errorf("enum public method missing: %v", d.ExportFns)
+	}
+	if p := findType(d, "Pair"); p == nil || strings.Join(p.Fields, "|") != "int a|String b" {
+		t.Errorf("Pair = %+v", p)
+	}
+	if findType(d, "Hidden") != nil || findType(d, "PrivEnum") != nil {
+		t.Errorf("non-public types leaked: %v", d.ExportTypes)
+	}
+
+	d = mustExtract(t, `/** Package doc. */
+package com.example;
+`, "java")
+	if d.PackageDoc != "Package doc." {
+		t.Errorf("package-info PackageDoc = %q", d.PackageDoc)
+	}
 }

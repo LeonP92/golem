@@ -1,94 +1,76 @@
 package graph
 
 import (
+	"regexp"
 	"strings"
 
 	sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
-// extractRuby walks a parsed Ruby program. Ruby has no explicit
-// visibility keyword at top level (methods are public by default), so
-// all defined methods, classes, modules, and top-level CONSTANT
-// assignments are recorded as exports. `require`/`require_relative`
-// calls become imports.
+// rubyMagicComment matches shebangs and interpreter magic comments, which
+// are never documentation.
+var rubyMagicComment = regexp.MustCompile(`^#!|^#\s*(frozen_string_literal|encoding|coding|warn_indent|shareable_constant_value)\s*:|^#.*-\*-.*-\*-`)
+
+var rubyDoc = docStyle{line: func(kind, text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if kind != "comment" || rubyMagicComment.MatchString(text) {
+		return "", false
+	}
+	return strings.TrimSpace(strings.TrimPrefix(text, "#")), true
+}}
+
+// extractRuby walks a parsed Ruby program. Top-level methods, classes,
+// modules, and CONSTANT assignments are exports, as are public methods in
+// class/module bodies (recorded as "Class#method" / "Class.method").
+// `require`/`require_relative` calls become imports.
 func extractRuby(source []byte, root *sitter.Node) *StructuralData {
-	d := &StructuralData{}
-	cursor := root.Walk()
-	defer cursor.Close()
-	children := root.NamedChildren(cursor)
-
-	// PackageDoc: leading run of # comments before any code.
-	d.PackageDoc = rubyLeadingComments(source, children)
-
-	for i := range children {
-		c := &children[i]
+	d := &StructuralData{PackageDoc: rubyLeadingComments(source, root)}
+	for i := uint(0); i < root.NamedChildCount(); i++ {
+		c := root.NamedChild(i)
 		switch c.Kind() {
 		case "call":
 			rubyMaybeRequire(source, c, d)
 		case "assignment":
-			rubyMaybeConst(source, c, d)
+			if left := c.ChildByFieldName("left"); left != nil && left.Kind() == "constant" {
+				d.Consts = append(d.Consts, nodeText(source, left))
+			}
 		case "method":
-			rubyExtractMethod(source, c, d)
-		case "class":
-			rubyExtractClass(source, c, d)
-		case "module":
-			rubyExtractModule(source, c, d)
+			rubyAddMethod(source, c, "", d)
+		case "class", "module":
+			rubyExtractType(source, c, "", d)
 		}
-	}
-
-	for _, f := range d.ExportedFuncs {
-		d.ExportFns = append(d.ExportFns, f.Name)
-	}
-	for _, t := range d.ExportedTypes {
-		d.ExportTypes = append(d.ExportTypes, t.Name)
 	}
 	return d
 }
 
-func rubyLeadingComments(source []byte, children []sitter.Node) string {
+// rubyLeadingComments returns the first run of line-adjacent # comments
+// at the top of the file, skipping shebang and magic comments.
+func rubyLeadingComments(source []byte, root *sitter.Node) string {
 	var lines []string
 	prevRow := -1
-	for i := range children {
-		c := &children[i]
+	for i := uint(0); i < root.NamedChildCount(); i++ {
+		c := root.NamedChild(i)
 		if c.Kind() != "comment" {
 			break
 		}
-		startRow := int(c.StartPosition().Row)
-		if prevRow >= 0 && startRow > prevRow+1 {
+		doc, ok := rubyDoc.line(c.Kind(), nodeText(source, c))
+		if !ok {
+			if len(lines) > 0 {
+				break
+			}
+			continue
+		}
+		if row := int(c.StartPosition().Row); prevRow >= 0 && row > prevRow+1 {
 			break
 		}
-		text := strings.TrimSpace(string(source[c.StartByte():c.EndByte()]))
-		text = strings.TrimPrefix(text, "#")
-		lines = append(lines, strings.TrimSpace(text))
+		lines = append(lines, doc)
 		prevRow = int(c.EndPosition().Row)
 	}
 	return strings.TrimSpace(strings.Join(lines, "\n"))
 }
 
-// rubyCommentAbove returns the # comment run immediately preceding node.
-func rubyCommentAbove(source []byte, node *sitter.Node) string {
-	var lines []string
-	prev := node.PrevSibling()
-	lastRow := node.StartPosition().Row
-	for prev != nil && prev.Kind() == "comment" {
-		if prev.EndPosition().Row+1 < lastRow {
-			break
-		}
-		text := strings.TrimSpace(string(source[prev.StartByte():prev.EndByte()]))
-		text = strings.TrimPrefix(text, "#")
-		lines = append([]string{strings.TrimSpace(text)}, lines...)
-		lastRow = prev.StartPosition().Row
-		prev = prev.PrevSibling()
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
-}
-
 func rubyMaybeRequire(source []byte, call *sitter.Node, d *StructuralData) {
-	method := call.ChildByFieldName("method")
-	if method == nil {
-		return
-	}
-	name := string(source[method.StartByte():method.EndByte()])
+	name := fieldText(source, call, "method")
 	if name != "require" && name != "require_relative" {
 		return
 	}
@@ -96,81 +78,88 @@ func rubyMaybeRequire(source []byte, call *sitter.Node, d *StructuralData) {
 	if args == nil || args.NamedChildCount() == 0 {
 		return
 	}
-	arg := args.NamedChild(0)
-	if arg == nil {
-		return
-	}
-	text := strings.TrimSpace(string(source[arg.StartByte():arg.EndByte()]))
-	text = strings.Trim(text, `"'`)
-	if text != "" {
+	if text := strings.Trim(collapse(nodeText(source, args.NamedChild(0))), `"'`); text != "" {
 		d.Imports = append(d.Imports, text)
 	}
 }
 
-func rubyMaybeConst(source []byte, decl *sitter.Node, d *StructuralData) {
-	left := decl.ChildByFieldName("left")
-	if left == nil || left.Kind() != "constant" {
+// rubyAddMethod records a method as "def name(params)"; inside a class or
+// module the name is qualified as "Owner#name" (instance) or "Owner.name"
+// (singleton).
+func rubyAddMethod(source []byte, decl *sitter.Node, owner string, d *StructuralData) {
+	nm := fieldText(source, decl, "name")
+	if nm == "" {
 		return
 	}
-	nm := string(source[left.StartByte():left.EndByte()])
-	if nm != "" {
-		d.Consts = append(d.Consts, nm)
+	sig := "def "
+	qualified := nm
+	if decl.Kind() == "singleton_method" {
+		sig += fieldText(source, decl, "object") + "."
+		if owner != "" {
+			qualified = owner + "." + nm
+		}
+	} else if owner != "" {
+		qualified = owner + "#" + nm
 	}
+	sig += nm + fieldText(source, decl, "parameters")
+	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: qualified, Signature: sig, Doc: rubyDocAbove(source, decl)})
 }
 
-func rubyExtractMethod(source []byte, decl *sitter.Node, d *StructuralData) {
-	name := decl.ChildByFieldName("name")
-	if name == nil {
+// rubyExtractType records a class/module (attr_* calls as fields) and its
+// public methods, recursing into nested classes/modules. A bare
+// `private`/`protected` line hides subsequent instance methods until
+// `public`; singleton methods are unaffected.
+func rubyExtractType(source []byte, decl *sitter.Node, outer string, d *StructuralData) {
+	nm := fieldText(source, decl, "name")
+	if nm == "" {
 		return
 	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	// Signature = "def name(params)"
-	params := decl.ChildByFieldName("parameters")
-	sig := "def " + nm
-	if params != nil {
-		sig += string(source[params.StartByte():params.EndByte()])
+	if outer != "" {
+		nm = outer + "::" + nm
 	}
-	sig = strings.Join(strings.Fields(sig), " ")
-	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, Signature: sig, Doc: rubyCommentAbove(source, decl)})
-}
-
-func rubyExtractClass(source []byte, decl *sitter.Node, d *StructuralData) {
-	name := decl.ChildByFieldName("name")
-	if name == nil {
-		return
-	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	body := decl.ChildByFieldName("body")
 	var fields []string
-	if body != nil {
+	var nested []*sitter.Node
+	public := true
+	if body := decl.ChildByFieldName("body"); body != nil {
 		for i := uint(0); i < body.NamedChildCount(); i++ {
 			ch := body.NamedChild(i)
-			if ch == nil {
-				continue
-			}
-			// attr_accessor/attr_reader/attr_writer calls list fields.
-			if ch.Kind() == "call" {
-				m := ch.ChildByFieldName("method")
-				if m == nil {
-					continue
+			switch ch.Kind() {
+			case "identifier":
+				switch nodeText(source, ch) {
+				case "private", "protected":
+					public = false
+				case "public":
+					public = true
 				}
-				mn := string(source[m.StartByte():m.EndByte()])
-				if strings.HasPrefix(mn, "attr_") {
-					text := strings.TrimSpace(string(source[ch.StartByte():ch.EndByte()]))
-					text = strings.Join(strings.Fields(text), " ")
-					fields = append(fields, text)
+			case "call":
+				if strings.HasPrefix(fieldText(source, ch, "method"), "attr_") {
+					fields = append(fields, collapse(nodeText(source, ch)))
 				}
+			case "method":
+				if public {
+					rubyAddMethod(source, ch, nm, d)
+				}
+			case "singleton_method":
+				rubyAddMethod(source, ch, nm, d)
+			case "class", "module":
+				nested = append(nested, ch)
 			}
 		}
 	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: rubyCommentAbove(source, decl), Fields: fields})
+	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: rubyDocAbove(source, decl), Fields: fields})
+	for _, n := range nested {
+		rubyExtractType(source, n, nm, d)
+	}
 }
 
-func rubyExtractModule(source []byte, decl *sitter.Node, d *StructuralData) {
-	name := decl.ChildByFieldName("name")
-	if name == nil {
-		return
+// rubyDocAbove returns the # comment run above decl. The grammar attaches
+// comments preceding the first statement of a body to the enclosing
+// class/module rather than to the body, so look there too.
+func rubyDocAbove(source []byte, decl *sitter.Node) string {
+	if decl.PrevSibling() == nil {
+		if p := decl.Parent(); p != nil && p.Kind() == "body_statement" {
+			return collectDocAbove(source, p, rubyDoc)
+		}
 	}
-	nm := string(source[name.StartByte():name.EndByte()])
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: rubyCommentAbove(source, decl)})
+	return collectDocAbove(source, decl, rubyDoc)
 }
