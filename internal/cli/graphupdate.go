@@ -12,14 +12,13 @@ import (
 
 	"github.com/leonp92/golem/internal/config"
 	"github.com/leonp92/golem/internal/graph"
-	"github.com/leonp92/golem/internal/roles"
 )
 
 func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("graph update", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
-	concurrency := fs.Int("concurrency", 4, "max parallel agent invocations")
+	concurrency := fs.Int("concurrency", 4, "max parallel file extractions")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -30,13 +29,11 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
 		return 1
 	}
-	runner, err := NewRunner(cfg, *repo)
-	if err != nil {
-		fmt.Fprintf(stderr, "initialising runner: %v\n", err)
-		return 1
-	}
 
-	meta, err := graph.LoadMeta(filepath.Join(golemDir, "index"))
+	indexDir := filepath.Join(golemDir, "index")
+	wikiDir := filepath.Join(golemDir, "wiki")
+
+	meta, err := graph.LoadMeta(indexDir)
 	if err != nil || meta.BaseCommit == "" {
 		fmt.Fprintln(stderr, "no graph index found; run 'golem graph build' first")
 		return 1
@@ -52,15 +49,6 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	rolePrompt, err := os.ReadFile(filepath.Join(golemDir, "roles", "graph-builder.md"))
-	if err != nil {
-		data, _ := roles.Defaults.ReadFile("defaults/graph-builder.md")
-		rolePrompt = data
-	}
-
-	wikiDir := filepath.Join(golemDir, "wiki")
-	indexDir := filepath.Join(golemDir, "index")
-
 	// Separate deleted files and remove their stored graph data.
 	var nonDeleted []string
 	for _, f := range changed {
@@ -68,7 +56,6 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 			modulePath := filepath.ToSlash(filepath.Dir(f))
 			if delErr := graph.DeleteModuleGraph(indexDir, wikiDir, modulePath); delErr != nil {
 				fmt.Fprintf(stderr, "deleting module graph %s: %v\n", modulePath, delErr)
-				// non-fatal: aggregate regeneration will skip the missing JSON anyway
 			}
 		} else {
 			nonDeleted = append(nonDeleted, f)
@@ -94,18 +81,9 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "creating index dir: %v\n", err)
 		return 1
 	}
-	cache, err := graph.LoadLLMCache(filepath.Join(indexDir, ".llm_cache.json"))
-	if err != nil {
-		fmt.Fprintf(stderr, "loading LLM cache: %v\n", err)
-		return 1
-	}
 
 	fmt.Fprintf(stdout, "updating %d stale modules...\n", len(toRebuild))
-	graphs, err := runModules(runner, string(rolePrompt), *repo, wikiDir, toRebuild, *concurrency, cache)
-	if err != nil {
-		fmt.Fprintf(stderr, "graph update: %v\n", err)
-		return 1
-	}
+	graphs := buildModuleGraphs(*repo, toRebuild, *concurrency, stderr)
 
 	for _, g := range graphs {
 		if err := graph.WriteModule(wikiDir, g); err != nil {
@@ -116,11 +94,6 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 			fmt.Fprintf(stderr, "saving module graph: %v\n", err)
 			return 1
 		}
-	}
-
-	if err := cache.Save(); err != nil {
-		fmt.Fprintf(stderr, "saving LLM cache: %v\n", err)
-		// non-fatal — graph files written, cache miss on next run is safe
 	}
 
 	allGraphs, err := graph.LoadAllModuleGraphs(indexDir)
@@ -184,4 +157,3 @@ func staleModules(changed []string, meta *graph.Meta) map[string]bool {
 	}
 	return stale
 }
-
