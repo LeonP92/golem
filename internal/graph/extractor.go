@@ -94,6 +94,8 @@ func Extract(source []byte, langName string) (*StructuralData, error) {
 		return extractJSTS(source, root), nil
 	case "java":
 		return extractJava(source, root), nil
+	case "rust":
+		return extractRust(source, root), nil
 	}
 
 	// Generic fallback: single .scm query, name-only captures.

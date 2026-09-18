@@ -375,6 +375,87 @@ public interface MyIface {
 	}
 }
 
+func TestExtract_rust_extended(t *testing.T) {
+	src := []byte(`//! Module-level doc line 1.
+//! Module-level doc line 2.
+
+use std::io;
+use crate::foo::Bar;
+
+/// Doc for pub_fn.
+pub fn pub_fn(x: i32) -> i32 { x }
+
+fn private_fn() {}
+
+/// Doc for MyStruct.
+pub struct MyStruct {
+    pub field_a: i32,
+    field_b: String,
+}
+
+/// Doc for MyTrait.
+pub trait MyTrait {
+    fn method(&self) -> i32;
+}
+
+pub const MAX: usize = 10;
+`)
+	d, err := Extract(src, "rust")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(d.PackageDoc, "Module-level doc line 1.") {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	if !strings.Contains(d.PackageDoc, "line 2") {
+		t.Errorf("PackageDoc missing second line: %q", d.PackageDoc)
+	}
+	if !containsStr(d.Imports, "std::io") {
+		t.Errorf("imports = %v", d.Imports)
+	}
+	var pf *ExportedFunc
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == "pub_fn" {
+			pf = &d.ExportedFuncs[i]
+		}
+	}
+	if pf == nil {
+		t.Fatalf("pub_fn not found: %+v", d.ExportedFuncs)
+	}
+	if !strings.Contains(pf.Signature, "pub fn pub_fn(x: i32)") {
+		t.Errorf("pub_fn.Signature = %q", pf.Signature)
+	}
+	if pf.Doc != "Doc for pub_fn." {
+		t.Errorf("pub_fn.Doc = %q", pf.Doc)
+	}
+	for _, fn := range d.ExportedFuncs {
+		if fn.Name == "private_fn" {
+			t.Errorf("private_fn should not be exported")
+		}
+	}
+	foundStruct, foundTrait := false, false
+	for _, tp := range d.ExportedTypes {
+		if tp.Name == "MyStruct" {
+			foundStruct = true
+			if len(tp.Fields) != 2 {
+				t.Errorf("MyStruct.Fields = %v", tp.Fields)
+			}
+		}
+		if tp.Name == "MyTrait" {
+			foundTrait = true
+			if len(tp.Fields) != 1 {
+				t.Errorf("MyTrait method rows = %v", tp.Fields)
+			}
+		}
+	}
+	if !foundStruct || !foundTrait {
+		t.Errorf("types = %+v", d.ExportedTypes)
+	}
+	if !containsStr(d.Consts, "MAX") {
+		t.Errorf("MAX missing: %v", d.Consts)
+	}
+}
+
 func TestExtract_python_extended(t *testing.T) {
 	src := []byte(`"""Module docstring.
 
