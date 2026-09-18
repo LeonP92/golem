@@ -80,11 +80,14 @@ func TestActivityLogIsNewestFirst(t *testing.T) {
 		t.Errorf("entries render oldest-first: positions third=%d second=%d first=%d", third, second, first)
 	}
 
-	// The live swap has to match the rendered order.
-	feed := body[strings.Index(body, `id="log-feed"`):]
-	feed = feed[:strings.Index(feed, ">")]
-	if !strings.Contains(feed, `hx-swap="afterbegin"`) {
-		t.Error(`#log-feed does not swap afterbegin: live entries would append below the oldest`)
+	// The live insert has to match the rendered order. This used to be
+	// hx-swap="afterbegin" on #log-feed; the feed now streams over a
+	// WebSocket (SSE exhausted the browser's six-connection-per-origin
+	// limit), so the page's own client does the insert and the position is
+	// its argument to insertAdjacentHTML. The invariant is unchanged —
+	// newest on top — but it is asserted where the behaviour now lives.
+	if !strings.Contains(body, `insertAdjacentHTML('afterbegin'`) {
+		t.Error(`the live feed does not insert afterbegin: live entries would append below the oldest`)
 	}
 
 	// And the SPEC is still lifted out of the stream, which depends on the

@@ -15,17 +15,17 @@ import (
 
 // The ticket page has two independent live mechanisms, and they have to agree.
 //
-// The activity log streams over SSE. Everything else — the phase badge, the
-// action buttons, the Details block — comes from the server-rendered page and
-// was never refreshed, so a ticket could sit on screen advertising a phase it
-// had already left. #log-feed already carried hx-preserve, which only means
-// anything if its container is swapped, so the polling was intended and
-// missing rather than deliberately absent.
+// The activity log streams over a WebSocket. Everything else — the phase
+// badge, the action buttons, the Details block — comes from the
+// server-rendered page and was never refreshed, so a ticket could sit on
+// screen advertising a phase it had already left. #log-feed already carried
+// hx-preserve, which only means anything if its container is swapped, so the
+// polling was intended and missing rather than deliberately absent.
 //
 // The invariant worth pinning is the interaction: polling a container that
-// holds an SSE-connected element only works while that element is preserved.
+// holds a streaming element only works while that element is preserved.
 // Without hx-preserve the swap would replace #log-feed every few seconds,
-// dropping and reopening the event stream and losing the scroll position.
+// dropping and reopening the stream and losing the scroll position.
 func TestTicketPagePollsWithoutDroppingTheLogStream(t *testing.T) {
 	gdb, err := db.Open(":memory:")
 	if err != nil {
@@ -80,9 +80,20 @@ func TestTicketPagePollsWithoutDroppingTheLogStream(t *testing.T) {
 		t.Fatal("no #log-feed on the ticket page")
 	}
 	if !strings.Contains(feed[1], "hx-preserve") {
-		t.Error("#log-feed has no hx-preserve: each poll of its container would drop and reopen the SSE stream")
+		t.Error("#log-feed has no hx-preserve: each poll of its container would drop and reopen the log stream")
 	}
-	if !strings.Contains(feed[1], "sse-connect=") {
-		t.Error("#log-feed no longer connects to SSE; the activity log would only update on a poll")
+	if !strings.Contains(feed[1], `data-log-ws="/ws/tickets/`+ticket.ID+`/log"`) {
+		t.Error("#log-feed carries no data-log-ws endpoint; the activity log would only update on a poll")
+	}
+
+	// The feed must NOT go back to SSE. It held one HTTP connection open per
+	// ticket tab, and browsers allow six per origin on HTTP/1.1, so six open
+	// tabs consumed the entire pool and every subsequent request — including
+	// an ordinary page navigation — queued behind them and never completed.
+	// The whole UI stopped loading while the server stayed perfectly healthy,
+	// which is why this is pinned rather than left to review.
+	if strings.Contains(feed[1], "sse-connect=") || strings.Contains(body, "htmx-ext-sse") {
+		t.Error("the activity log is back on SSE: six open ticket tabs will exhaust " +
+			"the browser's six-connection-per-origin limit and wedge the entire UI")
 	}
 }

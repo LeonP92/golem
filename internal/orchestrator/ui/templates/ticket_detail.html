@@ -218,12 +218,13 @@
           aria-live="polite"
           aria-atomic="false"
           hx-preserve
-          hx-ext="sse"
-          sse-connect="/sse/tickets/{{.Ticket.ID}}/log"
-          sse-swap="message"
-          {{/* afterbegin, not beforeend: the feed reads newest-first, so a
-               live entry belongs at the top next to the others of its age. */}}
-          hx-swap="afterbegin">
+          {{/* The feed streams over a WebSocket, not SSE. SSE rides an
+               ordinary HTTP request, and browsers allow only six of those
+               per origin on HTTP/1.1, so one held-open stream per ticket tab
+               meant six tabs consumed the whole pool and every later request
+               — including a plain page navigation — queued forever. The
+               socket is read by the script at the foot of this template. */}}
+          data-log-ws="/ws/tickets/{{.Ticket.ID}}/log">
           {{if not .LogEntries}}
           <div id="log-empty" class="text-base-content/40 text-sm py-4 text-center">
             <span class="iconify text-2xl animate-pulse" data-icon="heroicons:signal"></span>
@@ -258,7 +259,7 @@
   });
 
   var logEmptyRemoved = false;
-  document.addEventListener('htmx:sseMessage', function() {
+  function onEntryRendered() {
     if (!logEmptyRemoved) {
       var empty = document.getElementById('log-empty');
       if (empty) { empty.remove(); logEmptyRemoved = true; }
@@ -267,7 +268,72 @@
       // Defer one tick so the prepended node is in the DOM first.
       setTimeout(function() { logFeed.scrollTop = 0; }, 10);
     }
+  }
+
+  // ── Live feed ──────────────────────────────────────────────────────────
+  // The server sends one rendered log entry per message. insertAdjacentHTML
+  // is used rather than htmx's swap because it does not execute script
+  // elements in the inserted markup; the Content-Security-Policy would block
+  // them anyway, but not relying on that keeps the two defences independent.
+  // (Spelling that tag out literally here would be read as a second opening
+  // tag by the CSP template scanner, which counts them to prove it found
+  // every inline block — and it fails closed, disabling the whole policy.)
+  //
+  // afterbegin, not beforeend: the feed reads newest-first, so a live entry
+  // belongs at the top next to the others of its age.
+  var path = logFeed.getAttribute('data-log-ws');
+  if (!path) return;
+  var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
+
+  // A WebSocket, unlike EventSource, does not reconnect itself. Without this
+  // the activity log would go permanently silent after any blip — a sleeping
+  // laptop, a dropped VPN — and look simply idle, which is the worst way for
+  // a live log to fail.
+  var retry = 0, socket = null, stopped = false;
+  function showStreamWarning() {
+    if (document.getElementById('log-stream-warning')) return;
+    var el = document.createElement('div');
+    el.id = 'log-stream-warning';
+    el.className = 'alert alert-warning text-sm mb-2';
+    el.setAttribute('role', 'status');
+    el.textContent = 'Live updates disconnected — retrying. Reload to see the latest activity.';
+    logFeed.insertAdjacentElement('beforebegin', el);
+  }
+  function clearStreamWarning() {
+    var el = document.getElementById('log-stream-warning');
+    if (el) el.remove();
+  }
+  function connect() {
+    if (stopped) return;
+    socket = new WebSocket(url);
+    socket.onopen = function() { retry = 0; clearStreamWarning(); };
+    socket.onmessage = function(ev) {
+      logFeed.insertAdjacentHTML('afterbegin', ev.data);
+      // layout.html listens for this to run markdown rendering and
+      // sanitizing over the entry that just arrived.
+      document.dispatchEvent(new CustomEvent('golem:log-entry'));
+      onEntryRendered();
+    };
+    socket.onclose = function() {
+      if (stopped) return;
+      // Say so on screen once the feed has clearly stopped working. A live
+      // log that has quietly died is indistinguishable from a ticket with
+      // nothing happening, and the reader has no reason to suspect the
+      // former. Three consecutive failures is past any ordinary blip.
+      if (retry === 3) showStreamWarning();
+      // Exponential backoff to 30s, so a server that is down for a while is
+      // not hammered by every open ticket tab.
+      var delay = Math.min(1000 * Math.pow(2, retry++), 30000);
+      setTimeout(connect, delay);
+    };
+    // onerror is always followed by onclose, which owns the retry.
+    socket.onerror = function() { try { socket.close(); } catch (e) {} };
+  }
+  window.addEventListener('beforeunload', function() {
+    stopped = true;
+    if (socket) { try { socket.close(); } catch (e) {} }
   });
+  connect();
 })();
 </script>
 {{end}}

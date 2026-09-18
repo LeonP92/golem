@@ -2,7 +2,6 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"time"
@@ -13,14 +12,14 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 )
 
-// RegisterLogRoutes adds log-ingestion and SSE streaming routes to mux.
+// RegisterLogRoutes adds log-ingestion and live-streaming routes to mux.
 func (h *Handlers) RegisterLogRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/tickets/{id}/log",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.postLog)))
 	mux.Handle("POST /api/tickets/{id}/log/document",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.postLogDocument)))
-	mux.Handle("GET /sse/tickets/{id}/log",
-		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.sseLog))))
+	mux.Handle("GET /ws/tickets/{id}/log",
+		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.wsLog))))
 }
 
 // postLog inserts a LogEntry with a server-assigned sequence_num, for the
@@ -203,44 +202,4 @@ func (h *Handlers) postLogDocument(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]uint{"sequence_num": entry.SequenceNum}) //nolint:errcheck
-}
-
-// sseLog streams LogEntryEvents for a ticket as Server-Sent Events.
-func (h *Handlers) sseLog(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r)
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming not supported", http.StatusInternalServerError)
-		return
-	}
-
-	ch, cancel := h.Broker.Subscribe(id)
-	defer cancel()
-
-	for {
-		select {
-		case evt, open := <-ch:
-			if !open {
-				return
-			}
-			var payload string
-			if h.LogEntryHTML != nil {
-				payload = h.LogEntryHTML(evt)
-			} else {
-				data, _ := json.Marshal(evt)
-				payload = string(data)
-			}
-			fmt.Fprintf(w, "data: %s\n\n", payload) //nolint:errcheck
-			flusher.Flush()
-		case <-r.Context().Done():
-			return
-		}
-	}
 }

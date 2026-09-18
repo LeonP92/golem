@@ -49,9 +49,6 @@
   <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"
           integrity="sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq"
           crossorigin="anonymous"></script>
-  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"
-          integrity="sha384-fw+eTlCc7suMV/1w/7fr2/PmwElUIt5i82bi+qTiLXvjRXZ2/FkiTNA/w0MhXnGI"
-          crossorigin="anonymous"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js"
           integrity="sha384-lqPzN0kmFw9t2syAMwVPM4VbAyqsz/lPyYWbb2Xt6nSPM0WPNrpSWCUBgdcAdgnC"
           crossorigin="anonymous"></script>
@@ -232,7 +229,13 @@
     }
     document.addEventListener('DOMContentLoaded', () => renderMarkdown());
     document.addEventListener('htmx:afterSwap', e => renderMarkdown(e.detail.elt));
-    document.addEventListener('htmx:sseMessage', () => {
+    // Dispatched by the ticket page's WebSocket client after it prepends an
+    // entry. The activity log moved off SSE — six ticket tabs each holding an
+    // SSE stream exhausted the browser's six-connection-per-origin limit and
+    // no page on the site would load — so the htmx:sseMessage hook this
+    // replaces no longer fires. Live entries carry markdown and must go
+    // through the same sanitizing render path as server-rendered ones.
+    document.addEventListener('golem:log-entry', () => {
       setTimeout(() => renderMarkdown(document.getElementById('log-feed')), 0);
     });
 
