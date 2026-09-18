@@ -42,3 +42,9 @@ Thumbs.db
 *.db
 *.db-wal
 *.db-shm
+
+# Claude Code runtime state that lands in the repo when a container runs an
+# agent with this tree bind-mounted. .claude/agents, .claude/commands and
+# .claude/settings.json ARE tracked on purpose — these two are not.
+.claude/projects/
+.claude/backups/
