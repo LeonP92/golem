@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -133,6 +134,97 @@ func TestExtract_unknownLang(t *testing.T) {
 	}
 	if len(d.Imports)+len(d.ExportFns)+len(d.ExportTypes) != 0 {
 		t.Errorf("expected empty structural data for unknown language, got: %+v", d)
+	}
+}
+
+func TestExtract_go_extended(t *testing.T) {
+	src := []byte(`// Package foo does foo-ish things.
+// Second line of package doc.
+package foo
+
+import (
+	"fmt"
+	"github.com/example/bar"
+)
+
+// Bar does the bar thing.
+// Handles the bar case.
+func Bar(x int, y string) (int, error) {
+	return 0, nil
+}
+
+// Baz is a struct type.
+type Baz struct {
+	Field1 int
+	Field2 string
+}
+
+// Val is exported.
+const Val = 42
+
+const (
+	ExportedA = 1
+	unexportedB = 2
+)
+`)
+	d, err := Extract(src, "golang")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(d.PackageDoc, "Package foo does foo-ish things.") {
+		t.Errorf("PackageDoc = %q, want it to contain package doc", d.PackageDoc)
+	}
+	if !strings.Contains(d.PackageDoc, "Second line") {
+		t.Errorf("PackageDoc missing second line: %q", d.PackageDoc)
+	}
+	var bar *ExportedFunc
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == "Bar" {
+			bar = &d.ExportedFuncs[i]
+		}
+	}
+	if bar == nil {
+		t.Fatalf("Bar function not extracted: %+v", d.ExportedFuncs)
+	}
+	if !strings.Contains(bar.Signature, "func Bar(x int, y string)") {
+		t.Errorf("Bar.Signature = %q", bar.Signature)
+	}
+	if !strings.Contains(bar.Doc, "Bar does the bar thing.") {
+		t.Errorf("Bar.Doc = %q", bar.Doc)
+	}
+	var baz *ExportedType
+	for i := range d.ExportedTypes {
+		if d.ExportedTypes[i].Name == "Baz" {
+			baz = &d.ExportedTypes[i]
+		}
+	}
+	if baz == nil {
+		t.Fatalf("Baz type not extracted: %+v", d.ExportedTypes)
+	}
+	if !strings.Contains(baz.Doc, "Baz is a struct type.") {
+		t.Errorf("Baz.Doc = %q", baz.Doc)
+	}
+	if len(baz.Fields) != 2 {
+		t.Errorf("Baz.Fields = %v, want 2", baz.Fields)
+	}
+	if !containsStr(d.Consts, "Val") {
+		t.Errorf("missing const Val: %v", d.Consts)
+	}
+	if !containsStr(d.Consts, "ExportedA") {
+		t.Errorf("missing const ExportedA: %v", d.Consts)
+	}
+	if containsStr(d.Consts, "unexportedB") {
+		t.Errorf("unexportedB should not appear in consts")
+	}
+	// Backward-compat name slices must still be populated.
+	if !containsStr(d.ExportFns, "Bar") {
+		t.Errorf("ExportFns missing Bar: %v", d.ExportFns)
+	}
+	if !containsStr(d.ExportTypes, "Baz") {
+		t.Errorf("ExportTypes missing Baz: %v", d.ExportTypes)
+	}
+	if !containsStr(d.Imports, "fmt") || !containsStr(d.Imports, "github.com/example/bar") {
+		t.Errorf("imports = %v", d.Imports)
 	}
 }
 
