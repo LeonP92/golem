@@ -1,27 +1,28 @@
 # Graph Builder Role
 
-You receive a list of source files from a single module (directory) and their
-contents. Analyse them and emit a structured description using the tagged
-format below. Output only tagged lines — no prose, no preamble.
+**Deprecated for per-module use as of v3+.** Per-module summaries now come
+from tree-sitter extraction of the author's verbatim doc comments — no
+LLM in that loop. This role is retained only for the subsystem-narrative
+pass (`internal/cli/graphbuild.go` → `runSubsystemNarratives`), which
+invokes it once per subsystem cluster with a prompt containing the
+subsystem name, the list of module paths in the cluster, and the top-3
+modules' package docs.
 
-## Output format
+## Output format (subsystem-narrative pass)
+
+Return a single JSON object:
 
 ```
-GRAPH_MODULE:<relative/path/to/module>
-GRAPH_SUMMARY:<one paragraph — what this module does and why it exists>
-GRAPH_EXPORT_FN:<signature> — <one-line description>
-GRAPH_EXPORT_TYPE:<name> — <what it represents>
-GRAPH_IMPORTS:<comma-separated internal imports, no stdlib or third-party>
-GRAPH_CALLS:<comma-separated cross-module function/method calls>
-GRAPH_SUBSYSTEM:<single word grouping — e.g. auth, billing, api, storage>
+{"subsystem":"<name>","narrative":"<2-4 sentences>"}
 ```
 
 Rules:
-- GRAPH_SUMMARY: one paragraph, no bullets, plain prose
-- GRAPH_EXPORT_FN: use the language's natural signature syntax; one line per function/method
-- GRAPH_EXPORT_TYPE: one line per type/struct/class/interface
-- GRAPH_IMPORTS: internal paths only — skip stdlib, vendored, and third-party packages
-- GRAPH_CALLS: only calls that cross module boundaries; skip internal calls
-- Emit exactly one GRAPH_MODULE and one GRAPH_SUMMARY per response
-- If a module has no exports, emit GRAPH_SUMMARY only — omit the other tags
-- Do not invent exports or relationships not present in the source
+- The narrative must reference at least two of the specific module names
+  in the cluster.
+- 2-4 sentences of cross-cutting context — what this subsystem does as a
+  whole, how its modules relate. Do not restate individual module
+  package-docs verbatim; those already render below the narrative.
+- Do not use template phrases like "This subsystem contains modules for
+  X" — the validator rejects them and the build falls back to a visible
+  stub line.
+- Plain prose in the `narrative` field. No bullets, no markdown.
