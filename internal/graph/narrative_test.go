@@ -67,6 +67,12 @@ func TestValidateNarrative(t *testing.T) {
 	if err := ValidateNarrative(good, cluster); err != nil {
 		t.Errorf("unexpected: %v", err)
 	}
+	// Single-module clusters only need one reference.
+	solo := []ModuleGraph{{Module: "internal/graph"}}
+	oneRef := "The graph module handles all tree-sitter extraction plumbing needed to produce deterministic wiki pages across every supported language."
+	if err := ValidateNarrative(oneRef, solo); err != nil {
+		t.Errorf("single-module cluster should accept 1-ref: %v", err)
+	}
 }
 
 func TestExtractNarrativeJSON(t *testing.T) {

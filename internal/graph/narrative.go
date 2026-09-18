@@ -160,6 +160,13 @@ func ValidateNarrative(narrative string, cluster []ModuleGraph) error {
 			return fmt.Errorf("narrative contains forbidden template phrase %q", p)
 		}
 	}
+	// Required reference count scales with cluster size: single-module
+	// clusters can only reference one name, so demanding >=2 would be
+	// impossible. For clusters with 2+ modules, require >=2 refs.
+	required := 2
+	if len(cluster) < 2 {
+		required = 1
+	}
 	refs := 0
 	for _, g := range cluster {
 		// Match on the last path segment (leaf module name) since paths
@@ -173,12 +180,12 @@ func ValidateNarrative(narrative string, cluster []ModuleGraph) error {
 		}
 		if strings.Contains(narrative, leaf) {
 			refs++
-			if refs >= 2 {
+			if refs >= required {
 				return nil
 			}
 		}
 	}
-	return fmt.Errorf("narrative references %d/2 required module names", refs)
+	return fmt.Errorf("narrative references %d/%d required module names", refs, required)
 }
 
 // StubNarrative is the visible fallback rendered when an LLM cluster
