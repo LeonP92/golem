@@ -103,3 +103,58 @@ func TestToOrchestratorPhase(t *testing.T) {
 		}
 	}
 }
+
+// A gate that ran and said no is a verdict, not a missing step. `golem ticket
+// review` writes needs-attention itself when the gate commands fail, and
+// reporting that as "did not complete" would blame the agent for work the
+// gate deliberately rejected.
+func TestFinishWorkPhaseDistinguishesAFailedGate(t *testing.T) {
+	cfg := &config.Config{NoPush: true}
+	claim := &client.ClaimResponse{TicketID: "t-1", Branch: "ticket/t-1"}
+
+	dir := t.TempDir()
+	writeState(t, dir, "needs-attention", "")
+	err := finishWorkPhase(context.Background(), cfg, nil, claim, dir, "Implementation", claim.Branch)
+	if err == nil {
+		t.Fatal("a failed gate was treated as success")
+	}
+	if strings.Contains(err.Error(), "did not complete") {
+		t.Errorf("a failed gate is reported as an unfinished run: %v", err)
+	}
+	for _, want := range []string{"review gate did not pass", "reviewer attestation"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %q", err, want)
+		}
+	}
+}
+
+// The agent must not be told to run the review gate: Claude Code runs its
+// shell commands in a sandbox with no environment, so `golem ticket review`
+// there spawns a nested `claude` with no credential and fails with
+// "Not logged in". The shem runs it instead, and the prompts have to agree
+// with that or the agent burns a phase failing at it.
+func TestPromptsDoNotAskTheAgentToRunTheReviewGate(t *testing.T) {
+	prompts := map[string]string{
+		"implement": buildImplementPrompt("t-1", "d"),
+		"revise":    buildRevisePrompt("t-1", "d", "fb"),
+	}
+	for name, p := range prompts {
+		t.Run(name, func(t *testing.T) {
+			if strings.Contains(p, "golem ticket review --ticket") {
+				t.Error("the prompt still instructs the agent to run the review gate")
+			}
+			if !strings.Contains(p, "Do NOT run golem ticket review") {
+				t.Error("the prompt does not tell the agent the gate is run for it")
+			}
+			// Observers stay the agent's job — the shem cannot know which
+			// roles a repository wants — but they must not be able to strand
+			// the ticket when they cannot run.
+			if !strings.Contains(p, "does not block the ticket") {
+				t.Error("an observer that cannot run is not marked non-blocking")
+			}
+			if strings.Contains(p, "golem ticket close") && !strings.Contains(p, "Do NOT run golem ticket review, and do NOT run golem ticket close") {
+				t.Error("the close instruction was lost")
+			}
+		})
+	}
+}

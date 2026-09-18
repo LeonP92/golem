@@ -246,17 +246,20 @@ Instructions:
    b. Implement changes in the worktree directory.
    c. Commit at each logical unit (use git -C .golem/tickets/%s/worktree or cd into it).
    d. After each commit: golem ticket check-bloat (cheap, no LLM). Address any BLOCKER before the next commit.
-4. After the LAST plan-step commit — not per commit — run the observers
-   and graph update ONCE against the ticket's final state, per
+4. After the LAST plan-step commit — not per commit — run the observers and
+   graph update ONCE against the ticket's final state, per
    .golem/roles/developer.md. If either observer emits BLOCKER entries,
-   address them and re-run the failing observer.
-5. When observers pass: golem ticket review --ticket %s
+   address them and re-run the failing observer. If an observer cannot run at
+   all in this environment, say so in your final message and continue: it is
+   not your job to work around it, and it does not block the ticket.
 
-STOP after the review. Do NOT run golem ticket close.
-A human will review the work in the orchestrator UI and close the ticket.`,
+Do NOT run golem ticket review, and do NOT run golem ticket close. The review
+gate is run for you once you stop, by the process that started you — it needs
+a model credential this session does not have. Stop when your last commit is
+made and the observers have been attempted.`,
 		ticketID, fenceDescription(description),
 		ticketID, ticketID, ticketID, ticketID,
-		ticketID, ticketID, ticketID, ticketID)
+		ticketID, ticketID, ticketID)
 }
 
 // buildRevisePrompt returns the prompt for a revise session: the ticket
@@ -288,12 +291,15 @@ Instructions:
 4. After the LAST commit — not per commit — run the observers and graph
    update ONCE against the ticket's final state, per
    .golem/roles/developer.md. If either observer emits BLOCKER entries,
-   address them and re-run the failing observer.
-5. When observers pass: golem ticket review --ticket %s
+   address them and re-run the failing observer. If an observer cannot run at
+   all in this environment, say so in your final message and continue: it is
+   not your job to work around it, and it does not block the ticket.
 
-STOP after the review. Do NOT run golem ticket close.
-A human will review the new changes in the orchestrator UI.`,
+Do NOT run golem ticket review, and do NOT run golem ticket close. The review
+gate is run for you once you stop, by the process that started you — it needs
+a model credential this session does not have. Stop when your last commit is
+made and the observers have been attempted.`,
 		ticketID, fenceDescription(description), ticketID, ticketID,
 		feedback,
-		ticketID, ticketID)
+		ticketID)
 }

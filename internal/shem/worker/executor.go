@@ -237,6 +237,10 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
 				return err
 			}
+			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
+				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
+				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
+			}
 			return finishWorkPhase(ctx, cfg, c, claim, ticketDir, "Implementation", claim.Branch)
 
 		case "revising":
@@ -244,6 +248,10 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			postStatus(c, ticketID, "Starting agent (claude) — revision phase")
 			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
 				return err
+			}
+			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
+				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
+				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
 			// Previously defaulted an unreadable state to "ready-for-review",
 			// so a revise run that left no state reported success outright.
@@ -298,6 +306,34 @@ func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, descript
 // runGolemAdvance advances the local ticket to the given phase.
 func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) error {
 	cmd := exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return nil
+}
+
+// runGolemReview runs the review gate — the reviewer agent, then the
+// configured gate commands — and is what advances the local ticket to
+// ready-for-review.
+//
+// Run by the SHEM, not by the agent, for two reasons.
+//
+// It could not work from the agent. Claude Code runs the agent's shell
+// commands in a sandbox that does not expose the environment, so `golem`
+// started from there has no model credential, and the nested `claude` the
+// reviewer needs reports "Not logged in · Please run /login". The shem has
+// the credential in its own environment, and this is Golem's own command, so
+// it keeps the full environment the way runGolemTicketNew and
+// runGolemAdvance do.
+//
+// And it should not have been the agent's job anyway. This is the gate that
+// decides whether work is fit to review; leaving it to the agent to remember
+// meant a gate the system relies on could be skipped, and nothing but the
+// agent's own word said it had run.
+func runGolemReview(ctx context.Context, repoPath, ticketID string) error {
+	cmd := exec.CommandContext(ctx, "golem", "ticket", "review", "--ticket", ticketID)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -436,9 +472,17 @@ func finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
 	}
 
 	if orchPhase != "ready-for-review" {
+		// A failed gate is a real verdict, not a missing step. `golem ticket
+		// review` writes needs-attention itself when the gate commands do not
+		// pass, and reporting that as "did not complete" would blame the
+		// agent for work the gate deliberately rejected.
+		if localPhase == "needs-attention" {
+			return fmt.Errorf("%s finished but the review gate did not pass — "+
+				"see the reviewer attestation in the log above", what)
+		}
 		// The local phase is named because it is the whole diagnosis: "plan"
-		// means the agent stopped at the planning gate, "implement" means it
-		// never ran `golem ticket review`.
+		// means the agent stopped at the planning gate, "implement" means the
+		// review gate did not run or did not reach a verdict.
 		if stateErr != nil {
 			return fmt.Errorf("%s did not complete: no readable ticket state in %s (%v), "+
 				"so there is nothing to review", what, ticketDir, stateErr)
@@ -688,4 +732,16 @@ func repoLocalPath(cfg *config.Config, normalizedRemote string) string {
 		}
 	}
 	return ""
+}
+
+// firstLineOf trims a multi-line command failure to something that reads as a
+// status line. The full text goes to the shem log.
+func firstLineOf(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	if len(s) > 200 {
+		s = s[:200] + "…"
+	}
+	return s
 }
