@@ -152,8 +152,18 @@ func (h *Handlers) assignedTickets(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out) //nolint:errcheck
 }
 
-// resumableTickets returns tickets assigned to this shem that have a checkpoint
-// and are in an active execution phase — i.e. were mid-run when the shem died.
+// resumableTickets returns tickets assigned to this shem that are in an
+// active execution phase — i.e. were mid-run when the shem died.
+//
+// A checkpoint is NOT required. It used to be, and that left a hole: a shem
+// that restarted during brainstorm — before the first checkpoint is written —
+// owned a ticket it would never resume, in a phase that is not claimable
+// either, so nothing could ever pick it up again. The shem's own startup log
+// reported it as "waiting (no action needed)" while it waited forever.
+//
+// The checkpoint's job is to say which phases are already DONE so a resume can
+// skip them. Its absence means only "start this phase over", which is what
+// RunTicket already does when ClaimResponse.CheckpointPhase is nil.
 //
 // The approval clause matches ClaimTicket's (fix round 5: approved_body_hash
 // = body_hash, not just intake_approved — see ClaimTicket's doc comment for
@@ -170,7 +180,7 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var tickets []db.Ticket
 	h.DB.Where(
-		"assigned_shem = ? AND checkpoint_phase IS NOT NULL AND phase NOT IN ? AND "+
+		"assigned_shem = ? AND phase NOT IN ? AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
 		shem.ID,
 		// needs-attention is excluded for the reason the phase exists: it

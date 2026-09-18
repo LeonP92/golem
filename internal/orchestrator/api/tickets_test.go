@@ -563,3 +563,100 @@ func TestResumableTickets_ExcludesUnapprovedGitHubLinkedTicket(t *testing.T) {
 		t.Error("approved GitHub-linked ticket with a checkpoint did not appear in /api/tickets/resumable")
 	}
 }
+
+// TestResumableTickets_IncludesAssignedTicketWithNoCheckpoint pins the fix
+// for a ticket that nothing in the system could reach.
+//
+// resumableTickets used to require checkpoint_phase IS NOT NULL. A checkpoint
+// is written when a phase COMPLETES, so a shem that restarted during the very
+// first phase owned a ticket with none. That ticket was then in an active
+// phase, so availableTickets would not offer it to anyone, and had no
+// checkpoint, so its own shem would not resume it. Ticket 2de16a96 sat in
+// brainstorm, assigned, for 1.8h on the first real deployment while the shem
+// logged "waiting (no action needed)" — there was no operation, on any
+// endpoint or in the UI, that would have moved it.
+//
+// Resuming without a checkpoint is well defined: RunTicket's
+// CheckpointPhase == nil branch starts the phase over. The assertions below
+// cover both halves — the ticket comes back, and it comes back with a nil
+// checkpoint so the worker takes that branch rather than skipping phases.
+func TestResumableTickets_IncludesAssignedTicketWithNoCheckpoint(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	shem := seedShem(t, h, "nocheckpoint-shem", "nocheckpointkey")
+
+	// The unreachable ticket: claimed, first phase never finished.
+	fresh := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo",
+		Branch:       "ticket/fresh",
+		Description:  "d",
+		Phase:        "brainstorm",
+		AssignedShem: &shem.ID,
+	}
+	if err := h.DB.Create(&fresh).Error; err != nil {
+		t.Fatalf("seed fresh ticket: %v", err)
+	}
+	// needs-attention must STAY excluded. Dropping the checkpoint requirement
+	// widens this predicate, and needs-attention tickets are exactly the ones
+	// that reach it without a checkpoint — a failed first phase. Without this
+	// case the fix would resurrect the restart loop that ff2badb closed.
+	attention := db.Ticket{
+		RepoRemote:   "https://github.com/org/repo",
+		Branch:       "ticket/attention",
+		Description:  "d",
+		Phase:        "needs-attention",
+		AssignedShem: &shem.ID,
+	}
+	if err := h.DB.Create(&attention).Error; err != nil {
+		t.Fatalf("seed needs-attention ticket: %v", err)
+	}
+	// The approval gate must still hold for a checkpointless ticket: dropping
+	// one clause of a conjunction is the classic way to weaken another.
+	n := 5
+	unapproved := db.Ticket{
+		RepoRemote:     "https://github.com/org/repo",
+		Branch:         "ticket/unapproved-nocheckpoint",
+		Description:    "d",
+		Phase:          "brainstorm",
+		AssignedShem:   &shem.ID,
+		IssueNumber:    &n,
+		IntakeApproved: false,
+	}
+	if err := h.DB.Create(&unapproved).Error; err != nil {
+		t.Fatalf("seed unapproved ticket: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/api/tickets/resumable", nil)
+	req.Header.Set("Authorization", "Bearer nocheckpointkey")
+	req.Header.Set("X-Shem-Name", "nocheckpoint-shem")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var claims []api.ClaimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &claims); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	byID := map[string]api.ClaimResponse{}
+	for _, c := range claims {
+		byID[c.TicketID] = c
+	}
+
+	got, ok := byID[fresh.ID]
+	if !ok {
+		t.Error("a ticket assigned to this shem in an active phase with no checkpoint " +
+			"was not resumable; nothing else can reach it either, so it is stuck forever")
+	} else if got.CheckpointPhase != nil {
+		t.Errorf("resumed checkpointless ticket reported checkpoint_phase = %q; "+
+			"the worker would skip phases that never ran", *got.CheckpointPhase)
+	}
+	if _, ok := byID[attention.ID]; ok {
+		t.Error("needs-attention ticket became resumable: every shem restart would " +
+			"re-run the work that already failed and needs a human")
+	}
+	if _, ok := byID[unapproved.ID]; ok {
+		t.Error("unapproved GitHub-linked ticket with no checkpoint became resumable: " +
+			"the intake approval gate is bypassed via resume")
+	}
+}

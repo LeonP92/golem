@@ -131,10 +131,22 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 	w.running[claim.TicketID] = cancel
 	w.mu.Unlock()
 
-	log.Printf("worker: resuming ticket %s from checkpoint %q", claim.TicketID, *claim.CheckpointPhase)
-
-	if err := w.client.PostPhase(claim.TicketID, *claim.CheckpointPhase); err != nil {
-		log.Printf("worker: resume: failed to reset phase for ticket %s: %v", claim.TicketID, err)
+	// CheckpointPhase is nil when the shem died during the first phase, before
+	// any checkpoint was written. Those tickets are resumable too — without
+	// that they were unreachable: owned by a shem that would not resume them,
+	// and in a phase that made them unclaimable by anyone else. Dereferencing
+	// it unconditionally, as this did, would panic the shem on startup for
+	// exactly the tickets the widened predicate now returns.
+	//
+	// There is no phase to reset to in that case: RunTicket's nil-checkpoint
+	// branch starts at brainstorm and posts that phase itself.
+	if claim.CheckpointPhase == nil {
+		log.Printf("worker: resuming ticket %s from the start (no checkpoint)", claim.TicketID)
+	} else {
+		log.Printf("worker: resuming ticket %s from checkpoint %q", claim.TicketID, *claim.CheckpointPhase)
+		if err := w.client.PostPhase(claim.TicketID, *claim.CheckpointPhase); err != nil {
+			log.Printf("worker: resume: failed to reset phase for ticket %s: %v", claim.TicketID, err)
+		}
 	}
 
 	defer func() {
