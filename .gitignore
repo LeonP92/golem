@@ -36,3 +36,9 @@ Thumbs.db
 
 # Local environment — contains secrets, never commit
 .env
+
+# SQLite scratch databases from local runs and tests. The -wal/-shm
+# sidecars are easy to sweep up with `git add -A` and have been once.
+*.db
+*.db-wal
+*.db-shm
