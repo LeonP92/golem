@@ -2,6 +2,7 @@ package worker
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -241,7 +242,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
-			return finishWorkPhase(ctx, cfg, c, claim, ticketDir, "Implementation", claim.Branch)
+			return finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Implementation", claim.Branch)
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
@@ -255,7 +256,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			}
 			// Previously defaulted an unreadable state to "ready-for-review",
 			// so a revise run that left no state reported success outright.
-			return finishWorkPhase(ctx, cfg, c, claim, ticketDir, "Revision", claim.Branch)
+			return finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Revision", claim.Branch)
 
 		default:
 			log.Printf("executor: unknown start phase %q, falling through to implement", phase)
@@ -457,7 +458,7 @@ func postDocumentEntry(c *client.Client, ticketID string, entryType, filePath st
 // the worker park the ticket in needs-attention with the reason attached,
 // rather than inventing a phase for it.
 func finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
-	claim *client.ClaimResponse, ticketDir, what, branch string,
+	claim *client.ClaimResponse, repoPath, ticketDir, what, branch string,
 ) error {
 	ticketID := claim.TicketID
 
@@ -502,7 +503,19 @@ func finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
 			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
 		} else {
 			postStatus(c, ticketID, "Pushed "+branch+" to origin")
-			if pErr := c.PostBranchPushed(ticketID); pErr != nil {
+			// Generated here, after the push and before the report, because
+			// the description is written from the branch's own diff and only
+			// this host has it. A failure is logged and the report goes out
+			// anyway: the orchestrator falls back to a minimal body, so a
+			// missing description costs a good write-up, not the pull
+			// request.
+			prBody, bodyErr := generatePRDescription(ctx, repoPath, ticketID)
+			if bodyErr != nil {
+				postStatus(c, ticketID, "Could not generate the pull request description: "+
+					firstLineOf(bodyErr.Error()))
+				log.Printf("executor: pr description for %s: %v", ticketID, bodyErr)
+			}
+			if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
 				log.Printf("executor: post branch-pushed: %v", pErr)
 			}
 		}
@@ -744,4 +757,25 @@ func firstLineOf(s string) string {
 		s = s[:200] + "…"
 	}
 	return s
+}
+
+// generatePRDescription asks the pr-description role for a pull request body,
+// written from this branch's diff and the ticket's own log.
+//
+// Returns an empty body and an error rather than a fabricated one when the
+// role cannot run: the orchestrator's fallback is a minimal but honest body,
+// which is better than a confident description of work nobody described.
+// The issue number is deliberately not passed: the claim does not carry one,
+// and the orchestrator appends the closing reference itself from the ticket
+// row — the one place that actually knows it.
+func generatePRDescription(ctx context.Context, repoPath, ticketID string) (string, error) {
+	cmd := exec.CommandContext(ctx, "golem", "ticket", "pr-description", "--ticket", ticketID)
+	cmd.Dir = repoPath
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
+	}
+	return strings.TrimSpace(stdout.String()), nil
 }

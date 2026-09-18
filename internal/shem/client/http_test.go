@@ -199,7 +199,7 @@ func TestPostBranchPushed(t *testing.T) {
 	defer srv.Close()
 
 	c := client.New(srv.URL, "key", "shem-a")
-	if err := c.PostBranchPushed("t1"); err != nil {
+	if err := c.PostBranchPushed("t1", ""); err != nil {
 		t.Fatalf("PostBranchPushed: %v", err)
 	}
 	if gotMethod != http.MethodPost || gotPath != "/api/tickets/t1/branch-pushed" {
@@ -215,7 +215,7 @@ func TestPostBranchPushed_NotOwner(t *testing.T) {
 
 	c := client.New(srv.URL, "key", "shem-a")
 	c.RetryInitial = 10 * time.Millisecond
-	if err := c.PostBranchPushed("t1"); !errors.Is(err, client.ErrNotOwner) {
+	if err := c.PostBranchPushed("t1", ""); !errors.Is(err, client.ErrNotOwner) {
 		t.Errorf("expected ErrNotOwner, got %v", err)
 	}
 }

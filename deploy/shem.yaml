@@ -45,7 +45,7 @@ name: shem-local
 # (api.enqueuePRIfReady), so nothing is opened for a web-form ticket or for
 # work that never pushed.
 no_push: false
-max_concurrent: 3
+max_concurrent: 5
 
 repos:
   # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.

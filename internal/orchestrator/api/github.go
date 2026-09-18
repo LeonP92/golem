@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
@@ -187,11 +188,22 @@ func enqueuePRIfReady(tx *gorm.DB, ticket db.Ticket) error {
 	if base == "" {
 		base = "main"
 	}
+	// The generated description when there is one, the minimal body when
+	// there is not. Either way the closing reference is guaranteed below
+	// rather than trusted to the generator: the issue auto-closing on merge
+	// is load-bearing, and a role prompt is not a contract.
+	closes := fmt.Sprintf("Closes #%d", *ticket.IssueNumber)
+	prBody := strings.TrimSpace(ticket.PRBody)
+	if prBody == "" {
+		prBody = closes + "\n\nOpened by Golem."
+	} else if !strings.Contains(prBody, closes) {
+		prBody += "\n\n" + closes
+	}
 	payload, err := json.Marshal(ghsync.PRPayload{
 		Head:  ticket.Branch,
 		Base:  base,
 		Title: ticket.Title,
-		Body:  fmt.Sprintf("Closes #%d\n\nOpened by Golem.", *ticket.IssueNumber),
+		Body:  prBody,
 	})
 	if err != nil {
 		return fmt.Errorf("marshal pr payload: %w", err)
@@ -217,10 +229,26 @@ func (h *Handlers) branchPushed(w http.ResponseWriter, r *http.Request) {
 	}
 	shem := auth.ShemFromRequest(r)
 
+	// Optional body. A shem that could not generate one, or an older shem
+	// that does not send one, posts no body at all — so a decode failure is
+	// treated as "none given" rather than a bad request. Withholding the
+	// pull request over a missing description would be the wrong trade: the
+	// branch is already pushed and the work is done.
+	var body struct {
+		PRBody string `json:"pr_body"`
+	}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+	}
+	updates := map[string]any{"branch_pushed": true}
+	if strings.TrimSpace(body.PRBody) != "" {
+		updates["pr_body"] = body.PRBody
+	}
+
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND assigned_shem = ?", id, shem.ID).
-			Update("branch_pushed", true)
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}

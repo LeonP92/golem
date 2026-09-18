@@ -108,8 +108,14 @@ type Ticket struct {
 	// advertising a phase the ticket had already left. Both are written only
 	// by enqueueGitHubPhase, inside the same transaction as the phase change
 	// and the outbox insert they describe.
-	LabelPhase   string    `gorm:"not null;default:''" json:"label_phase"`
-	LabelSeq     uint      `gorm:"not null;default:0" json:"label_seq"`
+	LabelPhase string `gorm:"not null;default:''" json:"label_phase"`
+	LabelSeq   uint   `gorm:"not null;default:0" json:"label_seq"`
+	// PRBody is the pull request description the shem generated from the
+	// branch's own diff, sent with the branch-pushed report. Empty when
+	// generation failed or was not attempted, in which case
+	// enqueuePRIfReady falls back to the minimal body — a missing
+	// description is an inconvenience, a missing pull request is lost work.
+	PRBody       string    `gorm:"not null;default:''" json:"-"`
 	PRNumber     *int      `json:"pr_number"`
 	PRURL        string    `json:"pr_url"`
 	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`

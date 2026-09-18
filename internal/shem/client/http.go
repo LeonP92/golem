@@ -276,8 +276,17 @@ func (c *Client) PostPhase(ticketID string, phase string) error {
 // the remote, which is the precondition for opening a pull request.
 // Returns ErrNotOwner if the orchestrator rejects the update because this shem
 // no longer owns the ticket (409 Conflict — e.g. after a requeue).
-func (c *Client) PostBranchPushed(ticketID string) error {
-	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/branch-pushed", ticketID), nil)
+// PostBranchPushed reports that the ticket's branch reached the remote.
+//
+// prBody is the generated pull request description, and may be empty: the
+// orchestrator falls back to a minimal body rather than withholding the pull
+// request, because the branch is already pushed and the work is done.
+func (c *Client) PostBranchPushed(ticketID, prBody string) error {
+	var payload any
+	if prBody != "" {
+		payload = map[string]string{"pr_body": prBody}
+	}
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/branch-pushed", ticketID), payload)
 	if err != nil {
 		return err
 	}

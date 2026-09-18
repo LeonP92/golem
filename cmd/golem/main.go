@@ -75,7 +75,7 @@ func helpCommand(args []string, stdout, stderr io.Writer) int {
 
 func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: golem ticket <new|resume|close|advance|review|set-step|check-bloat> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: golem ticket <new|resume|close|advance|review|pr-description|set-step|check-bloat> [flags]")
 		return 1
 	}
 	switch args[0] {
@@ -91,6 +91,8 @@ func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.TicketAdvance(args[1:], stdout, stderr)
 	case "review":
 		return cli.TicketReview(args[1:], stdout, stderr)
+	case "pr-description":
+		return cli.TicketPRDescription(args[1:], stdout, stderr)
 	case "close":
 		return cli.TicketClose(args[1:], stdout, stderr)
 	default:

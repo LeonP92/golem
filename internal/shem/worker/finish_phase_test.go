@@ -75,7 +75,7 @@ func TestFinishWorkPhase(t *testing.T) {
 			// local phases count as FINISHED is pinned by
 			// TestToOrchestratorPhase below, and the real success path by the
 			// lifecycle tests in internal/e2e that have an orchestrator.
-			err := finishWorkPhase(context.Background(), cfg, nil, claim, dir, "Implementation", claim.Branch)
+			err := finishWorkPhase(context.Background(), cfg, nil, claim, dir, dir, "Implementation", claim.Branch)
 			if err == nil {
 				t.Fatalf("local phase %q was accepted as finished", tt.localPhase)
 			}
@@ -114,7 +114,7 @@ func TestFinishWorkPhaseDistinguishesAFailedGate(t *testing.T) {
 
 	dir := t.TempDir()
 	writeState(t, dir, "needs-attention", "")
-	err := finishWorkPhase(context.Background(), cfg, nil, claim, dir, "Implementation", claim.Branch)
+	err := finishWorkPhase(context.Background(), cfg, nil, claim, dir, dir, "Implementation", claim.Branch)
 	if err == nil {
 		t.Fatal("a failed gate was treated as success")
 	}
