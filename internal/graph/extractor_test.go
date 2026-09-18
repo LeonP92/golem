@@ -228,6 +228,79 @@ const (
 	}
 }
 
+func TestExtract_python_extended(t *testing.T) {
+	src := []byte(`"""Module docstring.
+
+Details here.
+"""
+import os
+from django.models import Model
+
+CONSTANT = 42
+_private = 1
+
+def public_func(x, y):
+    """Public docstring."""
+    pass
+
+def _private_func():
+    pass
+
+class PublicClass:
+    """Public class docstring."""
+    field_a: int
+    field_b: str = "hi"
+`)
+	d, err := Extract(src, "python")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(d.PackageDoc, "Module docstring") {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	var pub *ExportedFunc
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == "public_func" {
+			pub = &d.ExportedFuncs[i]
+		}
+	}
+	if pub == nil {
+		t.Fatalf("public_func not found: %+v", d.ExportedFuncs)
+	}
+	if !strings.Contains(pub.Signature, "def public_func(x, y)") {
+		t.Errorf("public_func signature = %q", pub.Signature)
+	}
+	if pub.Doc != "Public docstring." {
+		t.Errorf("public_func doc = %q", pub.Doc)
+	}
+	var cls *ExportedType
+	for i := range d.ExportedTypes {
+		if d.ExportedTypes[i].Name == "PublicClass" {
+			cls = &d.ExportedTypes[i]
+		}
+	}
+	if cls == nil {
+		t.Fatalf("PublicClass not found: %+v", d.ExportedTypes)
+	}
+	if cls.Doc != "Public class docstring." {
+		t.Errorf("PublicClass doc = %q", cls.Doc)
+	}
+	if len(cls.Fields) != 2 {
+		t.Errorf("PublicClass fields = %v", cls.Fields)
+	}
+	if !containsStr(d.Consts, "CONSTANT") {
+		t.Errorf("missing CONSTANT: %v", d.Consts)
+	}
+	for _, fn := range d.ExportedFuncs {
+		if fn.Name == "_private_func" {
+			t.Errorf("_private_func should be filtered out")
+		}
+	}
+	if !containsStr(d.Imports, "os") || !containsStr(d.Imports, "django.models") {
+		t.Errorf("imports = %v", d.Imports)
+	}
+}
+
 func containsStr(ss []string, s string) bool {
 	for _, x := range ss {
 		if x == s {

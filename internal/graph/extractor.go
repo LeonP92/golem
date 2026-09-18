@@ -88,6 +88,8 @@ func Extract(source []byte, langName string) (*StructuralData, error) {
 	switch langName {
 	case "golang":
 		return extractGo(source, root), nil
+	case "python":
+		return extractPython(source, root), nil
 	}
 
 	// Generic fallback: single .scm query, name-only captures.
