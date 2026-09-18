@@ -307,6 +307,74 @@ export const MY_CONST = 5;
 	}
 }
 
+func TestExtract_java_extended(t *testing.T) {
+	src := []byte(`package com.example.foo;
+
+import com.example.bar.Bar;
+import java.util.List;
+
+/** Public doc for Foo */
+public class Foo {
+  public static final int MAX = 10;
+  private String name;
+
+  /** doc for greet */
+  public String greet(String who) { return ""; }
+}
+
+/** Iface doc */
+public interface MyIface {
+  int getX();
+}
+`)
+	d, err := Extract(src, "java")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !containsStr(d.Imports, "com.example.bar.Bar") {
+		t.Errorf("missing import: %v", d.Imports)
+	}
+	if !containsStr(d.Imports, "java.util.List") {
+		t.Errorf("missing import: %v", d.Imports)
+	}
+	if !strings.Contains(d.PackageDoc, "Public doc for Foo") {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	foundFoo, foundIface := false, false
+	for _, tp := range d.ExportedTypes {
+		if tp.Name == "Foo" {
+			foundFoo = true
+			if !strings.Contains(tp.Doc, "Public doc for Foo") {
+				t.Errorf("Foo.Doc = %q", tp.Doc)
+			}
+			if len(tp.Fields) != 1 {
+				t.Errorf("Foo.Fields should contain only public MAX, got %v", tp.Fields)
+			}
+		}
+		if tp.Name == "MyIface" {
+			foundIface = true
+		}
+	}
+	if !foundFoo || !foundIface {
+		t.Errorf("classes = %+v", d.ExportedTypes)
+	}
+	var greet *ExportedFunc
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == "greet" {
+			greet = &d.ExportedFuncs[i]
+		}
+	}
+	if greet == nil {
+		t.Fatalf("greet not found: %+v", d.ExportedFuncs)
+	}
+	if !strings.Contains(greet.Signature, "greet(String who)") {
+		t.Errorf("greet.Signature = %q", greet.Signature)
+	}
+	if !strings.Contains(greet.Doc, "doc for greet") {
+		t.Errorf("greet.Doc = %q", greet.Doc)
+	}
+}
+
 func TestExtract_python_extended(t *testing.T) {
 	src := []byte(`"""Module docstring.
 

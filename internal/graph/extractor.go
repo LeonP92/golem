@@ -92,6 +92,8 @@ func Extract(source []byte, langName string) (*StructuralData, error) {
 		return extractPython(source, root), nil
 	case "javascript", "typescript":
 		return extractJSTS(source, root), nil
+	case "java":
+		return extractJava(source, root), nil
 	}
 
 	// Generic fallback: single .scm query, name-only captures.
