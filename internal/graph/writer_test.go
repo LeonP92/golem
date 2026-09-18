@@ -45,6 +45,67 @@ func TestWriteModule_idempotent(t *testing.T) {
 	}
 }
 
+func TestWriteModule_richFields(t *testing.T) {
+	wikiDir := t.TempDir()
+	g := ModuleGraph{
+		Module:     "internal/graph",
+		PackageDoc: "Graph package handles ...",
+		Subsystem:  "graph",
+		ExportedFuncs: []ExportedFunc{
+			{Name: "Extract", Signature: "func Extract(src []byte, lang string)", Doc: "Extract runs tree-sitter."},
+		},
+		ExportedTypes: []ExportedType{
+			{Name: "ModuleGraph", Doc: "ModuleGraph is the record.", Fields: []string{"Module string"}},
+		},
+		Consts:  []string{"MaxSize"},
+		Imports: []string{"fmt"},
+	}
+	if err := WriteModule(wikiDir, g); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(wikiDir, "graph", "modules", "internal_graph.md"))
+	s := string(data)
+	for _, want := range []string{
+		"# internal/graph",
+		"Graph package handles",
+		"Part of subsystem: [graph]",
+		"### `Extract`",
+		"func Extract(src []byte, lang string)",
+		"Extract runs tree-sitter.",
+		"### `ModuleGraph`",
+		"Module string",
+		"## Constants",
+		"`MaxSize`",
+		"## Imports",
+	} {
+		if !strings.Contains(s, want) {
+			t.Errorf("output missing %q\nfull:\n%s", want, s)
+		}
+	}
+}
+
+func TestWriteIndex_narratives(t *testing.T) {
+	wikiDir := t.TempDir()
+	graphs := []ModuleGraph{
+		{Module: "internal/graph", Subsystem: "graph", PackageDoc: "graph doc"},
+	}
+	narr := SubsystemNarratives{"graph": "The graph subsystem does X."}
+	if err := WriteIndex(wikiDir, graphs, narr); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(wikiDir, "graph", "index.md"))
+	s := string(data)
+	if !strings.Contains(s, "## graph") {
+		t.Errorf("missing graph header: %s", s)
+	}
+	if !strings.Contains(s, "The graph subsystem does X.") {
+		t.Errorf("missing narrative: %s", s)
+	}
+	if !strings.Contains(s, "graph doc") {
+		t.Errorf("missing package doc summary: %s", s)
+	}
+}
+
 func TestWriteIndex_groupsBySubsystem(t *testing.T) {
 	wikiDir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(wikiDir, "graph"), 0o755); err != nil {
