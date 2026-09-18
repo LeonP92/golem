@@ -50,6 +50,11 @@ func GraphBuild(args []string, stdout, stderr io.Writer) int {
 
 	graphs := buildModuleGraphs(*repo, modules, *concurrency, stderr)
 
+	// Size-aware subsystem coarsening: split any oversized cluster
+	// (e.g. k8s's `staging/src/k8s.io/*` all landing under "staging")
+	// by descending one path level at a time.
+	graphs = graph.CoarsenSubsystems(graphs, graph.DefaultCoarsenClusterSize)
+
 	// Subsystem-narrative pass — one LLM call per subsystem cluster, cached,
 	// parallelised at the same concurrency as file extraction.
 	narratives := runSubsystemNarratives(cfg, *repo, graphs, *concurrency, stdout, stderr)
