@@ -36,6 +36,10 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "no graph index found; run 'golem graph build' first")
 		return 1
 	}
+	if meta.Version != graph.MetaVersion {
+		fmt.Fprintln(stderr, "graph index was written by an older golem; run 'golem graph build'")
+		return 1
+	}
 	if meta.Modules == nil {
 		meta.Modules = map[string]graph.ModuleMeta{}
 	}

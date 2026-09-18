@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -197,7 +199,12 @@ func ResetAggregates(wikiDir string) error {
 	return nil
 }
 
+var slugReplacer = strings.NewReplacer("/", "_", "\\", "_", ".", "_")
+
+// Slug returns the file-name stem for a module's page and stored JSON:
+// the path flattened for readability plus a short hash of the exact path,
+// so paths that flatten alike (a/b_c, a_b/c) never share a file.
 func Slug(path string) string {
-	r := strings.NewReplacer("/", "_", "\\", "_", ".", "_")
-	return r.Replace(path)
+	sum := sha256.Sum256([]byte(path))
+	return slugReplacer.Replace(path) + "-" + hex.EncodeToString(sum[:4])
 }

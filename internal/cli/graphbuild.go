@@ -62,7 +62,7 @@ func GraphBuild(args []string, stdout, stderr io.Writer) int {
 	}
 
 	commit, _ := gitHead(*repo)
-	meta := &graph.Meta{BaseCommit: commit, Modules: make(map[string]graph.ModuleMeta, len(modules))}
+	meta := &graph.Meta{Version: graph.MetaVersion, BaseCommit: commit, Modules: make(map[string]graph.ModuleMeta, len(modules))}
 	for _, m := range modules {
 		hashes, _ := graph.ModuleHashes(*repo, m.Files)
 		meta.Modules[m.Path] = graph.ModuleMeta{Commit: commit, FileHashes: hashes}

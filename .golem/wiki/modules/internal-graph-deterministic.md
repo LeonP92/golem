@@ -32,7 +32,11 @@ Pipeline (`internal/cli/graphbuild.go`, `graphupdate.go`):
 <base>..HEAD` (including deletions; a directory left with no source
 files is removed), re-coarsens against the full stored graph, and
 re-renders only rebuilt modules plus any whose subsystem tag moved.
-`graph build` starts from a clean module store and meta.
+`graph build` starts from a clean module store and meta, stamped with
+`graph.MetaVersion`; `graph update` refuses an index with another version
+and asks for a full build. Page/JSON file names are `graph.Slug`: the
+flattened path plus a short hash of it, so `a/b_c` and `a_b/c` never
+share a file.
 
 `graph.ModuleGraph` (`module.go`) is the persisted record. `Summary` is
 read only from pre-extraction indexes; `ExportFns`/`ExportTypes` mirror
