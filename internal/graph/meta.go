@@ -16,7 +16,12 @@ type ModuleMeta struct {
 	FileHashes map[string]string `json:"file_hashes"`
 }
 
+// MetaVersion is bumped whenever the on-disk index layout changes in a way
+// an incremental update can't reconcile; older indexes need a full build.
+const MetaVersion = 2
+
 type Meta struct {
+	Version    int                   `json:"version"`
 	BaseCommit string                `json:"base_commit"`
 	Modules    map[string]ModuleMeta `json:"modules"`
 }
@@ -144,4 +149,13 @@ func DeleteModuleGraph(indexDir, wikiDir, modulePath string) error {
 		return err
 	}
 	return nil
+}
+
+// ResetModuleGraphs removes every stored module JSON and module page so a
+// full build doesn't leave records for directories that no longer exist.
+func ResetModuleGraphs(indexDir, wikiDir string) error {
+	if err := os.RemoveAll(filepath.Join(indexDir, "graph-modules")); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(wikiDir, "graph", "modules"))
 }
