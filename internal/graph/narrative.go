@@ -8,14 +8,17 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // SubsystemNarrativeCache persists LLM-generated cluster narratives on
 // disk keyed by cluster content hash — running the subsystem pass twice
 // against unchanged clusters is a no-op (idempotency requirement,
-// landmine 4).
+// landmine 4). Access is safe for concurrent Get/Set from multiple
+// goroutines during the parallel narrative pass.
 type SubsystemNarrativeCache struct {
 	path    string
+	mu      sync.Mutex
 	entries map[string]narrativeEntry
 }
 
@@ -43,6 +46,8 @@ func LoadNarrativeCache(path string) (*SubsystemNarrativeCache, error) {
 }
 
 func (c *SubsystemNarrativeCache) Get(hash string) (string, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	e, ok := c.entries[hash]
 	if !ok {
 		return "", false
@@ -51,11 +56,19 @@ func (c *SubsystemNarrativeCache) Get(hash string) (string, bool) {
 }
 
 func (c *SubsystemNarrativeCache) Set(subsystem, hash, narrative string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.entries[hash] = narrativeEntry{Subsystem: subsystem, Hash: hash, Narrative: narrative}
 }
 
 func (c *SubsystemNarrativeCache) Save() error {
-	data, err := json.MarshalIndent(c.entries, "", "  ")
+	c.mu.Lock()
+	snapshot := make(map[string]narrativeEntry, len(c.entries))
+	for k, v := range c.entries {
+		snapshot[k] = v
+	}
+	c.mu.Unlock()
+	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}

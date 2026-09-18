@@ -50,8 +50,9 @@ func GraphBuild(args []string, stdout, stderr io.Writer) int {
 
 	graphs := buildModuleGraphs(*repo, modules, *concurrency, stderr)
 
-	// Subsystem-narrative pass — one LLM call per subsystem cluster, cached.
-	narratives := runSubsystemNarratives(cfg, *repo, graphs, stdout, stderr)
+	// Subsystem-narrative pass — one LLM call per subsystem cluster, cached,
+	// parallelised at the same concurrency as file extraction.
+	narratives := runSubsystemNarratives(cfg, *repo, graphs, *concurrency, stdout, stderr)
 
 	if err := writeGraphs(golemDir, graphs, narratives); err != nil {
 		fmt.Fprintf(stderr, "writing graph: %v\n", err)
@@ -177,12 +178,17 @@ func dedupeStrings(ss []string) []string {
 // graph-builder role once per cluster. Uses a persistent content-hash
 // cache — unchanged clusters skip the LLM entirely. Failure or
 // validation reject falls back to a visible stub, never blocks the
-// build.
-func runSubsystemNarratives(cfg *config.Config, repoRoot string, graphs []graph.ModuleGraph, stdout, stderr io.Writer) graph.SubsystemNarratives {
+// build. Cache-miss clusters are dispatched concurrently up to the
+// concurrency cap; on a large monorepo (~60 subsystems) this collapses
+// the narrative phase from ~7 min sequential to ~1-2 min.
+func runSubsystemNarratives(cfg *config.Config, repoRoot string, graphs []graph.ModuleGraph, concurrency int, stdout, stderr io.Writer) graph.SubsystemNarratives {
 	out := graph.SubsystemNarratives{}
 	clusters := graph.ClusterBySubsystem(graphs)
 	if len(clusters) == 0 {
 		return out
+	}
+	if concurrency < 1 {
+		concurrency = 1
 	}
 	golemDir := filepath.Join(repoRoot, ".golem")
 	cachePath := filepath.Join(golemDir, "index", "subsystem-narratives.json")
@@ -205,13 +211,18 @@ func runSubsystemNarratives(cfg *config.Config, repoRoot string, graphs []graph.
 		rolePrompt = data
 	}
 
-	var runner agentrunner.Runner
 	subs := make([]string, 0, len(clusters))
 	for s := range clusters {
 		subs = append(subs, s)
 	}
 
-	callsMade := 0
+	// First pass: consume cache hits synchronously; collect misses to dispatch.
+	type task struct {
+		sub     string
+		cluster []graph.ModuleGraph
+		hash    string
+	}
+	var misses []task
 	for _, sub := range subs {
 		cluster := clusters[sub]
 		hash := graph.ClusterHash(sub, cluster)
@@ -219,40 +230,62 @@ func runSubsystemNarratives(cfg *config.Config, repoRoot string, graphs []graph.
 			out[sub] = cached
 			continue
 		}
-		if runner == nil {
-			r, err := NewRunner(cfg, repoRoot)
-			if err != nil {
-				fmt.Fprintf(stderr, "warning: runner init failed, stub narratives: %v\n", err)
-				for _, s := range subs {
-					out[s] = graph.StubNarrative(s)
-				}
-				return out
-			}
-			runner = r
-		}
-		fmt.Fprintf(stdout, "narrating subsystem %q (%d modules)...\n", sub, len(cluster))
-		body := graph.BuildClusterPrompt(sub, cluster)
-		ctx := agentrunner.Context{RolePrompt: string(rolePrompt) + "\n\n---\n\nReturn a single JSON object: {\"subsystem\":\"" + sub + "\",\"narrative\":\"<>\"}. The narrative should be 2-4 sentences of cross-cutting context that references specific module names in this cluster.\n\n" + body}
-		res, err := runner.RunAgent("graph-builder", ctx)
-		callsMade++
-		if err != nil {
-			fmt.Fprintf(stderr, "warning: narrative call for %q failed: %v\n", sub, err)
-			out[sub] = graph.StubNarrative(sub)
-			continue
-		}
-		narrative := graph.ExtractNarrativeJSON(res.Output)
-		if vErr := graph.ValidateNarrative(narrative, cluster); vErr != nil {
-			fmt.Fprintf(stderr, "warning: narrative for %q rejected: %v\n", sub, vErr)
-			out[sub] = graph.StubNarrative(sub)
-			continue
-		}
-		out[sub] = narrative
-		cache.Set(sub, hash, narrative)
+		misses = append(misses, task{sub: sub, cluster: cluster, hash: hash})
 	}
-	if callsMade > 0 {
-		if err := cache.Save(); err != nil {
-			fmt.Fprintf(stderr, "warning: saving narrative cache: %v\n", err)
+	if len(misses) == 0 {
+		return out
+	}
+
+	// Runner init is a one-time cost — do it before spawning workers so
+	// a construction failure fails-safe to stubs without racing.
+	runner, err := NewRunner(cfg, repoRoot)
+	if err != nil {
+		fmt.Fprintf(stderr, "warning: runner init failed, stub narratives: %v\n", err)
+		for _, m := range misses {
+			out[m.sub] = graph.StubNarrative(m.sub)
 		}
+		return out
+	}
+
+	var outMu sync.Mutex
+	sem := make(chan struct{}, concurrency)
+	var wg sync.WaitGroup
+	for _, m := range misses {
+		wg.Add(1)
+		go func(m task) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+
+			fmt.Fprintf(stdout, "narrating subsystem %q (%d modules)...\n", m.sub, len(m.cluster))
+			body := graph.BuildClusterPrompt(m.sub, m.cluster)
+			ctx := agentrunner.Context{RolePrompt: string(rolePrompt) + "\n\n---\n\nReturn a single JSON object: {\"subsystem\":\"" + m.sub + "\",\"narrative\":\"<>\"}. The narrative should be 2-4 sentences of cross-cutting context that references specific module names in this cluster.\n\n" + body}
+			res, runErr := runner.RunAgent("graph-builder", ctx)
+			if runErr != nil {
+				fmt.Fprintf(stderr, "warning: narrative call for %q failed: %v\n", m.sub, runErr)
+				outMu.Lock()
+				out[m.sub] = graph.StubNarrative(m.sub)
+				outMu.Unlock()
+				return
+			}
+			narrative := graph.ExtractNarrativeJSON(res.Output)
+			if vErr := graph.ValidateNarrative(narrative, m.cluster); vErr != nil {
+				fmt.Fprintf(stderr, "warning: narrative for %q rejected: %v\n", m.sub, vErr)
+				outMu.Lock()
+				out[m.sub] = graph.StubNarrative(m.sub)
+				outMu.Unlock()
+				return
+			}
+			outMu.Lock()
+			out[m.sub] = narrative
+			outMu.Unlock()
+			cache.Set(m.sub, m.hash, narrative)
+		}(m)
+	}
+	wg.Wait()
+
+	if err := cache.Save(); err != nil {
+		fmt.Fprintf(stderr, "warning: saving narrative cache: %v\n", err)
 	}
 	return out
 }

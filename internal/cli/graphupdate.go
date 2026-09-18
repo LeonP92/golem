@@ -109,7 +109,7 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		graph.AppendSymbols(wikiDir, g)
 		graph.AppendTypes(wikiDir, g)
 	}
-	narratives := runSubsystemNarratives(cfg, *repo, allGraphs, stdout, stderr)
+	narratives := runSubsystemNarratives(cfg, *repo, allGraphs, *concurrency, stdout, stderr)
 	if err := graph.WriteIndex(wikiDir, allGraphs, narratives); err != nil {
 		fmt.Fprintf(stderr, "writing index: %v\n", err)
 		return 1
