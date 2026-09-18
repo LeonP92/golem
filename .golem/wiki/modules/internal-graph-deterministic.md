@@ -1,49 +1,44 @@
 # internal/graph — deterministic pipeline
 
-Per-module pages in `.golem/wiki/graph/modules/` are now rendered from
-verbatim tree-sitter extraction (package docs, function signatures, type
-fields, exported consts, imports) with no LLM call in the hot path. The
-LLM is invoked once per subsystem cluster for a cross-cutting narrative
-that renders under each `## <subsystem>` header in `graph/index.md`.
+Module pages in `.golem/wiki/graph/modules/` are rendered from tree-sitter
+extraction (package docs, function signatures, type fields, exported
+consts, imports), with no per-module LLM call. The LLM runs once per
+subsystem cluster to write the narrative under each `## <subsystem>`
+heading in `graph/index.md`.
 
-Key entry points:
-- `graph.Extract(source, langName) (*StructuralData, error)` dispatches
-  to per-language extractors: `extractGo`, `extractPython`,
-  `extractJSTS`, `extractJava`, `extractRust`, `extractRuby`. Each walks
-  the tree-sitter AST directly to associate leading comments with their
-  declaration (line-adjacent only). Unknown languages fall back to a
-  generic `.scm`-query path that produces name-only exports.
-- `graph.ModuleGraph` (`internal/graph/module.go`) is the persisted
-  per-module record. Rich fields `ExportedFuncs` / `ExportedTypes` /
-  `Consts` / `PackageDoc` sit alongside legacy `ExportFns` /
-  `ExportTypes` `[]string` name slices, which are auto-populated for
-  backward compat with `graphdeps` / `graphwhoimports` /
-  `graphcheckboundary`.
-- `graph.SubsystemForPath(modulePath)` derives a subsystem tag from the
-  first non-scaffolding path segment (skips
-  `internal|cmd|pkg|src|lib`), returns `"misc"` for empty/all-skip
-  paths.
-- `graph.WriteModule` / `graph.WriteIndex` render markdown pages
-  deterministically. `WriteIndex` takes an optional
-  `SubsystemNarratives` map that renders under each subsystem header.
+Pipeline (`internal/cli/graphbuild.go`, `graphupdate.go`):
+1. `graph.Discover` groups source files by directory into modules.
+2. `buildModuleGraphs` extracts every module in parallel
+   (`--concurrency`) via `graph.Extract(src, lang)`, which dispatches to
+   per-language extractors (Go, Python, JS/TS/TSX, Java, Rust, Ruby).
+   Other discovered languages get a page with no symbols.
+3. `graph.CoarsenSubsystems` tags each module with its first meaningful
+   path segment (scaffolding such as `internal`, `cmd`, `pkg`, `src`,
+   `lib`, `staging`, `vendor`, `packages` and dotted host segments are
+   skipped), then descends one segment at a time for any cluster over
+   `DefaultCoarsenClusterSize` (200) modules — tags can be multi-segment,
+   e.g. `client-go/dynamic`.
+4. `runSubsystemNarratives` calls the `graph-builder` role once per
+   cluster, in parallel. Results are cached in
+   `.golem/index/subsystem-narratives.json` keyed by `graph.ClusterHash`
+   (subsystem + module paths + package docs), so body-only edits never
+   reach the LLM. `graph.ValidateNarrative` gates output (≥100 chars,
+   names ≥2 cluster modules by leaf segment, no template phrases);
+   rejections render a visible `graph.StubNarrative` and are cached as
+   failures — `graph update` keeps them, `graph build` retries them.
+   Runner errors are not cached. Superseded hashes are pruned.
 
-Subsystem-narrative pass (`internal/cli/graphbuild.go` →
-`runSubsystemNarratives`):
-- Clusters modules via `graph.ClusterBySubsystem`.
-- Hashes each cluster (`graph.ClusterHash`) over subsystem + module
-  paths + `PackageDoc` excerpts and caches results in
-  `.golem/index/subsystem-narratives.json`. Unchanged clusters skip the
-  LLM entirely (idempotent).
-- Prompt body from `graph.BuildClusterPrompt` (subsystem name, module
-  list, top-3 `PackageDoc` excerpts). Role prompt from
-  `graph-builder.md`, which is now deprecated for per-module use but
-  retained for this pass.
-- `graph.ExtractNarrativeJSON` unwraps the JSON envelope;
-  `graph.ValidateNarrative` gates on min 100 chars, ≥2 leaf-module
-  references, and forbidden template phrases. Failed validation renders
-  a visible `graph.StubNarrative` line into `index.md` — never a silent
-  skip.
+`graph update` re-extracts only directories touched by `git diff
+<base>..HEAD` (including deletions; a directory left with no source
+files is removed), re-coarsens against the full stored graph, and
+re-renders only rebuilt modules plus any whose subsystem tag moved.
+`graph build` starts from a clean module store and meta.
 
-Removed: `internal/graph/parser.go` (LLM-output tag scraper) and the
-per-module `agentrunner.RunAgent("graph-builder", …)` call from
-`graphbuild.go` / `graphupdate.go`.
+`graph.ModuleGraph` (`module.go`) is the persisted record. `Summary` is
+read only from pre-extraction indexes; `ExportFns`/`ExportTypes` mirror
+the names in `ExportedFuncs`/`ExportedTypes` for name-only readers
+(`graphdeps`, `whoimports`, `symbols.md`).
+
+A repo whose `.golem/roles/graph-builder.md` is still the old per-module
+prompt (contains `GRAPH_SUMMARY`) gets the embedded narrative role
+instead, with a warning.

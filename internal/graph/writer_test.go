@@ -116,7 +116,7 @@ func TestWriteIndex_groupsBySubsystem(t *testing.T) {
 		{Module: "src/billing", Summary: "Billing.", Subsystem: "billing"},
 		{Module: "src/login", Summary: "Login.", Subsystem: "auth"},
 	}
-	if err := WriteIndex(wikiDir, graphs); err != nil {
+	if err := WriteIndex(wikiDir, graphs, nil); err != nil {
 		t.Fatal(err)
 	}
 	data, _ := os.ReadFile(filepath.Join(wikiDir, "graph", "index.md"))
@@ -128,5 +128,19 @@ func TestWriteIndex_groupsBySubsystem(t *testing.T) {
 	}
 	if authPos > billingPos {
 		t.Error("expected auth before billing (alphabetical)")
+	}
+}
+
+func TestHeadingAnchor(t *testing.T) {
+	cases := map[string]string{
+		"orchestrator":      "orchestrator",
+		"client-go/dynamic": "client-godynamic",
+		"API Server":        "api-server",
+		"k8s_io.util":       "k8s_ioutil",
+	}
+	for in, want := range cases {
+		if got := headingAnchor(in); got != want {
+			t.Errorf("headingAnchor(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

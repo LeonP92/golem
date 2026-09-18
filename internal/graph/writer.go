@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // WriteModule renders a single module wiki page from tree-sitter data.
@@ -20,11 +21,7 @@ func WriteModule(wikiDir string, g ModuleGraph) error {
 	var b strings.Builder
 	fmt.Fprintf(&b, "# %s\n\n", g.Module)
 
-	summary := g.Summary
-	if summary == "" {
-		summary = g.PackageDoc
-	}
-	if summary != "" {
+	if summary := g.summary(); summary != "" {
 		b.WriteString(summary)
 		b.WriteString("\n\n")
 	}
@@ -33,7 +30,7 @@ func WriteModule(wikiDir string, g ModuleGraph) error {
 	if sub == "" {
 		sub = "misc"
 	}
-	fmt.Fprintf(&b, "Part of subsystem: [%s](../index.md#%s)\n", sub, sub)
+	fmt.Fprintf(&b, "Part of subsystem: [%s](../index.md#%s)\n", sub, headingAnchor(sub))
 
 	if len(g.ExportedFuncs) > 0 {
 		b.WriteString("\n## Functions\n\n")
@@ -129,22 +126,32 @@ func AppendTypes(wikiDir string, g ModuleGraph) error {
 	return nil
 }
 
-// SubsystemNarratives maps a subsystem name to the cluster narrative
-// rendered from a single LLM invocation per cluster (see step 12). Passed
-// through WriteIndex so the deterministic writer stays pure.
+// SubsystemNarratives maps a subsystem name to its cluster narrative.
+// Passed into WriteIndex so the writer itself never calls an LLM.
 type SubsystemNarratives map[string]string
 
+// headingAnchor returns the anchor GitHub-flavoured renderers assign to
+// a "## text" heading: lowercased, punctuation (including '/') dropped,
+// spaces turned into hyphens.
+func headingAnchor(text string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(text) {
+		switch {
+		case unicode.IsLetter(r) || unicode.IsDigit(r) || r == '-' || r == '_':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
 // WriteIndex writes the top-level codebase index, grouping modules by
-// subsystem. The optional narratives map is rendered under each subsystem
-// heading; when a subsystem has no narrative, the section is emitted with
-// its module list only.
-func WriteIndex(wikiDir string, graphs []ModuleGraph, narratives ...SubsystemNarratives) error {
+// subsystem. narratives may be nil; a subsystem without a narrative is
+// emitted with its module list only.
+func WriteIndex(wikiDir string, graphs []ModuleGraph, narratives SubsystemNarratives) error {
 	if err := os.MkdirAll(filepath.Join(wikiDir, "graph"), 0o755); err != nil {
 		return err
-	}
-	var narr SubsystemNarratives
-	if len(narratives) > 0 {
-		narr = narratives[0]
 	}
 
 	bySubsystem := map[string][]ModuleGraph{}
@@ -165,18 +172,14 @@ func WriteIndex(wikiDir string, graphs []ModuleGraph, narratives ...SubsystemNar
 	b.WriteString("# Codebase Index\n\n")
 	for _, sub := range subsystems {
 		fmt.Fprintf(&b, "## %s\n\n", sub)
-		if n, ok := narr[sub]; ok && n != "" {
+		if n := narratives[sub]; n != "" {
 			b.WriteString(n)
 			b.WriteString("\n\n")
 		}
 		mods := bySubsystem[sub]
 		sort.Slice(mods, func(i, j int) bool { return mods[i].Module < mods[j].Module })
 		for _, g := range mods {
-			summary := g.Summary
-			if summary == "" {
-				summary = g.PackageDoc
-			}
-			fmt.Fprintf(&b, "### [%s](modules/%s.md)\n\n%s\n\n", g.Module, Slug(g.Module), summary)
+			fmt.Fprintf(&b, "### [%s](modules/%s.md)\n\n%s\n\n", g.Module, Slug(g.Module), g.summary())
 		}
 	}
 	return atomicWriteFile(filepath.Join(wikiDir, "graph", "index.md"), []byte(b.String()), 0o644)

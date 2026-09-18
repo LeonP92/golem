@@ -11,11 +11,10 @@ import (
 	"sync"
 )
 
-// SubsystemNarrativeCache persists LLM-generated cluster narratives on
-// disk keyed by cluster content hash — running the subsystem pass twice
-// against unchanged clusters is a no-op (idempotency requirement,
-// landmine 4). Access is safe for concurrent Get/Set from multiple
-// goroutines during the parallel narrative pass.
+// SubsystemNarrativeCache persists cluster narratives on disk keyed by
+// ClusterHash, so unchanged clusters never reach the LLM. Rejected
+// outputs are cached too (Failed) so incremental updates don't re-bill
+// them on every run. Safe for concurrent use.
 type SubsystemNarrativeCache struct {
 	path    string
 	mu      sync.Mutex
@@ -24,12 +23,12 @@ type SubsystemNarrativeCache struct {
 
 type narrativeEntry struct {
 	Subsystem string `json:"subsystem"`
-	Narrative string `json:"narrative"`
-	Hash      string `json:"hash"`
+	Narrative string `json:"narrative,omitempty"`
+	Failed    bool   `json:"failed,omitempty"`
 }
 
 // LoadNarrativeCache reads the cache file at path. A missing file yields
-// an empty cache.
+// an empty cache; an unreadable one yields an empty cache and the error.
 func LoadNarrativeCache(path string) (*SubsystemNarrativeCache, error) {
 	c := &SubsystemNarrativeCache{path: path, entries: map[string]narrativeEntry{}}
 	data, err := os.ReadFile(path)
@@ -37,38 +36,53 @@ func LoadNarrativeCache(path string) (*SubsystemNarrativeCache, error) {
 		return c, nil
 	}
 	if err != nil {
-		return nil, err
+		return c, err
 	}
 	if err := json.Unmarshal(data, &c.entries); err != nil {
-		return nil, err
+		c.entries = map[string]narrativeEntry{}
+		return c, err
 	}
 	return c, nil
 }
 
-func (c *SubsystemNarrativeCache) Get(hash string) (string, bool) {
+// Lookup returns the cached narrative for hash. failed reports a cached
+// quality-gate rejection; ok is false when hash is not cached at all.
+func (c *SubsystemNarrativeCache) Lookup(hash string) (narrative string, failed, ok bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	e, ok := c.entries[hash]
-	if !ok {
-		return "", false
-	}
-	return e.Narrative, true
+	return e.Narrative, e.Failed, ok
 }
 
 func (c *SubsystemNarrativeCache) Set(subsystem, hash, narrative string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.entries[hash] = narrativeEntry{Subsystem: subsystem, Hash: hash, Narrative: narrative}
+	c.entries[hash] = narrativeEntry{Subsystem: subsystem, Narrative: narrative}
+}
+
+// SetFailed records that the cluster at hash produced a rejected narrative.
+func (c *SubsystemNarrativeCache) SetFailed(subsystem, hash string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.entries[hash] = narrativeEntry{Subsystem: subsystem, Failed: true}
+}
+
+// Prune drops every entry whose hash is not in keep, so superseded
+// cluster versions don't accumulate.
+func (c *SubsystemNarrativeCache) Prune(keep map[string]bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for h := range c.entries {
+		if !keep[h] {
+			delete(c.entries, h)
+		}
+	}
 }
 
 func (c *SubsystemNarrativeCache) Save() error {
 	c.mu.Lock()
-	snapshot := make(map[string]narrativeEntry, len(c.entries))
-	for k, v := range c.entries {
-		snapshot[k] = v
-	}
+	data, err := json.MarshalIndent(c.entries, "", "  ")
 	c.mu.Unlock()
-	data, err := json.MarshalIndent(snapshot, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -154,7 +168,7 @@ func ExtractNarrativeJSON(output string) string {
 	return strings.TrimSpace(output)
 }
 
-// ValidateNarrative applies the quality gates required by step 12:
+// ValidateNarrative applies the narrative quality gates:
 // non-empty, >= 100 chars, references at least 2 module names from the
 // cluster, and does not contain forbidden template phrases. Returns nil
 // on success, error describing the failure otherwise.
@@ -201,9 +215,9 @@ func ValidateNarrative(narrative string, cluster []ModuleGraph) error {
 	return fmt.Errorf("narrative references %d/%d required module names", refs, required)
 }
 
-// StubNarrative is the visible fallback rendered when an LLM cluster
-// call fails validation. It's deliberately shaped to be noticeable in
+// StubNarrative is the visible fallback rendered when a cluster narrative
+// cannot be produced. It is deliberately shaped to be noticeable in
 // review, not hidden as silent noise.
 func StubNarrative(subsystem string) string {
-	return fmt.Sprintf("_(subsystem narrative for `%s` is unavailable — the model output failed quality gates. Re-run `golem graph build` to retry.)_", subsystem)
+	return fmt.Sprintf("_(subsystem narrative for `%s` is unavailable — generation failed or was rejected. Re-run `golem graph build` to retry.)_", subsystem)
 }

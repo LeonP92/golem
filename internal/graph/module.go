@@ -20,24 +20,15 @@ type ExportedType struct {
 	Fields []string `json:"fields,omitempty"`
 }
 
-// ModuleGraph is the per-module structural + narrative record persisted
-// to `.golem/index/graph-modules/<slug>.json` and rendered to wiki pages.
+// ModuleGraph is the per-module record persisted to
+// `.golem/index/graph-modules/<slug>.json` and rendered to wiki pages.
+// Every field except Subsystem comes from tree-sitter extraction; no LLM
+// runs per module.
 //
-// After the graph-deterministic rewrite, all fields except `Subsystem`
-// come from tree-sitter extraction (verbatim doc comments, signatures,
-// field lists). The LLM is invoked only per subsystem cluster, not per
-// module.
-//
-// `Summary` is retained as a fallback: when `PackageDoc` is present it
-// serves as the summary; when absent (languages without extended
-// extraction), `Summary` may stay empty and the module page renders with
-// symbol list only.
-//
-// `ExportFns` and `ExportTypes` are name-only slices kept populated for
-// backward compatibility with downstream consumers (`graphdeps`,
-// `whoimports`, `checkboundary`, and any external tooling reading the
-// stored JSON). They mirror the `Name` field of `ExportedFuncs` /
-// `ExportedTypes`.
+// Summary is only read from indexes written before extraction replaced
+// per-module LLM prose; new records leave it empty and use PackageDoc.
+// ExportFns/ExportTypes mirror the names in ExportedFuncs/ExportedTypes
+// for readers that only need names (graphdeps, whoimports, symbols.md).
 type ModuleGraph struct {
 	Module     string   `json:"module"`
 	Summary    string   `json:"summary,omitempty"`
@@ -49,26 +40,14 @@ type ModuleGraph struct {
 	ExportedFuncs []ExportedFunc `json:"exported_funcs,omitempty"`
 	ExportedTypes []ExportedType `json:"exported_types,omitempty"`
 
-	// Name-only slices kept populated from ExportedFuncs / ExportedTypes
-	// for backward compatibility with existing readers.
 	ExportFns   []string `json:"export_fns,omitempty"`
 	ExportTypes []string `json:"export_types,omitempty"`
 }
 
-// PopulateNameSlices fills ExportFns/ExportTypes from ExportedFuncs/
-// ExportedTypes. Callers building a ModuleGraph from tree-sitter data
-// should invoke this once to keep the name slices in sync.
-func (g *ModuleGraph) PopulateNameSlices() {
-	if len(g.ExportedFuncs) > 0 {
-		g.ExportFns = make([]string, 0, len(g.ExportedFuncs))
-		for _, f := range g.ExportedFuncs {
-			g.ExportFns = append(g.ExportFns, f.Name)
-		}
+// summary is the one-paragraph description shown for the module.
+func (g ModuleGraph) summary() string {
+	if g.PackageDoc != "" {
+		return g.PackageDoc
 	}
-	if len(g.ExportedTypes) > 0 {
-		g.ExportTypes = make([]string, 0, len(g.ExportedTypes))
-		for _, t := range g.ExportedTypes {
-			g.ExportTypes = append(g.ExportTypes, t.Name)
-		}
-	}
+	return g.Summary
 }

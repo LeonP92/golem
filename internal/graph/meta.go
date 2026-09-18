@@ -145,3 +145,12 @@ func DeleteModuleGraph(indexDir, wikiDir, modulePath string) error {
 	}
 	return nil
 }
+
+// ResetModuleGraphs removes every stored module JSON and module page so a
+// full build doesn't leave records for directories that no longer exist.
+func ResetModuleGraphs(indexDir, wikiDir string) error {
+	if err := os.RemoveAll(filepath.Join(indexDir, "graph-modules")); err != nil {
+		return err
+	}
+	return os.RemoveAll(filepath.Join(wikiDir, "graph", "modules"))
+}

@@ -37,7 +37,7 @@ func TestNarrativeCache_roundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	got, ok := c2.Get("hash1")
+	got, _, ok := c2.Lookup("hash1")
 	if !ok || got != "The sub does foo." {
 		t.Errorf("got %q ok=%v", got, ok)
 	}
@@ -101,5 +101,26 @@ func TestClusterBySubsystem_stable(t *testing.T) {
 	}
 	if out["graph"][0].Module != "internal/graph" {
 		t.Errorf("graph cluster not sorted: %+v", out["graph"])
+	}
+}
+
+func TestNarrativeCache_failedAndPrune(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "n.json")
+	c, _ := LoadNarrativeCache(path)
+	c.Set("a", "h1", "narrative a")
+	c.SetFailed("b", "h2")
+	c.Prune(map[string]bool{"h2": true})
+	if err := c.Save(); err != nil {
+		t.Fatal(err)
+	}
+	c2, err := LoadNarrativeCache(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, ok := c2.Lookup("h1"); ok {
+		t.Error("h1 should have been pruned")
+	}
+	if _, failed, ok := c2.Lookup("h2"); !ok || !failed {
+		t.Errorf("h2: failed=%v ok=%v, want cached failure", failed, ok)
 	}
 }
