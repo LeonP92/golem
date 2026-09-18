@@ -211,3 +211,56 @@ func TestEveryShemRepoHasAMount(t *testing.T) {
 		}
 	}
 }
+
+// shemInit is the subset needed to check PID-1 reaping. `init` is a compose
+// tri-state: absent means "inherit the daemon default", which is off unless
+// the operator changed it, so a *pointer* is needed to tell "not set" from
+// "set false".
+type shemInit struct {
+	Services map[string]struct {
+		Build struct {
+			Target string `yaml:"target"`
+		} `yaml:"build"`
+		Init *bool `yaml:"init"`
+	} `yaml:"services"`
+}
+
+// Every service running the shem image must run under an init process.
+//
+// golem-shem is PID 1 there, and the agent's process tree — claude, git, npm,
+// hooks — reparents its orphans onto PID 1. os/exec reaps only the children Go
+// itself started, so everything else piles up as a zombie: 77 of them in about
+// two hours of ticket work on the first real deployment. That ends in PID
+// exhaustion, at which point the container cannot fork and every phase fails.
+//
+// Checked by build target rather than by service name so that the second and
+// third shem an operator adds for concurrency are covered too — the failure is
+// invisible until the container is wedged, which is the worst time to find out
+// the new service was missing a line the first one had.
+func TestShemServicesRunUnderAnInit(t *testing.T) {
+	var compose shemInit
+	if err := yaml.Unmarshal([]byte(repoFile(t, "docker-compose.yml")), &compose); err != nil {
+		t.Fatalf("parse docker-compose.yml: %v", err)
+	}
+
+	checked := 0
+	for name, svc := range compose.Services {
+		if svc.Build.Target != "shem" {
+			continue
+		}
+		// repo-init builds the shem image only to borrow git; it runs one
+		// shell command and exits, and spawns no agent tree.
+		if name == "repo-init" {
+			continue
+		}
+		checked++
+		if svc.Init == nil || !*svc.Init {
+			t.Errorf("service %q builds the shem image but does not set init: true; "+
+				"golem-shem would be PID 1 and would not reap the agent's orphaned "+
+				"grandchildren, leaking zombies until the container hits its PID limit", name)
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no service builds target shem; this test would pass vacuously")
+	}
+}

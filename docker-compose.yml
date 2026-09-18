@@ -67,6 +67,20 @@ services:
     build:
       context: .
       target: shem
+    # golem-shem runs as PID 1, and PID 1 inherits every orphaned process in
+    # the namespace. The agent spawns claude, which spawns git, npm, hooks and
+    # their own children; whenever one of those outlives its parent it is
+    # reparented here. Go's os/exec only reaps the children it started, so the
+    # rest stayed as zombies — 77 of them accumulated in a little over two
+    # hours of real ticket work, all PPID 1, STAT Z. Enough of them exhausts
+    # the PID limit and the container can no longer fork at all.
+    #
+    # init: true puts Docker's tini in front of golem-shem to do the reaping.
+    # Preferred over a reaper inside golem-shem: PID-1 duties are the
+    # supervisor's job, tini is already in the engine, and the same binary run
+    # outside a container (CLI mode, `go run`) is then not PID 1 and needs
+    # none of it.
+    init: true
     depends_on:
       orchestrator:
         condition: service_healthy
