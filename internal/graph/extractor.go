@@ -9,6 +9,7 @@ import (
 	java "github.com/tree-sitter/tree-sitter-java/bindings/go"
 	javascript "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
 	python "github.com/tree-sitter/tree-sitter-python/bindings/go"
+	ruby "github.com/tree-sitter/tree-sitter-ruby/bindings/go"
 	rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 )
@@ -40,6 +41,7 @@ var extToLang = map[string]string{
 	".mjs":  "javascript",
 	".rs":   "rust",
 	".java": "java",
+	".rb":   "ruby",
 }
 
 // LangForExt returns the language name for a file extension, or "" if unknown.
@@ -61,6 +63,8 @@ func tsLanguage(name string) *sitter.Language {
 		return sitter.NewLanguage(rust.Language())
 	case "java":
 		return sitter.NewLanguage(java.Language())
+	case "ruby":
+		return sitter.NewLanguage(ruby.Language())
 	}
 	return nil
 }
@@ -96,6 +100,8 @@ func Extract(source []byte, langName string) (*StructuralData, error) {
 		return extractJava(source, root), nil
 	case "rust":
 		return extractRust(source, root), nil
+	case "ruby":
+		return extractRuby(source, root), nil
 	}
 
 	// Generic fallback: single .scm query, name-only captures.

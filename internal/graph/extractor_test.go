@@ -15,6 +15,7 @@ func TestLangForExt(t *testing.T) {
 		{".jsx", "javascript"},
 		{".rs", "rust"},
 		{".java", "java"},
+		{".rb", "ruby"},
 		{".xyz", ""},
 	}
 	for _, tc := range cases {
@@ -453,6 +454,77 @@ pub const MAX: usize = 10;
 	}
 	if !containsStr(d.Consts, "MAX") {
 		t.Errorf("MAX missing: %v", d.Consts)
+	}
+}
+
+func TestExtract_ruby_extended(t *testing.T) {
+	src := []byte(`# Module doc line 1.
+# Module doc line 2.
+
+require 'json'
+require_relative 'foo'
+
+MAX_SIZE = 100
+
+# Doc for greet
+def greet(name)
+  "hi"
+end
+
+# Doc for MyClass
+class MyClass
+  attr_accessor :name
+end
+
+# Doc for MyModule
+module MyModule
+end
+`)
+	d, err := Extract(src, "ruby")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(d.PackageDoc, "Module doc line 1.") {
+		t.Errorf("PackageDoc = %q", d.PackageDoc)
+	}
+	if !containsStr(d.Imports, "json") {
+		t.Errorf("missing require json: %v", d.Imports)
+	}
+	if !containsStr(d.Imports, "foo") {
+		t.Errorf("missing require_relative foo: %v", d.Imports)
+	}
+	if !containsStr(d.Consts, "MAX_SIZE") {
+		t.Errorf("missing MAX_SIZE: %v", d.Consts)
+	}
+	var greet *ExportedFunc
+	for i := range d.ExportedFuncs {
+		if d.ExportedFuncs[i].Name == "greet" {
+			greet = &d.ExportedFuncs[i]
+		}
+	}
+	if greet == nil {
+		t.Fatalf("greet not found: %+v", d.ExportedFuncs)
+	}
+	if !strings.Contains(greet.Signature, "def greet(name)") {
+		t.Errorf("greet.Signature = %q", greet.Signature)
+	}
+	if greet.Doc != "Doc for greet" {
+		t.Errorf("greet.Doc = %q", greet.Doc)
+	}
+	foundClass, foundMod := false, false
+	for _, tp := range d.ExportedTypes {
+		if tp.Name == "MyClass" {
+			foundClass = true
+			if len(tp.Fields) == 0 {
+				t.Errorf("MyClass should have attr_accessor field, got %v", tp.Fields)
+			}
+		}
+		if tp.Name == "MyModule" {
+			foundMod = true
+		}
+	}
+	if !foundClass || !foundMod {
+		t.Errorf("types = %+v", d.ExportedTypes)
 	}
 }
 
