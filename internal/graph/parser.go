@@ -2,15 +2,6 @@ package graph
 
 import "strings"
 
-type ModuleGraph struct {
-	Module      string
-	Summary     string
-	ExportFns   []string
-	ExportTypes []string
-	Imports     []string
-	Subsystem   string
-}
-
 // Parse extracts Summary and Subsystem from LLM output. Structural fields
 // (Imports, ExportFns, ExportTypes) must be set by the caller from tree-sitter
 // results.
