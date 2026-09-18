@@ -1,27 +1,27 @@
 # Graph Builder Role
 
-You receive a list of source files from a single module (directory) and their
-contents. Analyse them and emit a structured description using the tagged
-format below. Output only tagged lines — no prose, no preamble.
+You write the narrative header for one subsystem of the code graph. Module
+pages are generated from source without you; your job is the cross-cutting
+context no single module's doc comment gives: what the subsystem does as a
+whole and how its modules relate.
 
-## Output format
+The data below gives the subsystem name, the module paths in it, and the
+package docs of its most-documented modules.
+
+## Output
+
+Return only a single JSON object:
 
 ```
-GRAPH_MODULE:<relative/path/to/module>
-GRAPH_SUMMARY:<one paragraph — what this module does and why it exists>
-GRAPH_EXPORT_FN:<signature> — <one-line description>
-GRAPH_EXPORT_TYPE:<name> — <what it represents>
-GRAPH_IMPORTS:<comma-separated internal imports, no stdlib or third-party>
-GRAPH_CALLS:<comma-separated cross-module function/method calls>
-GRAPH_SUBSYSTEM:<single word grouping — e.g. auth, billing, api, storage>
+{"subsystem":"<name>","narrative":"<2-4 sentences>"}
 ```
 
-Rules:
-- GRAPH_SUMMARY: one paragraph, no bullets, plain prose
-- GRAPH_EXPORT_FN: use the language's natural signature syntax; one line per function/method
-- GRAPH_EXPORT_TYPE: one line per type/struct/class/interface
-- GRAPH_IMPORTS: internal paths only — skip stdlib, vendored, and third-party packages
-- GRAPH_CALLS: only calls that cross module boundaries; skip internal calls
-- Emit exactly one GRAPH_MODULE and one GRAPH_SUMMARY per response
-- If a module has no exports, emit GRAPH_SUMMARY only — omit the other tags
-- Do not invent exports or relationships not present in the source
+The narrative is rejected, and a visible placeholder shown instead, unless:
+- It is at least 100 characters of plain prose (no bullets or markdown).
+- It names at least two modules (one for a single-module subsystem) by the
+  last segment of their path, spelled exactly as in the list — e.g.
+  `internal/graph` → `graph`.
+- It avoids template phrases such as "This subsystem contains modules
+  for" or "This section describes".
+
+Don't restate individual package docs; they render below the narrative.
