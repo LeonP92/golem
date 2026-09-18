@@ -5,51 +5,34 @@ import (
 	"strings"
 )
 
-// subsystemSkip contains path-segment names that are considered structural
-// scaffolding (not meaningful subsystem tags). When walking a module path,
-// these segments are transparent — the tagger looks past them.
+// subsystemSkip lists path segments that are transparent to the tagger:
+// build scaffolding and common vendor/monorepo roots.
 var subsystemSkip = map[string]bool{
-	"internal": true,
-	"cmd":      true,
-	"pkg":      true,
-	"src":      true,
-	"lib":      true,
-	// Vendored-source conventions: kubernetes uses staging/src/*, Bazel
-	// often uses third_party/*, JS monorepos use packages/*.
+	"internal":    true,
+	"cmd":         true,
+	"pkg":         true,
+	"src":         true,
+	"lib":         true,
 	"staging":     true,
 	"third_party": true,
 	"vendor":      true,
 	"packages":    true,
 }
 
-// DefaultCoarsenClusterSize is the default max modules per subsystem
-// cluster before coarsening kicks in. On kubernetes/kubernetes this
-// takes the naive-tag 1701-module "staging" cluster and splits it into
-// the meaningful api/apimachinery/client-go/... subclusters.
+// DefaultCoarsenClusterSize caps a single subsystem's module count
+// before coarsening splits it.
 const DefaultCoarsenClusterSize = 200
 
-// meaningfulSegments returns the ordered list of non-scaffolding, non-host
-// segments in a module path. Host-like segments (containing '.') such as
-// "k8s.io", "github.com", "sigs.k8s.io" are treated as transparent so
-// that a path like `staging/src/k8s.io/api/core/v1` yields
-// ["api", "core", "v1"].
+// meaningfulSegments splits modulePath and drops scaffolding and
+// host-like segments (containing '.', e.g. "k8s.io", "github.com").
 func meaningfulSegments(modulePath string) []string {
 	if modulePath == "" || modulePath == "." {
 		return nil
 	}
-	p := filepath.ToSlash(modulePath)
-	raw := strings.Split(p, "/")
+	raw := strings.Split(filepath.ToSlash(modulePath), "/")
 	out := make([]string, 0, len(raw))
 	for _, seg := range raw {
-		if seg == "" || seg == "." {
-			continue
-		}
-		if subsystemSkip[seg] {
-			continue
-		}
-		if strings.Contains(seg, ".") {
-			// Host-like ("k8s.io", "github.com"); a common vendored-src
-			// convention — meaningful subsystem lives one level deeper.
+		if seg == "" || seg == "." || subsystemSkip[seg] || strings.Contains(seg, ".") {
 			continue
 		}
 		out = append(out, seg)
@@ -57,18 +40,8 @@ func meaningfulSegments(modulePath string) []string {
 	return out
 }
 
-// SubsystemForPath derives a subsystem tag from a module path by walking
-// path segments and returning the first meaningful one. Examples:
-//
-//	internal/graph                     -> "graph"
-//	internal/cli                       -> "cli"
-//	cmd/golem                          -> "golem"
-//	src/lib/auth                       -> "auth"
-//	pkg/orchestrator/api               -> "orchestrator"
-//	staging/src/k8s.io/api/core/v1     -> "api"
-//	.                                  -> "misc"
-//
-// Returns "misc" when no meaningful segment is found.
+// SubsystemForPath returns the first meaningful segment of a module
+// path, or "misc" if none. Example: "pkg/orchestrator/api" → "orchestrator".
 func SubsystemForPath(modulePath string) string {
 	segs := meaningfulSegments(modulePath)
 	if len(segs) == 0 {
@@ -77,11 +50,8 @@ func SubsystemForPath(modulePath string) string {
 	return segs[0]
 }
 
-// subsystemAtDepth returns the coarsened tag for a path at a given depth.
-// depth==0 matches SubsystemForPath. depth==1 joins the first two
-// meaningful segments ("api/core"), depth==2 joins three, etc. If the
-// path doesn't have enough meaningful segments, returns the deepest
-// available tag (no error).
+// subsystemAtDepth joins the first depth+1 meaningful segments (e.g.
+// depth=1 → "api/core"). Truncates if the path is shallower.
 func subsystemAtDepth(modulePath string, depth int) string {
 	segs := meaningfulSegments(modulePath)
 	if len(segs) == 0 {
@@ -94,27 +64,16 @@ func subsystemAtDepth(modulePath string, depth int) string {
 	return strings.Join(segs[:end], "/")
 }
 
-// CoarsenSubsystems mutates each graph's Subsystem tag so no cluster
-// exceeds maxClusterSize. Oversized clusters are split by descending
-// one path level at a time (subsystemAtDepth). Modules whose path is
-// too shallow to descend keep their current tag — bounded by the
-// natural depth of the tree, not by iteration count.
-//
-// This is the fix for the kubernetes/kubernetes benchmark finding:
-// staging/src/k8s.io/... collapsed 1701 modules into "staging". After
-// one coarsening pass at DefaultCoarsenClusterSize=200, they redistribute
-// across api/apimachinery/client-go/... — recovering the taxonomy.
+// CoarsenSubsystems splits any cluster above maxClusterSize by
+// descending one path level at a time. Modules whose path can't
+// descend further keep their tag.
 func CoarsenSubsystems(graphs []ModuleGraph, maxClusterSize int) []ModuleGraph {
 	if maxClusterSize < 1 {
 		return graphs
 	}
-	// Track each module's current depth. Increment for modules in
-	// oversized clusters until every cluster fits or every module
-	// has hit its path's max meaningful depth.
 	depths := make([]int, len(graphs))
 
-	for pass := 0; pass < 8; pass++ { // safety cap on descent
-		// Count cluster sizes at current depth assignment.
+	for pass := 0; pass < 8; pass++ {
 		sizes := map[string]int{}
 		tags := make([]string, len(graphs))
 		for i, g := range graphs {
@@ -122,44 +81,37 @@ func CoarsenSubsystems(graphs []ModuleGraph, maxClusterSize int) []ModuleGraph {
 			tags[i] = tag
 			sizes[tag]++
 		}
-		// Any cluster oversized?
-		any := false
+		oversized := false
 		for _, sz := range sizes {
 			if sz > maxClusterSize {
-				any = true
+				oversized = true
 				break
 			}
 		}
-		if !any {
-			// Commit the current tag assignment and stop.
+		if !oversized {
 			for i := range graphs {
 				graphs[i].Subsystem = tags[i]
 			}
 			return graphs
 		}
-		// Descend one level for every module in an oversized cluster —
-		// but only if its path has room to descend.
 		progressed := false
 		for i, g := range graphs {
 			if sizes[tags[i]] <= maxClusterSize {
 				continue
 			}
-			segs := meaningfulSegments(g.Module)
-			if depths[i]+1 < len(segs) {
+			if depths[i]+1 < len(meaningfulSegments(g.Module)) {
 				depths[i]++
 				progressed = true
 			}
 		}
 		if !progressed {
-			// Every oversized cluster is composed of modules with no
-			// deeper meaningful segments — accept the coarsening as-is.
 			for i := range graphs {
 				graphs[i].Subsystem = tags[i]
 			}
 			return graphs
 		}
 	}
-	// Depth cap hit — commit whatever we have.
+	// Depth cap hit.
 	for i, g := range graphs {
 		graphs[i].Subsystem = subsystemAtDepth(g.Module, depths[i])
 	}

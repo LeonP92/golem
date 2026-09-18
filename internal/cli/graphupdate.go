@@ -109,8 +109,7 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		graph.AppendSymbols(wikiDir, g)
 		graph.AppendTypes(wikiDir, g)
 	}
-	// Coarsen against the full graph, not just the stale slice, so the
-	// tag distribution is stable across incremental updates.
+	// Coarsen against the full graph for stable tags across incremental updates.
 	allGraphs = graph.CoarsenSubsystems(allGraphs, graph.DefaultCoarsenClusterSize)
 	narratives := runSubsystemNarratives(cfg, *repo, allGraphs, *concurrency, stdout, stderr)
 	if err := graph.WriteIndex(wikiDir, allGraphs, narratives); err != nil {
