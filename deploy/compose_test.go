@@ -264,3 +264,85 @@ func TestShemServicesRunUnderAnInit(t *testing.T) {
 		t.Fatal("no service builds target shem; this test would pass vacuously")
 	}
 }
+
+// portsFile is the subset needed to reason about which port the orchestrator
+// is published on and which one the stack talks to internally.
+type portsFile struct {
+	Services map[string]struct {
+		Ports       []string `yaml:"ports"`
+		Environment []string `yaml:"environment"`
+		Healthcheck struct {
+			Test []string `yaml:"test"`
+		} `yaml:"healthcheck"`
+	} `yaml:"services"`
+}
+
+// The published host port must be settable from .env, and the internal port
+// must not move with it.
+//
+// Only the host side can clash: an operator with something else on 8080
+// cannot start the stack at all. Inside the container network nothing
+// competes for the port, so there is no reason to move it there — and three
+// things would have to move together if it did (the container side of this
+// mapping, the healthcheck, and the orchestrator URL in shem.yaml). Passing
+// GOLEM_PORT into the orchestrator's own environment is the specific mistake
+// this pins: the server would then listen on the new port while the
+// healthcheck kept probing 8080, so the container would be restarted forever
+// as unhealthy and the shem could never reach it.
+func TestOrchestratorPortIsConfigurableWithoutMovingTheInternalPort(t *testing.T) {
+	var compose portsFile
+	if err := yaml.Unmarshal([]byte(repoFile(t, "docker-compose.yml")), &compose); err != nil {
+		t.Fatalf("parse docker-compose.yml: %v", err)
+	}
+	orch, ok := compose.Services["orchestrator"]
+	if !ok {
+		t.Fatal("no orchestrator service in docker-compose.yml")
+	}
+	if len(orch.Ports) != 1 {
+		t.Fatalf("orchestrator publishes %d port mappings, want exactly 1: %v", len(orch.Ports), orch.Ports)
+	}
+
+	// Split on the LAST colon: the host side is "${GOLEM_PORT:-8080}", which
+	// contains a colon of its own inside the shell default syntax.
+	idx := strings.LastIndex(orch.Ports[0], ":")
+	if idx < 0 {
+		t.Fatalf("port mapping %q is not host:container", orch.Ports[0])
+	}
+	host, container := orch.Ports[0][:idx], orch.Ports[0][idx+1:]
+	if !strings.Contains(host, "${GOLEM_PORT") {
+		t.Errorf("the published host port is %q, which no environment variable can move; "+
+			"an operator already running something on that port cannot start the stack", host)
+	}
+	if !strings.Contains(host, ":-8080") {
+		t.Errorf("host port %q has no 8080 default; an operator with no GOLEM_PORT set "+
+			"would get an empty mapping", host)
+	}
+	if container != "8080" {
+		t.Errorf("container side of the mapping is %q, want 8080", container)
+	}
+
+	// GOLEM_PORT must not reach the orchestrator process.
+	if v, ok := envValue(orch.Environment, "GOLEM_PORT"); ok {
+		t.Errorf("GOLEM_PORT=%q is passed into the orchestrator container; it would listen "+
+			"on that port while the healthcheck and the shem still use %s", v, container)
+	}
+
+	// The healthcheck probes from inside the container, so it must use the
+	// internal port, not the published one.
+	probe := strings.Join(orch.Healthcheck.Test, " ")
+	if probe == "" {
+		t.Fatal("orchestrator has no healthcheck")
+	}
+	if !strings.Contains(probe, "localhost:"+container) {
+		t.Errorf("healthcheck %q does not probe localhost:%s; it will report the container "+
+			"unhealthy forever and compose will never start the shem", probe, container)
+	}
+
+	// And the shem reaches the orchestrator over the container network, so
+	// it must agree on the same internal port.
+	shemYAML := repoFile(t, "deploy/shem.yaml")
+	if !strings.Contains(shemYAML, "http://orchestrator:"+container) {
+		t.Errorf("deploy/shem.yaml does not point at orchestrator:%s; the shem would never "+
+			"connect", container)
+	}
+}

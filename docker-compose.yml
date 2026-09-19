@@ -4,7 +4,16 @@ services:
       context: .
       target: orchestrator
     ports:
-      - "8080:8080"
+      # Host side only. Set GOLEM_PORT in .env when something else on the
+      # machine already holds 8080 — that is the only port that can clash,
+      # because nothing competes for one inside the container network.
+      #
+      # The container side stays 8080 deliberately, and GOLEM_PORT is NOT in
+      # the environment block below. If the orchestrator process moved with
+      # it, the healthcheck (which probes localhost:8080 from inside) would
+      # fail forever and compose would never start the shem, which reaches
+      # the orchestrator at orchestrator:8080 from deploy/shem.yaml.
+      - "${GOLEM_PORT:-8080}:8080"
     volumes:
       - orchestrator-data:/data
       - ./deploy/orchestrator.yaml:/etc/golem/orchestrator.yaml:ro

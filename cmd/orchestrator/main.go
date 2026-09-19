@@ -333,7 +333,7 @@ func main() {
 	if ghWorker != nil {
 		srv.Sync = ghWorker
 	}
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	addr := fmt.Sprintf(":%d", cfg.ListenPort())
 	if secureCookie {
 		log.Printf("listening on %s (TLS)", addr)
 		log.Fatal(http.ListenAndServeTLS(addr, cfg.TLS.Cert, cfg.TLS.Key, srv.Routes()))

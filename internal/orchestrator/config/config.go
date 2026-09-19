@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -163,6 +164,52 @@ type Config struct {
 	TLS           TLSConfig    `yaml:"tls"`
 	GitHub        GitHubConfig `yaml:"github"`
 	CSP           CSPConfig    `yaml:"csp"`
+}
+
+// defaultPortEnv is read by ListenPort. Not a secret, so it is read
+// directly rather than through a token_env-style indirection, exactly as
+// defaultLabelEnv is.
+const defaultPortEnv = "GOLEM_PORT"
+
+// defaultPort is the port the orchestrator listens on when nothing says
+// otherwise.
+const defaultPort = 8080
+
+// ListenPort returns the port to serve on, resolved in order: the GOLEM_PORT
+// environment variable, then `port` in the config file, then 8080.
+//
+// The environment wins for the reason it wins in TriggerLabel: in the Docker
+// stack orchestrator.yaml is bind-mounted read-only, so .env is the only file
+// an operator can actually edit. The usual reason to move it is that
+// something else on the host already holds 8080.
+//
+// A value that cannot be listened on is ignored rather than passed through.
+// Port 0 is the trap worth naming: net/http treats ":0" as "any free port",
+// so an empty or unparseable setting would start the server cleanly on a
+// random port that nothing else in the stack knows about. Falling back is
+// louder than that, because the operator finds the orchestrator where the
+// documentation says it is.
+func (c Config) ListenPort() int {
+	if p, ok := validPort(strings.TrimSpace(os.Getenv(defaultPortEnv))); ok {
+		return p
+	}
+	if c.Port > 0 && c.Port <= 65535 {
+		return c.Port
+	}
+	return defaultPort
+}
+
+// validPort parses a port from its decimal string form, reporting whether it
+// is one a server can actually bind.
+func validPort(raw string) (int, bool) {
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n <= 0 || n > 65535 {
+		return 0, false
+	}
+	return n, true
 }
 
 // Load reads and parses the YAML config file at path.
