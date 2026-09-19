@@ -227,14 +227,17 @@ A human will review your plan in the orchestrator UI and approve before implemen
 
 // buildImplementPrompt returns the prompt for the implement Claude session.
 // Claude implements the plan and runs review — it does NOT close the ticket.
-func buildImplementPrompt(ticketID, description string) string {
+// branch is passed in rather than rebuilt from ticketID: the real name is
+// slug.Branch(title, id) — ticket/<slug>-<id[:8]> — and "ticket/"+ticketID
+// names a branch that does not exist.
+func buildImplementPrompt(ticketID, branch, description string) string {
 	return fmt.Sprintf(`You are a Golem developer running autonomously.
 The plan has been approved. IMPLEMENT this ticket fully.
 
 Ticket ID: %s
 Description:
 %s
-Worktree: .golem/tickets/%s/worktree/  (checked out on branch ticket/%s)
+Worktree: .golem/tickets/%s/worktree/  (checked out on branch %s)
 Plan: .golem/tickets/%s/plan.md
 Spec: .golem/tickets/%s/spec.md
 
@@ -258,7 +261,7 @@ gate is run for you once you stop, by the process that started you — it needs
 a model credential this session does not have. Stop when your last commit is
 made and the observers have been attempted.`,
 		ticketID, fenceDescription(description),
-		ticketID, ticketID, ticketID, ticketID,
+		ticketID, branch, ticketID, ticketID,
 		ticketID, ticketID, ticketID)
 }
 
@@ -269,7 +272,10 @@ made and the observers have been attempted.`,
 // golem ticket close (the ticket returns to ready-for-review, not closed)
 // and does not restate the plan — feedback is scoped to fixes, not a
 // re-implementation.
-func buildRevisePrompt(ticketID, description, feedback string) string {
+// branch is passed in for the same reason as buildImplementPrompt: this
+// prompt tells the agent to stay on "the existing branch", so naming a
+// branch that does not exist is worse here than anywhere else.
+func buildRevisePrompt(ticketID, branch, description, feedback string) string {
 	return fmt.Sprintf(`You are a Golem developer addressing review feedback.
 This ticket was already implemented and reviewed once. A human reviewed
 the work and requested changes. Address ALL of the feedback below in the
@@ -278,7 +284,7 @@ existing worktree, on the existing branch — do NOT start over.
 Ticket ID: %s
 Description:
 %s
-Worktree: .golem/tickets/%s/worktree/  (checked out on branch ticket/%s)
+Worktree: .golem/tickets/%s/worktree/  (checked out on branch %s)
 
 Human feedback on the review:
 %s
@@ -299,7 +305,7 @@ Do NOT run golem ticket review, and do NOT run golem ticket close. The review
 gate is run for you once you stop, by the process that started you — it needs
 a model credential this session does not have. Stop when your last commit is
 made and the observers have been attempted.`,
-		ticketID, fenceDescription(description), ticketID, ticketID,
+		ticketID, fenceDescription(description), ticketID, branch,
 		feedback,
 		ticketID)
 }

@@ -27,8 +27,8 @@ func TestPromptsFenceUntrustedDescription(t *testing.T) {
 	builders := map[string]func() string{
 		"brainstorm": func() string { return buildBrainstormPrompt("t1", payload, "") },
 		"plan":       func() string { return buildPlanPrompt("t1", payload, "") },
-		"implement":  func() string { return buildImplementPrompt("t1", payload) },
-		"revise":     func() string { return buildRevisePrompt("t1", payload, "fb") },
+		"implement":  func() string { return buildImplementPrompt("t1", "ticket/some-title-t1", payload) },
+		"revise":     func() string { return buildRevisePrompt("t1", "ticket/some-title-t1", payload, "fb") },
 	}
 
 	for name, build := range builders {
@@ -181,7 +181,7 @@ func TestEscapeFenceMarkers_Idempotent(t *testing.T) {
 // worktree path, and feedback verbatim, and does not restate the plan
 // (the revise session is scoped to fixes, not a re-implementation).
 func TestBuildRevisePrompt(t *testing.T) {
-	prompt := buildRevisePrompt("ticket-123", "fix the thing", "the button label is wrong")
+	prompt := buildRevisePrompt("ticket-123", "ticket/fix-the-thing-ticket-1", "fix the thing", "the button label is wrong")
 
 	if !strings.Contains(prompt, "ticket-123") {
 		t.Error("expected prompt to contain the ticket ID")

@@ -135,8 +135,8 @@ func TestFinishWorkPhaseDistinguishesAFailedGate(t *testing.T) {
 // with that or the agent burns a phase failing at it.
 func TestPromptsDoNotAskTheAgentToRunTheReviewGate(t *testing.T) {
 	prompts := map[string]string{
-		"implement": buildImplementPrompt("t-1", "d"),
-		"revise":    buildRevisePrompt("t-1", "d", "fb"),
+		"implement": buildImplementPrompt("t-1", "ticket/d-t-1", "d"),
+		"revise":    buildRevisePrompt("t-1", "ticket/d-t-1", "d", "fb"),
 	}
 	for name, p := range prompts {
 		t.Run(name, func(t *testing.T) {
