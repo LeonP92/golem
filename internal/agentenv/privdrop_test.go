@@ -48,7 +48,7 @@ func TestDropPrivileges_NoAccountIsANoOp(t *testing.T) {
 	cmd.Env = []string{"HOME=/root"}
 	DropPrivileges(cmd)
 
-	if cmd.SysProcAttr != nil && cmd.SysProcAttr.Credential != nil {
+	if hasCredential(cmd) {
 		t.Error("DropPrivileges set a Credential with no agent account configured; " +
 			"the exec would fail with EPERM wherever this is not root")
 	}
