@@ -72,6 +72,31 @@ elif { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ 
   echo "shem:   comment out CLAUDE_HOME in .env and recreate this container." >&2
 fi
 
+# --- Agent account home -------------------------------------------------------
+# The agent runs as GOLEM_AGENT_USER (see Dockerfile) so it cannot read
+# GOLEM_GITHUB_TOKEN out of /proc/1/environ. That account has its own HOME,
+# and Claude Code keeps its state under HOME, so the headless bootstrap above
+# has to be repeated there: without it the agent gets the interactive
+# first-run wizard and every phase hangs with no output.
+if [ -n "$GOLEM_AGENT_USER" ]; then
+  agent_home=$(awk -F: -v u="$GOLEM_AGENT_USER" '$1==u {print $6}' /etc/passwd)
+  if [ -z "$agent_home" ]; then
+    echo "shem: WARNING GOLEM_AGENT_USER=$GOLEM_AGENT_USER has no account; the agent will run as root" >&2
+  else
+    mkdir -p "$agent_home/.claude"
+    if [ -n "$CLAUDE_HOME" ] && [ -f "$CLAUDE_JSON" ]; then
+      # Session mode: the agent cannot read root's home, so give it a copy
+      # of the mounted session rather than a bare bootstrap.
+      cp -f "$CLAUDE_JSON" "$agent_home/.claude.json" 2>/dev/null || true
+      cp -R "$CLAUDE_DIR/." "$agent_home/.claude/" 2>/dev/null || true
+    elif [ ! -f "$agent_home/.claude.json" ]; then
+      printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$agent_home/.claude.json"
+    fi
+    chown -R "$GOLEM_AGENT_USER" "$agent_home"
+    echo "shem: prepared $agent_home for agent account $GOLEM_AGENT_USER"
+  fi
+fi
+
 # --- Git push credential ------------------------------------------------------
 # The shem pushes the ticket branch that the orchestrator's pull request is
 # opened from. That push happens on the shem host, so it needs its own
@@ -97,11 +122,22 @@ fi
 # Pre-accept the Claude Code workspace trust dialog for every repo the shem
 # will work on.  Without this, Claude Code ignores the project's allow-list
 # and warns on every invocation.
-if [ -f "$CLAUDE_JSON" ] && command -v python3 > /dev/null 2>&1; then
+#
+# Applied to the AGENT's config as well as root's, and the agent's is the one
+# that actually matters: the agent runs as GOLEM_AGENT_USER with its own HOME,
+# so it reads its own .claude.json. Trusting only root's left the agent
+# hitting the trust dialog on a repo root it could not answer for, which in
+# --print mode is a phase that produces nothing and never returns.
+trust_configs="$CLAUDE_JSON"
+if [ -n "$agent_home" ]; then
+  trust_configs="$trust_configs $agent_home/.claude.json"
+fi
+for trust_json in $trust_configs; do
+if [ -f "$trust_json" ] && command -v python3 > /dev/null 2>&1; then
   # Trust every repo directory mounted under /repos/ automatically.
   repos=$(find /repos -mindepth 1 -maxdepth 1 -type d 2>/dev/null | tr '\n' ' ')
   # shellcheck disable=SC2086
-  python3 - "$CLAUDE_JSON" $repos <<'PYEOF'
+  python3 - "$trust_json" $repos <<'PYEOF'
 import sys, json, os
 
 path = sys.argv[1]
@@ -124,6 +160,12 @@ if changed:
     with open(path, "w") as f:
         json.dump(cfg, f, indent=2)
 PYEOF
+fi
+done
+
+# python3 above ran as root; hand the agent back its own files.
+if [ -n "$GOLEM_AGENT_USER" ] && [ -n "$agent_home" ]; then
+  chown -R "$GOLEM_AGENT_USER" "$agent_home"
 fi
 
 exec golem-shem "$@"

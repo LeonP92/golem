@@ -246,6 +246,10 @@ func (c ClaudeCode) RunAgent(role string, ctx Context) (Result, error) {
 	// environment. Same allow-list as the shem worker's exec site; see
 	// internal/agentenv for why it is shared rather than duplicated.
 	cmd.Env = agentenv.Environ()
+	// And as an unprivileged user where one is configured. Filtering the
+	// environment is only meaningful if the agent cannot read the shem's
+	// memory: as root in the same container it reads /proc/1/environ instead.
+	agentenv.DropPrivileges(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

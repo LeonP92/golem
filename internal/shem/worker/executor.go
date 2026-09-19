@@ -138,6 +138,13 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		}
 	}
 
+	// The shem runs as root and created the clone, the ticket directory and
+	// the worktree; the agent runs as an unprivileged account and has to be
+	// able to write all of it. No-op when no agent account is configured.
+	if err := agentenv.EnsureOwnership(repoPath); err != nil {
+		log.Printf("executor: %v", err)
+	}
+
 	// Start log-tail before any Claude invocations so we capture all entries.
 	stopTail := make(chan struct{})
 	tailDone := make(chan struct{})
@@ -357,6 +364,12 @@ func claudePhaseCmd(ctx context.Context, repoPath, prompt string) *exec.Cmd {
 	// subprocesses around it are golem's own commands and keep the full
 	// environment, which is what leaves the shem's push credential working.
 	cmd.Env = agentenv.Environ()
+	// Drop to an unprivileged account where one is configured. Environment
+	// filtering keeps the token out of the agent's OWN environment, but an
+	// agent running as root simply reads it out of /proc/1/environ instead —
+	// verified in the deployed container. Filtering is only meaningful once
+	// the agent cannot read the shem's memory.
+	agentenv.DropPrivileges(cmd)
 	return cmd
 }
 

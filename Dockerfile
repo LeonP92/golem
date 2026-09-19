@@ -54,6 +54,17 @@ RUN apk add --no-cache \
     go \
     make curl jq
 ENV SHELL=/bin/bash
+# The agent runs as this account, not as root.
+#
+# golem-shem itself stays root: it holds GOLEM_GITHUB_TOKEN, which the push
+# needs. Environment filtering (internal/agentenv) keeps that token out of the
+# agent's own environment, but an agent running as root just reads it out of
+# /proc/1/environ instead — /proc/1/environ is mode 0400 root-owned, which is
+# no obstacle to root in the same container. The filtering only means
+# something once the agent is a different, unprivileged user.
+RUN addgroup -g 10001 golem-agent \
+    && adduser -D -u 10001 -G golem-agent -h /home/golem-agent golem-agent
+ENV GOLEM_AGENT_USER=golem-agent
 RUN npm install -g @anthropic-ai/claude-code
 COPY --from=builder /out/golem      /usr/local/bin/golem
 COPY --from=builder /out/golem-shem /usr/local/bin/golem-shem
