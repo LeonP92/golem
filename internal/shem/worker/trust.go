@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+
+	"github.com/leonp92/golem/internal/agentenv"
 )
 
 // claudeJSONMu serialises read-modify-write of ~/.claude.json. The file is
@@ -36,8 +38,14 @@ func trustWorkspace(repoPath string) {
 		log.Printf("executor: cannot locate the home directory to trust %s: %v", repoPath, err)
 		return
 	}
-	if err := setWorkspaceTrusted(filepath.Join(home, ".claude.json"), repoPath); err != nil {
-		log.Printf("executor: could not trust workspace %s: %v", repoPath, err)
+	homes := []string{home}
+	if acct := agentenv.User(); acct != nil {
+		homes = append(homes, acct.Home) // the agent reads its own config
+	}
+	for _, h := range homes {
+		if err := setWorkspaceTrusted(filepath.Join(h, ".claude.json"), repoPath); err != nil {
+			log.Printf("executor: could not trust workspace %s: %v", repoPath, err)
+		}
 	}
 }
 

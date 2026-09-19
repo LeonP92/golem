@@ -4,17 +4,18 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/ticket"
-	"github.com/leonp92/golem/internal/workspace"
 )
 
 // Executor is the interface for running a ticket.
@@ -249,11 +250,16 @@ func (w *Worker) cleanupTicket(repoRemote, ticketID string) {
 	if s, err := ticket.Load(ticketDir); err == nil && s.Branch != "" {
 		branch = s.Branch
 	}
-	if err := workspace.Remove(repoPath, worktreePath, branch); err != nil {
-		log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
-	} else {
-		log.Printf("worker: ticket %s cleaned up (worktree and branch removed)", ticketID)
+	// Not workspace.Remove: that runs git as root, and this repo is the agent's.
+	ctx := context.Background()
+	if _, err := os.Stat(worktreePath); err == nil {
+		if err := gitRun(ctx, repoPath, "worktree", "remove", worktreePath, "--force"); err != nil {
+			log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
+			return
+		}
 	}
+	_ = gitRun(ctx, repoPath, "branch", "-D", branch) // already gone is fine
+	log.Printf("worker: ticket %s cleaned up (worktree and branch removed)", ticketID)
 }
 
 // tryClaimAndRun attempts to claim the ticket and run it.
@@ -440,8 +446,11 @@ func (w *Worker) runGraphBuild(remote string) {
 	w.graphBuildMu.Lock()
 	defer w.graphBuildMu.Unlock()
 
+	if err := agentenv.EnsureOwnership(repoPath); err != nil {
+		log.Printf("worker: %v", err)
+	}
 	log.Printf("worker: building the code graph for %s in %s", remote, repoPath)
-	out, err := exec.Command("golem", "graph", "build", "--repo", repoPath).CombinedOutput() //nolint:gosec
+	out, err := asAgent(exec.Command("golem", "graph", "build", "--repo", repoPath)).CombinedOutput() //nolint:gosec
 	if err != nil {
 		// CombinedOutput rather than the error alone: `golem graph build`
 		// prints why it failed and exits 1, so the exit status on its own
