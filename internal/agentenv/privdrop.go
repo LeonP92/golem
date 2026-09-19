@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
-	"syscall"
 )
 
 // The shem itself stays root: it holds the push credential, and dropping it
@@ -90,10 +89,7 @@ func DropPrivileges(cmd *exec.Cmd) {
 	if acct == nil {
 		return
 	}
-	if cmd.SysProcAttr == nil {
-		cmd.SysProcAttr = &syscall.SysProcAttr{}
-	}
-	cmd.SysProcAttr.Credential = &syscall.Credential{Uid: acct.UID, Gid: acct.GID}
+	setCredential(cmd, acct.UID, acct.GID)
 	cmd.Env = overrideEnv(cmd.Env, map[string]string{
 		"HOME":    acct.Home,
 		"USER":    acct.Name,
@@ -163,8 +159,7 @@ func EnsureOwnership(root string) error {
 		if statErr != nil {
 			return nil
 		}
-		st, ok := info.Sys().(*syscall.Stat_t)
-		if ok && st.Uid == acct.UID && st.Gid == acct.GID {
+		if ownedBy(info, acct.UID, acct.GID) {
 			return nil
 		}
 		// Lchown, not Chown: following a symlink here would hand ownership
