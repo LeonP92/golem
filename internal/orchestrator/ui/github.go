@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -176,7 +177,18 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
+	// An empty pair means the remote is not a github.com repository URL.
+	// Refuse rather than store it: Owner and Name are interpolated into
+	// GitHub API paths, so a row carrying a guess at them would make the
+	// sync loop act on some other repository under that name, and the only
+	// place the mismatch would ever surface is in whatever it wrote there.
 	owner, name := splitRemote(remote)
+	if owner == "" || name == "" {
+		h.renderGitHubSettings(w, r,
+			"That remote is not a GitHub repository URL. Expected "+
+				"https://github.com/<owner>/<repo>.")
+		return
+	}
 
 	// Find rather than First: "no row yet" is the NORMAL case here — it is
 	// what every first save of a shem-declared repo looks like — and First
@@ -205,12 +217,53 @@ func (h *Handlers) githubSettingsSubmit(w http.ResponseWriter, r *http.Request) 
 	http.Redirect(w, r, "/settings/github", http.StatusSeeOther)
 }
 
+// gitHubHost is the only host whose repositories this integration can act on.
+// There is no GitHub Enterprise support: the API client talks to
+// api.github.com unconditionally, so a remote on any other host cannot be the
+// repository the resulting owner/name pair would address.
+const gitHubHost = "github.com"
+
 // splitRemote extracts owner and repo name from a normalized GitHub URL such
-// as https://github.com/org/repo. Unparseable input yields empty strings.
+// as https://github.com/org/repo. Anything else yields empty strings, and
+// callers must treat that as "this repository cannot be synced".
+//
+// Owner and Name are not cosmetic: they are interpolated into GitHub API
+// paths (repos/{owner}/{name}), so they decide which repository on
+// github.com the orchestrator reads issues from and writes comments to.
+//
+// This used to take the last two path segments of any string whatsoever,
+// which made the remote an operator configured and the repository Golem
+// acted on two independent things:
+//
+//	https://github.com.evil.example/acme/widgets -> ("acme", "widgets")
+//	https://evil.example/a/b/acme/widgets        -> ("acme", "widgets")
+//	https://github.com/acme/widgets/tree/main    -> ("tree", "main")
+//	https://github.com/acme                      -> ("github.com", "acme")
+//
+// The first two are the dangerous shape: a remote pointing at a look-alike
+// host still produced a perfectly plausible pair, and the orchestrator then
+// synced the github.com repository of that name — one the operator never
+// named and may not own. The last two show the same laxity turning a URL
+// that IS on github.com into the wrong repository.
+//
+// Parsing the URL and requiring the host to match exactly closes all four.
 func splitRemote(remote string) (string, string) {
-	parts := strings.Split(strings.TrimSuffix(remote, "/"), "/")
-	if len(parts) < 2 {
+	u, err := url.Parse(remote)
+	if err != nil {
 		return "", ""
 	}
-	return parts[len(parts)-2], parts[len(parts)-1]
+	// Hostname() drops any :port and the [] around an IPv6 literal, so a
+	// remote like https://github.com:443/acme/widgets still matches while
+	// https://github.com.evil.example/ does not.
+	if !strings.EqualFold(u.Hostname(), gitHubHost) {
+		return "", ""
+	}
+	parts := strings.Split(strings.Trim(u.Path, "/"), "/")
+	// Exactly owner/name. Fewer cannot address a repository; more means the
+	// remote is a URL to something inside one (a tree, a blob, an issue),
+	// and picking two segments out of it guesses at which repository.
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", ""
+	}
+	return parts[0], parts[1]
 }
