@@ -45,6 +45,7 @@ func TestPendingHumanInput_ReturnsOldest(t *testing.T) {
 
 	// Seed a shem with an API key for auth.
 	seedShemForHuman(t, h, "shem-human-1", "humankey1")
+	assignTicketToShem(t, h, ticket.ID, "shem-human-1")
 
 	now := time.Now()
 	// Seed two unresolved inputs (oldest first).
@@ -99,10 +100,15 @@ func TestAckHumanInput(t *testing.T) {
 
 	// Seed a shem with an API key for auth.
 	seedShemForHuman(t, h, "shem-human-2", "humankey2")
+	assignTicketToShem(t, h, ticket.ID, "shem-human-2")
 
+	// feedback, because that is the only kind a shem key may resolve: the
+	// shem's one use of this endpoint is consumeFeedback acking what it has
+	// read. The subject of this test is that the ack succeeds at all, not
+	// which kind it carries.
 	input := db.HumanInput{
 		TicketID:  ticket.ID,
-		Kind:      "question_answer",
+		Kind:      "feedback",
 		Prompt:    "do it?",
 		CreatedAt: time.Now(),
 	}

@@ -1,5 +1,22 @@
 {{define "page_content"}}
-<div id="ticket-live">
+{{/* Polled so the phase badge, the action buttons and the Details block
+     follow the ticket without a manual refresh. The activity log below
+     arrives over SSE and needs none of this; everything OUTSIDE the log was
+     simply never refreshed, which is why a ticket could sit on screen
+     showing a phase it had already left.
+
+     hx-select pulls this same element out of the full page the handler
+     renders, and #log-feed carries hx-preserve so the swap moves the
+     existing node — with its live SSE connection and scroll position —
+     into the new content rather than replacing it. layout.html's
+     htmx:beforeSwap/afterSwap pair preserves the open/closed state of the
+     collapses across the same swap; it was written for these polls and had
+     nothing to do until now. */}}
+<div id="ticket-live"
+     hx-get="/tickets/{{.Ticket.ID}}"
+     hx-trigger="every 5s"
+     hx-select="#ticket-live"
+     hx-swap="outerHTML">
 
   <div class="mb-5">
     <a href="/dashboard" class="btn btn-ghost btn-sm gap-1.5 -ml-2 mb-3 text-base-content/60">
@@ -19,10 +36,53 @@
           </a>
           {{end}}
         </div>
+        {{if .Ticket.IssueNumber}}
+        <p class="text-base-content/70 mt-1 text-sm font-medium">{{.Ticket.Title}}</p>
+        <p class="text-base-content/50 mt-0.5 text-xs flex items-center gap-1 flex-wrap">
+          <span class="iconify shrink-0" data-icon="heroicons:arrow-path-rounded-square"></span>
+          <span>
+            Title and description are synced from GitHub
+            <a href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.IssueNumber}}</a>
+            — edit them on GitHub; changes made here would be overwritten on the next sync.
+            {{if .Ticket.PRNumber}}
+            Pull request:
+            <a href="{{.Ticket.PRURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.PRNumber}}</a>
+            {{end}}
+          </span>
+        </p>
+        <pre class="description mt-2 text-sm font-sans whitespace-pre-wrap bg-base-200 rounded p-3 max-h-64 overflow-y-auto">{{.Ticket.Description}}</pre>
+        {{/* This card lives inside the .Ticket.IssueNumber branch, so a ticket needing approval with a nil IssueNumber would have no release control at all: only createTicketFromIssue produces an externally-sourced (unapproved) ticket, and it always sets IssueNumber, but that coupling is implicit — any future path that creates one without an IssueNumber must either set one or add a release control outside this branch. */}}
+        {{/* Rendered on provenance+approval state (IssueNumber set, IntakeApproved false), not on Phase == "pending-approval" (fix round 4): a ticket can lose that phase via close/needs-attention/requeue while still being unapproved and therefore still unclaimable (spec Amendment 1), and this is its only in-product recovery path. A closed ticket is excluded — reopening is a separate action. AssignedShem must also be nil (fix round 5), mirroring actionStart's guard: a claimed-but-unapproved ticket must not be offered "start", which would double-claim it — Re-queue, not Start, is the control for a claimed ticket. */}}
+        {{if and (not .Ticket.IntakeApproved) (ne .Ticket.Phase "closed") (not .Ticket.AssignedShem)}}
+        <div class="card border-l-4 border-warning bg-warning/10 shadow-sm mt-3">
+          <div class="card-body p-4">
+            <h2 class="font-semibold text-sm text-warning flex items-center gap-1.5 mb-2">
+              <span class="iconify" data-icon="heroicons:shield-exclamation"></span>
+              Pending Approval
+            </h2>
+            <p class="text-sm text-base-content/70 mb-3">
+              This ticket is linked to GitHub issue
+              <a href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener" class="link link-hover font-mono">#{{.Ticket.IssueNumber}}</a>
+              and has not been approved for execution. Read the description above, then approve it so a shem can claim it.
+            </p>
+            <button class="btn btn-sm btn-warning gap-1.5"
+              hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              {{/* reviewed_body_hash is the fingerprint of the description rendered ABOVE, submitted with the approval so actionStart can refuse it if a poll edited the issue while this page sat open (fix round 1c). Without it the server cannot tell what the operator was shown, and an edit landing between render and click would be approved unread. htmx serialises hx-vals into the request BODY for a POST, which is where the dispatcher reads every parameter from (finding S1); the CSRF token travels separately as a header, added by the htmx:configRequest listener in layout.html. */}}
+              hx-vals='{"action":"start","reviewed_body_hash":"{{.Ticket.BodyHash}}"}'
+              hx-confirm="Approve and start this ticket? A shem will be able to claim it immediately."
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+              <span class="iconify" data-icon="heroicons:play"></span>
+              Approve &amp; Start
+            </button>
+          </div>
+        </div>
+        {{end}}
+        {{else}}
         <p class="text-base-content/70 mt-1 text-sm font-medium"
            title="{{.Ticket.Title}}">{{displayTitle .Ticket.Title .Ticket.Description}}</p>
         {{if .Ticket.Title}}
         <p class="text-base-content/50 mt-0.5 text-xs" title="{{.Ticket.Description}}">{{truncate 120 (firstLine .Ticket.Description)}}</p>
+        {{end}}
         {{end}}
       </div>
     </div>
@@ -63,6 +123,7 @@
         Close
       </button>
       {{end}}
+      {{if ne .Ticket.Phase "pending-approval"}}
       <button class="btn btn-sm btn-ghost gap-1.5"
         hx-post="/api/tickets/{{.Ticket.ID}}/actions"
         hx-vals='{"action":"requeue"}'
@@ -71,6 +132,7 @@
         <span class="iconify" data-icon="heroicons:arrow-path"></span>
         Re-queue
       </button>
+      {{end}}
     </div>
 
     {{if eq .Ticket.Phase "ready-for-review"}}
@@ -156,10 +218,13 @@
           aria-live="polite"
           aria-atomic="false"
           hx-preserve
-          hx-ext="sse"
-          sse-connect="/sse/tickets/{{.Ticket.ID}}/log"
-          sse-swap="message"
-          hx-swap="beforeend">
+          {{/* The feed streams over a WebSocket, not SSE. SSE rides an
+               ordinary HTTP request, and browsers allow only six of those
+               per origin on HTTP/1.1, so one held-open stream per ticket tab
+               meant six tabs consumed the whole pool and every later request
+               — including a plain page navigation — queued forever. The
+               socket is read by the script at the foot of this template. */}}
+          data-log-ws="/ws/tickets/{{.Ticket.ID}}/log">
           {{if not .LogEntries}}
           <div id="log-empty" class="text-base-content/40 text-sm py-4 text-center">
             <span class="iconify text-2xl animate-pulse" data-icon="heroicons:signal"></span>
@@ -181,24 +246,94 @@
   var logFeed = document.getElementById('log-feed');
   if (!logFeed) return;
 
-  logFeed.scrollTop = logFeed.scrollHeight;
+  // The newest entry is at the top, so the interesting end of the feed is
+  // where the browser already starts; there is nothing to scroll to on load.
 
-  var userScrolledUp = false;
+  // Whether the reader has scrolled away from the newest entries to read
+  // older ones. While they have, the feed is left alone — yanking it back to
+  // the top because something arrived is the thing that makes a live log
+  // unreadable.
+  var readingOlder = false;
   logFeed.addEventListener('scroll', function() {
-    userScrolledUp = logFeed.scrollTop + logFeed.clientHeight < logFeed.scrollHeight - 60;
+    readingOlder = logFeed.scrollTop > 60;
   });
 
   var logEmptyRemoved = false;
-  document.addEventListener('htmx:sseMessage', function() {
+  function onEntryRendered() {
     if (!logEmptyRemoved) {
       var empty = document.getElementById('log-empty');
       if (empty) { empty.remove(); logEmptyRemoved = true; }
     }
-    if (!userScrolledUp) {
-      // defer one tick so the appended node is in the DOM before measuring
-      setTimeout(function() { logFeed.scrollTop = logFeed.scrollHeight; }, 10);
+    if (!readingOlder) {
+      // Defer one tick so the prepended node is in the DOM first.
+      setTimeout(function() { logFeed.scrollTop = 0; }, 10);
     }
+  }
+
+  // ── Live feed ──────────────────────────────────────────────────────────
+  // The server sends one rendered log entry per message. insertAdjacentHTML
+  // is used rather than htmx's swap because it does not execute script
+  // elements in the inserted markup; the Content-Security-Policy would block
+  // them anyway, but not relying on that keeps the two defences independent.
+  // (Spelling that tag out literally here would be read as a second opening
+  // tag by the CSP template scanner, which counts them to prove it found
+  // every inline block — and it fails closed, disabling the whole policy.)
+  //
+  // afterbegin, not beforeend: the feed reads newest-first, so a live entry
+  // belongs at the top next to the others of its age.
+  var path = logFeed.getAttribute('data-log-ws');
+  if (!path) return;
+  var url = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + path;
+
+  // A WebSocket, unlike EventSource, does not reconnect itself. Without this
+  // the activity log would go permanently silent after any blip — a sleeping
+  // laptop, a dropped VPN — and look simply idle, which is the worst way for
+  // a live log to fail.
+  var retry = 0, socket = null, stopped = false;
+  function showStreamWarning() {
+    if (document.getElementById('log-stream-warning')) return;
+    var el = document.createElement('div');
+    el.id = 'log-stream-warning';
+    el.className = 'alert alert-warning text-sm mb-2';
+    el.setAttribute('role', 'status');
+    el.textContent = 'Live updates disconnected — retrying. Reload to see the latest activity.';
+    logFeed.insertAdjacentElement('beforebegin', el);
+  }
+  function clearStreamWarning() {
+    var el = document.getElementById('log-stream-warning');
+    if (el) el.remove();
+  }
+  function connect() {
+    if (stopped) return;
+    socket = new WebSocket(url);
+    socket.onopen = function() { retry = 0; clearStreamWarning(); };
+    socket.onmessage = function(ev) {
+      logFeed.insertAdjacentHTML('afterbegin', ev.data);
+      // layout.html listens for this to run markdown rendering and
+      // sanitizing over the entry that just arrived.
+      document.dispatchEvent(new CustomEvent('golem:log-entry'));
+      onEntryRendered();
+    };
+    socket.onclose = function() {
+      if (stopped) return;
+      // Say so on screen once the feed has clearly stopped working. A live
+      // log that has quietly died is indistinguishable from a ticket with
+      // nothing happening, and the reader has no reason to suspect the
+      // former. Three consecutive failures is past any ordinary blip.
+      if (retry === 3) showStreamWarning();
+      // Exponential backoff to 30s, so a server that is down for a while is
+      // not hammered by every open ticket tab.
+      var delay = Math.min(1000 * Math.pow(2, retry++), 30000);
+      setTimeout(connect, delay);
+    };
+    // onerror is always followed by onclose, which owns the retry.
+    socket.onerror = function() { try { socket.close(); } catch (e) {} };
+  }
+  window.addEventListener('beforeunload', function() {
+    stopped = true;
+    if (socket) { try { socket.close(); } catch (e) {} }
   });
+  connect();
 })();
 </script>
 {{end}}

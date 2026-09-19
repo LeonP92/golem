@@ -7,7 +7,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
+
+	"github.com/leonp92/golem/internal/agentenv"
 )
 
 const agentFrontmatterTemplate = `---
@@ -237,12 +240,50 @@ func (c ClaudeCode) RunAgent(role string, ctx Context) (Result, error) {
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = c.RepoRoot
 	cmd.Stdin = strings.NewReader(prompt)
+	// The prompt carries untrusted text — BuildPrompt wraps log entries and a
+	// diff, and on a repository synced from GitHub the log's first line is the
+	// issue description — so this process does not get golem's own
+	// environment. Same allow-list as the shem worker's exec site; see
+	// internal/agentenv for why it is shared rather than duplicated.
+	cmd.Env = agentenv.Environ()
+	// And as an unprivileged user where one is configured. Filtering the
+	// environment is only meaningful if the agent cannot read the shem's
+	// memory: as root in the same container it reads /proc/1/environ instead.
+	agentenv.DropPrivileges(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		return Result{}, fmt.Errorf("claude --print failed for role %s: %w\n%s", role, err, stderr.String())
+		// BOTH streams. Claude Code reports most of what goes wrong on
+		// stdout — "Not logged in · Please run /login", an unreadable
+		// setting, a refused tool — and this used to report only stderr, so
+		// a failure surfaced as an exit status next to whatever unrelated
+		// noise happened to be on the other stream. In the case that
+		// prompted this, stderr held a single line about a SessionEnd hook
+		// while the reason sat unread in stdout.
+		return Result{}, fmt.Errorf("claude --print failed for role %s: %w%s%s",
+			role, err, labelled("stderr", stderr.String()), labelled("stdout", stdout.String()))
 	}
 	return Result{Output: stdout.String(), Model: c.Model}, nil
+}
+
+// maxCapturedStream bounds how much of a failed agent's output reaches the
+// error. Claude's stdout can be the whole of a long answer; the tail is what
+// carries the failure.
+const maxCapturedStream = 2000
+
+// labelled renders a captured stream for an error message, tail-first when it
+// is long, and renders nothing at all when the stream is empty so an error
+// does not carry a heading with nothing under it.
+func labelled(name, out string) string {
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return ""
+	}
+	if len(out) > maxCapturedStream {
+		out = "…(truncated; last " + strconv.Itoa(maxCapturedStream) + " bytes)…\n" +
+			out[len(out)-maxCapturedStream:]
+	}
+	return "\n--- " + name + " ---\n" + out
 }

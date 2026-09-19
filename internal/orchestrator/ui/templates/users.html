@@ -16,7 +16,7 @@
       <span class="text-sm text-base-content/60">{{len .Users}} user{{if ne (len .Users) 1}}s{{end}}</span>
       <button type="button"
               class="btn btn-sm btn-primary gap-1.5"
-              onclick="toggleAddUserRow()"
+              data-toggle-add-user
               aria-controls="add-user-row"
               aria-expanded="{{if .Error}}true{{else}}false{{end}}">
         <span class="iconify" data-icon="heroicons:user-plus"></span>
@@ -27,6 +27,7 @@
     <form id="add-user-row"
           method="POST" action="/users"
           class="flex flex-wrap items-end gap-2 px-4 py-3 border-b border-base-300 bg-base-200 {{if not .Error}}hidden{{end}}">
+      <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
       <div class="form-control flex-1 min-w-[10rem]">
         <label class="label py-1"><span class="label-text text-xs">Username</span></label>
         <input id="add-user-username" name="username" type="text" required
@@ -45,7 +46,7 @@
       </div>
       <div class="flex gap-2">
         <button type="submit" class="btn btn-sm btn-primary">Create</button>
-        <button type="button" class="btn btn-sm btn-ghost" onclick="toggleAddUserRow()">Cancel</button>
+        <button type="button" class="btn btn-sm btn-ghost" data-toggle-add-user>Cancel</button>
       </div>
     </form>
 
@@ -67,6 +68,7 @@
             </td>
             <td>
               <form method="POST" action="/users/{{.ID}}/role" class="flex gap-2 items-center">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
                 {{$cur := .Role}}
                 <select name="role" class="select select-sm select-bordered">
                   {{range $.Roles}}<option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>{{end}}
@@ -77,6 +79,7 @@
             <td class="text-right">
               {{if ne .ID $.CurrentUserID}}
               <form method="POST" action="/users/{{.ID}}/delete">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
                 <button class="btn btn-sm btn-error btn-outline gap-1.5">
                   <span class="iconify" data-icon="heroicons:trash"></span>
                   Delete
@@ -97,6 +100,12 @@
 </div>
 
 <script>
+  // Bound here rather than with a native inline event attribute: the
+  // Content-Security-Policy authorizes inline scripts by hash and grants no
+  // 'unsafe-inline', so such an attribute is silently dead in the browser.
+  // csp_test.go's TestNoNativeInlineEventHandlers catches that before a user
+  // does — and its scanner is textual, so naming the attribute here in full
+  // would trip it on this very comment.
   function toggleAddUserRow() {
     var row = document.getElementById('add-user-row');
     var btn = document.querySelector('[aria-controls="add-user-row"]');
@@ -108,5 +117,8 @@
       if (u) u.focus();
     }
   }
+  document.querySelectorAll('[data-toggle-add-user]').forEach(function (el) {
+    el.addEventListener('click', toggleAddUserRow);
+  });
 </script>
 {{end}}

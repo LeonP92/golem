@@ -28,10 +28,14 @@ type Session struct {
 
 // Shem represents a registered Shem worker.
 type Shem struct {
-	ID            uint       `gorm:"primaryKey"`
-	Name          string     `gorm:"uniqueIndex;not null"`
-	APIKeyHash    string     `gorm:"not null"`
-	Repos         string     `gorm:"not null"` // JSON: []string of normalized URLs
+	ID   uint   `gorm:"primaryKey"`
+	Name string `gorm:"uniqueIndex;not null"`
+	// json:"-" — GET /api/shems serializes this struct straight to the
+	// dashboard, and there is no reason to ship credential material to a
+	// browser. It is a bcrypt hash of 32 random bytes, so exposure was not
+	// exploitable, but it is still the secret's only stored form.
+	APIKeyHash    string `gorm:"not null" json:"-"`
+	Repos         string `gorm:"not null"` // JSON: []string of normalized URLs
 	LastHeartbeat *time.Time
 	Status        string  `gorm:"not null;default:'offline'"` // online | offline
 	CurrentTicket *string // UUID of the ticket currently being worked on
@@ -39,19 +43,84 @@ type Shem struct {
 
 // Ticket represents a work ticket assigned to a Shem.
 type Ticket struct {
-	ID              string    `gorm:"primaryKey" json:"id"`
-	RepoRemote      string    `gorm:"not null;index" json:"repo_remote"`
-	Title           string    `gorm:"not null;default:''" json:"title"`
-	BaseBranch      string    `gorm:"not null;default:'main'" json:"base_branch"`
-	Branch          string    `gorm:"not null" json:"branch"`
-	Description     string    `gorm:"not null" json:"description"`
-	Phase           string    `gorm:"not null;default:'unassigned'" json:"phase"`
-	AssignedShem    *uint     `gorm:"index" json:"assigned_shem"`
-	CreatedByUserID *uint     `gorm:"index" json:"created_by_user_id"`
-	CheckpointPhase *string   `json:"checkpoint_phase"`
-	CheckpointSHA   *string   `json:"checkpoint_sha"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string  `gorm:"primaryKey" json:"id"`
+	RepoRemote      string  `gorm:"not null;index;uniqueIndex:idx_repo_issue" json:"repo_remote"`
+	Title           string  `gorm:"not null;default:''" json:"title"`
+	BaseBranch      string  `gorm:"not null;default:'main'" json:"base_branch"`
+	Branch          string  `gorm:"not null" json:"branch"`
+	Description     string  `gorm:"not null" json:"description"`
+	Phase           string  `gorm:"not null;default:'unassigned'" json:"phase"`
+	AssignedShem    *uint   `gorm:"index" json:"assigned_shem"`
+	CreatedByUserID *uint   `gorm:"index" json:"created_by_user_id"`
+	CheckpointPhase *string `json:"checkpoint_phase"`
+	CheckpointSHA   *string `json:"checkpoint_sha"`
+	IssueNumber     *int    `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
+	IssueURL        string  `json:"issue_url"`
+	// IntakeApproved records that a human released this externally-sourced
+	// ticket from pending-approval via actionStart — the ONLY writer of this
+	// column. It is provenance, not phase: no sequence of phase transitions
+	// (close, needs-attention, requeue, ...) can flip it, so claimability
+	// (spec Amendment 1) is enforced at the claim predicate regardless of
+	// how many phase writers exist now or get added later. Tickets created
+	// through the web form (nil IssueNumber) are unaffected by construction
+	// — see the claim/available predicates in api/tickets.go.
+	IntakeApproved bool `gorm:"not null;default:false" json:"intake_approved"`
+	// ApprovedBodyHash is the hex-encoded SHA-256 hash of Description at the
+	// moment actionStart set IntakeApproved, binding the approval to the
+	// exact text a human reviewed (spec Amendment 1 fix round 4). Without
+	// this, "approved" meant only "a human pressed Approve on this ticket
+	// at some point", not "on this text" — ghsync overwrites Description
+	// from the live issue on every poll, so an edit after approval would
+	// otherwise reach a shem under an approval that was never given for
+	// that text. ghsync.applyIssue re-gates (clears both fields, moves the
+	// ticket back to pending-approval) when this no longer matches an
+	// unclaimed ticket's incoming issue text.
+	ApprovedBodyHash string `gorm:"not null;default:''" json:"approved_body_hash"`
+	// BodyHash is the hex-encoded SHA-256 hash of the CURRENT Description,
+	// written everywhere Description is written (createTicketFromIssue and
+	// ghsync.applyIssue) — fix round 5. The name is historical: Description
+	// is the issue's title AND body composed together
+	// (github.Issue.TicketDescription), and this hashes all of it, because
+	// every byte of it reaches an agent prompt. See ghsync.HashDescription.
+	// The claim-adjacent predicates in
+	// api/tickets.go (ClaimTicket, availableTickets, resumableTickets)
+	// require ApprovedBodyHash to be non-empty AND equal to BodyHash, not
+	// merely IntakeApproved (the non-empty half is re-review finding F1: a
+	// pre-body_hash database migrates to two empty strings, which compare
+	// equal and would otherwise read as an approval): a
+	// ticket that is claimed while approved deliberately keeps
+	// IntakeApproved=true and its now-stale ApprovedBodyHash if the issue is
+	// edited afterward (the running shem is not yanked), but BodyHash keeps
+	// moving to match the live issue. That mismatch is what makes the
+	// ticket unclaimable again the moment it returns to the pool by ANY
+	// path — requeue, the heartbeat reaper, or one none of these fix rounds
+	// anticipated — without needing to guard each such path individually.
+	BodyHash string `gorm:"not null;default:''" json:"body_hash"`
+	// LabelPhase and LabelSeq record the last golem:<phase> label write
+	// Golem queued for this ticket, and are the only writers of the
+	// transition ordinal in ghsync.LabelKey (finding I4). LabelSeq advances
+	// by one whenever a phase transition queues a label for a phase other
+	// than LabelPhase; re-sending the SAME transition leaves both unchanged,
+	// so it recomputes the same idempotency key and is de-duplicated exactly
+	// as before. Without the ordinal the key was per (ticket, phase), which
+	// silently suppressed the second lap of a cycle such as
+	// implement -> ready-for-review -> implement and left the public issue
+	// advertising a phase the ticket had already left. Both are written only
+	// by enqueueGitHubPhase, inside the same transaction as the phase change
+	// and the outbox insert they describe.
+	LabelPhase string `gorm:"not null;default:''" json:"label_phase"`
+	LabelSeq   uint   `gorm:"not null;default:0" json:"label_seq"`
+	// PRBody is the pull request description the shem generated from the
+	// branch's own diff, sent with the branch-pushed report. Empty when
+	// generation failed or was not attempted, in which case
+	// enqueuePRIfReady falls back to the minimal body — a missing
+	// description is an inconvenience, a missing pull request is lost work.
+	PRBody       string    `gorm:"not null;default:''" json:"-"`
+	PRNumber     *int      `json:"pr_number"`
+	PRURL        string    `json:"pr_url"`
+	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {
@@ -117,4 +186,83 @@ type HumanInput struct {
 	Response   *string    `json:"response"`
 	CreatedAt  time.Time  `json:"created_at"`
 	ResolvedAt *time.Time `json:"resolved_at"`
+}
+
+// GitHubRepo holds per-repository issue-sync settings, managed from the
+// dashboard. One row per repository Golem may sync.
+type GitHubRepo struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	RepoRemote     string     `gorm:"uniqueIndex;not null" json:"repo_remote"` // normalized via urlnorm
+	Owner          string     `gorm:"not null" json:"owner"`
+	Name           string     `gorm:"not null" json:"name"`
+	Enabled        bool       `gorm:"not null;default:false" json:"enabled"`
+	Label          string     `gorm:"not null;default:'golem'" json:"label"`
+	LastIssueSync  *time.Time `json:"last_issue_sync"` // `since` cursor
+	LastPolledAt   *time.Time `json:"last_polled_at"`
+	LastManualSync *time.Time `json:"last_manual_sync"`
+	ETag           string     `gorm:"column:etag" json:"-"`
+	LastError      string     `json:"last_error"`
+
+	// Graph-build state, recorded rather than a live stream: a build over a
+	// large repository takes minutes, and there is no ticket to stream into.
+	//
+	// No state column. "Building" is started-and-not-finished, "built" is
+	// finished with no error, "failed" is finished with one — all derived, so
+	// there is no enum that can disagree with the timestamps beside it.
+	GraphBuildStartedAt  *time.Time `json:"graph_build_started_at"`
+	GraphBuildFinishedAt *time.Time `json:"graph_build_finished_at"`
+	GraphBuildError      string     `json:"graph_build_error"`
+}
+
+// GraphBuildStale reports whether a build has been running longer than is
+// plausible, which in practice means the shem died holding it.
+//
+// Without this a crashed build leaves the row reading "building…" forever and
+// the button disabled forever — the same shape as an outbox row that parks
+// with nothing able to un-park it. The UI offers the button again past this
+// point rather than requiring someone to edit the database.
+func (r GitHubRepo) GraphBuildStale(now time.Time) bool {
+	if r.GraphBuildStartedAt == nil {
+		return false
+	}
+	if r.GraphBuildFinishedAt != nil && r.GraphBuildFinishedAt.After(*r.GraphBuildStartedAt) {
+		return false
+	}
+	return now.Sub(*r.GraphBuildStartedAt) > GraphBuildTimeout
+}
+
+// GraphBuildRunning reports whether a build is in flight and not yet stale.
+func (r GitHubRepo) GraphBuildRunning(now time.Time) bool {
+	if r.GraphBuildStartedAt == nil {
+		return false
+	}
+	if r.GraphBuildFinishedAt != nil && r.GraphBuildFinishedAt.After(*r.GraphBuildStartedAt) {
+		return false
+	}
+	return !r.GraphBuildStale(now)
+}
+
+// GraphBuildTimeout bounds how long a build is believed to still be running.
+// Generous: a first build over a thousand modules involves an agent call per
+// batch, and calling a slow build dead is worse than waiting.
+const GraphBuildTimeout = 45 * time.Minute
+
+// GitHubOutbox is a pending write to GitHub. Rows are inserted in the same
+// transaction as the ticket change that caused them, and drained by the
+// ghsync worker.
+//
+// IdempotencyKey is a deterministic string derived from the event (for
+// example "<ticketID>:comment:plan-approved"). The unique index on it is what
+// makes re-enqueuing after a crash safe: the duplicate insert fails and the
+// caller treats that specific failure as success.
+type GitHubOutbox struct {
+	ID             uint       `gorm:"primaryKey" json:"id"`
+	TicketID       string     `gorm:"not null;index" json:"ticket_id"`
+	Kind           string     `gorm:"not null" json:"kind"` // comment | label | pr | close_issue
+	Payload        string     `gorm:"not null" json:"payload"`
+	IdempotencyKey string     `gorm:"uniqueIndex;not null" json:"idempotency_key"`
+	Attempts       int        `gorm:"not null;default:0" json:"attempts"`
+	NextAttempt    time.Time  `gorm:"index" json:"next_attempt"`
+	LastError      string     `json:"last_error"`
+	DoneAt         *time.Time `json:"done_at"`
 }

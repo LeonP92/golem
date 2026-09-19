@@ -1,0 +1,260 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">GitHub Issues</h1>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error mb-4" role="alert">
+  <span class="iconify" data-icon="heroicons:x-circle"></span>
+  <span>{{.Error}}</span>
+</div>
+{{end}}
+
+<p class="text-sm text-base-content/60 mb-4">
+  Issues carrying the trigger label become tickets. Each one arrives in
+  <strong>pending approval</strong> and no shem can claim it until a human
+  opens it, reads the description, and approves it. Golem polls on the
+  interval set by <code>github.poll_interval</code> (15 minutes by default);
+  use <strong>Sync now</strong> to pull immediately. Polling runs only when
+  <code>GOLEM_GITHUB_TOKEN</code> was set when the orchestrator started.
+</p>
+
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Repository</th>
+            <th>Enabled</th>
+            <th>Label</th>
+            <th>Last polled</th>
+            <th>Status</th>
+            <th>Code graph</th>
+            <th class="w-8"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Repos}}
+          <tr>
+            <td class="font-mono text-sm">{{.Owner}}/{{.Name}}</td>
+            <td>
+              <form method="post" action="/settings/github">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
+                <input type="checkbox" name="enabled" class="checkbox checkbox-sm"
+                       {{if .Enabled}}checked{{end}} data-autosubmit>
+              </form>
+            </td>
+            <td>
+              <form method="post" action="/settings/github" class="flex items-center gap-1">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
+                <input type="text" name="label" value="{{.Label}}" size="10"
+                       class="input input-bordered input-xs">
+                <button type="submit" class="btn btn-xs">Save</button>
+              </form>
+            </td>
+            <td class="text-sm text-base-content/60 whitespace-nowrap">
+              {{if .LastPolledAt}}{{.LastPolledAt.Format "2006-01-02 15:04"}}{{else}}never{{end}}
+            </td>
+            <td class="text-sm">
+              {{if .LastError}}<span class="text-error" title="{{.LastError}}">{{truncate 40 .LastError}}</span>{{else}}<span class="text-success">ok</span>{{end}}
+            </td>
+            {{/* Recorded state rather than live output: a build over a large
+                 repository takes minutes and there is no ticket to stream
+                 into. "Building" is started-and-unfinished, and goes stale
+                 after GraphBuildTimeout so a shem that died holding one does
+                 not disable the button forever. */}}
+            <td class="text-sm">
+              {{if not .ID}}
+                <span class="text-base-content/40">—</span>
+              {{else if .GraphBuildRunning now}}
+                <span class="inline-flex items-center gap-1 text-info">
+                  <span class="iconify animate-pulse" data-icon="heroicons:arrow-path"></span>
+                  building… (started {{.GraphBuildStartedAt.Format "15:04"}})
+                </span>
+              {{else}}
+                <div class="flex flex-col items-start gap-1">
+                  {{if .GraphBuildStale now}}
+                    <span class="text-warning" title="No result was reported within the timeout; the shem running it probably went away.">
+                      stalled since {{.GraphBuildStartedAt.Format "15:04"}}
+                    </span>
+                  {{else if .GraphBuildError}}
+                    <span class="text-error" title="{{.GraphBuildError}}">
+                      failed {{if .GraphBuildFinishedAt}}{{.GraphBuildFinishedAt.Format "15:04"}}{{end}} —
+                      {{truncate 60 (firstLine .GraphBuildError)}}
+                    </span>
+                  {{else if .GraphBuildFinishedAt}}
+                    <span class="text-success">built {{.GraphBuildFinishedAt.Format "2006-01-02 15:04"}}</span>
+                  {{else}}
+                    <span class="text-base-content/40">never built</span>
+                  {{end}}
+                  <form method="post" action="/settings/github/graph-build">
+                    <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                    <input type="hidden" name="repo_remote" value="{{.RepoRemote}}">
+                    <button type="submit" class="btn btn-xs">Build graph</button>
+                  </form>
+                </div>
+              {{end}}
+            </td>
+            <td class="text-right">
+              {{if .ID}}
+              <div class="flex items-center justify-end gap-2">
+                {{/* Every Sync now refusal is written here rather than into the button caption. The server answers each one as JSON with an "error" that says what to do next (enable the repo, reload, set the token and restart); a caption has no room for that, and squeezing all of them into one "Failed — retry?" is what made the 503 and the expired-session cases unactionable. */}}
+                <span class="sync-status text-xs text-error text-left whitespace-normal" role="status" aria-live="polite"></span>
+                <button type="button" data-repo-id="{{.ID}}" class="btn btn-xs sync-now">Sync now</button>
+              </div>
+              {{else}}
+              <span class="text-xs text-base-content/40" title="Enable this repo above to register it before it can be synced">unregistered</span>
+              {{end}}
+            </td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="6" class="text-center py-12 text-base-content/50">
+              <div class="flex flex-col items-center gap-2">
+                <span class="iconify text-4xl" data-icon="heroicons:code-bracket-square"></span>
+                <p>No repositories registered.</p>
+                <p class="text-sm">Repos appear here once a shem registers with them.</p>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+{{if .Parked}}
+<div class="card bg-base-100 shadow-sm mt-6">
+  <div class="card-body">
+    <h2 class="card-title text-base">
+      <span class="iconify text-error" data-icon="heroicons:exclamation-triangle"></span>
+      Stuck GitHub writes
+    </h2>
+    <p class="text-sm text-base-content/60">
+      These writes failed often enough that Golem stopped retrying them, so they
+      never reached GitHub. Until every one is retried or the underlying problem
+      is fixed, each poll of the affected repository also pays a full
+      reconciliation pass.
+    </p>
+    <div class="overflow-x-auto">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>Ticket</th>
+            <th>Write</th>
+            <th>Attempts</th>
+            <th>Last error</th>
+            <th class="w-8"></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Parked}}
+          <tr>
+            <td><a class="link" href="/tickets/{{.TicketID}}">{{if .TicketTitle}}{{.TicketTitle}}{{else}}{{.TicketID}}{{end}}</a></td>
+            <td class="font-mono text-xs">{{.Kind}}</td>
+            <td>{{.Attempts}}</td>
+            <td class="text-sm text-error" title="{{.LastError}}">{{truncate 60 .LastError}}</td>
+            <td class="text-right">
+              <form method="post" action="/settings/github/outbox/{{.ID}}/retry">
+                <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+                <button type="submit" class="btn btn-xs">Retry</button>
+              </form>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}
+
+<script>
+document.querySelectorAll('[data-autosubmit]').forEach(function (el) {
+  el.addEventListener('change', function () { el.form.submit(); });
+});
+
+document.querySelectorAll('.sync-now').forEach(function (btn) {
+  var cell = btn.closest('td');
+  var status = cell ? cell.querySelector('.sync-status') : null;
+
+  // textContent, never innerHTML: the strings below include text the server
+  // chose, and this element must never become a second markdown sink.
+  function show(msg) { if (status) { status.textContent = msg; } }
+
+  btn.addEventListener('click', function () {
+    var id = btn.dataset.repoId;
+    var original = btn.textContent;
+    btn.disabled = true;
+    btn.textContent = 'Syncing…';
+    show('');
+
+    function fail(msg) {
+      btn.textContent = original;
+      btn.disabled = false;
+      show(msg);
+    }
+
+    // The manual-sync endpoint is session-authenticated and state-changing,
+    // so it carries the same CSRF token every other such POST does. Read it
+    // from the first <meta> in document order — the server-rendered one.
+    var csrfEl = document.querySelector('meta[name="csrf-token"]');
+    fetch('/api/github/repos/' + id + '/sync', {
+      method: 'POST',
+      headers: { 'X-CSRF-Token': csrfEl ? csrfEl.getAttribute('content') : '' }
+    })
+      .then(function (r) {
+        // auth.RequireSession redirects an expired/missing session to
+        // /login (fetch follows that transparently), so a "successful"
+        // response here can still be an HTML login page rather than JSON.
+        // Guard on content-type before ever calling r.json().
+        var contentType = r.headers.get('content-type') || '';
+        if (contentType.indexOf('application/json') === -1) {
+          // The endpoint itself answers JSON for every status it produces,
+          // and never answers 200 at all, so a non-JSON body here is the
+          // login page the redirect landed on. Naming that is the whole
+          // point: retrying can never succeed, and logging in again is the
+          // only thing that helps. The repo-wide 302-instead-of-401
+          // convention is deliberately left alone — this only reads it.
+          if (r.status === 200 || r.redirected) {
+            return { failure: 'Session expired — reload the page and sign in again.' };
+          }
+          return { failure: 'Unexpected reply from the server (status ' + r.status + ').' };
+        }
+        return r.json().then(function (body) { return { status: r.status, body: body }; });
+      })
+      .then(function (res) {
+        if (res.failure) {
+          fail(res.failure);
+          return;
+        }
+        if (res.status === 429) {
+          var secs = res.body.retry_after_secs || 60;
+          btn.textContent = 'Wait ' + secs + 's';
+          setTimeout(function () {
+            btn.textContent = original;
+            btn.disabled = false;
+          }, secs * 1000);
+          return;
+        }
+        if (res.status !== 202) {
+          fail(res.body.error || ('Unexpected status ' + res.status + '.'));
+          return;
+        }
+        btn.textContent = res.body.queued ? 'Queued' : 'Already queued';
+        setTimeout(function () {
+          btn.textContent = original;
+          btn.disabled = false;
+        }, 60000);
+      })
+      .catch(function () {
+        fail('Could not reach the orchestrator — check the connection and try again.');
+      });
+  });
+});
+</script>
+{{end}}

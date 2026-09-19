@@ -6,15 +6,48 @@ name: shem-local
 # no_push: true routes git push to the local repo instead of a remote.
 # Ideal for local testing — the ticket branch is visible via git log --all
 # in the mounted repo volume without any network call.
-no_push: true
-max_concurrent: 3
+#
+# It stays true in the shipped stack deliberately, even though the GitHub
+# integration's draft pull request needs a real push. Two reasons, both about
+# this file's own defaults rather than about the feature:
+#
+#   1. The first repo below is local://test, which has no remote at all. A
+#      push there can never succeed.
+#   2. The second is mounted from GOLEM_REPO_PATH, which DEFAULTS TO THE
+#      CURRENT DIRECTORY. Shipping no_push: false would mean the very first
+#      ticket anyone runs from the quick start pushes a branch to whatever
+#      remote their working copy happens to point at.
+#
+# To get the pull-request half of the GitHub integration, set no_push: false
+# and make sure the shem can authenticate: set GOLEM_SHEM_GITHUB_TOKEN in .env
+# (the entrypoint installs it as an HTTPS credential helper for github.com),
+# or give the container your own SSH key. Without one of those the push fails
+# and the pull request is never opened — the ticket still reaches
+# ready-for-review, so the failure shows up as a missing PR, not as an error
+# on the ticket.
+#
+# GOLEM_SHEM_GITHUB_TOKEN is a different variable from the orchestrator's
+# GOLEM_GITHUB_TOKEN on purpose, and it is empty by default. This container
+# runs the agent on issue text a stranger can write, so it is handed a
+# repository credential only when someone has decided it needs one. A separate
+# token is better than reusing the orchestrator's.
+#
+# Note that a PRIVATE repository needs GOLEM_SHEM_GITHUB_TOKEN even while
+# no_push stays true: the shem clones the repository itself the first time it
+# works a ticket for it, and a clone needs Contents: Read. Pushing additionally
+# needs Contents: Read and write. Pre-cloning the repository onto the host and
+# mounting it is the way to keep this container credential-free.
+#
+# Turned on, with GOLEM_SHEM_GITHUB_TOKEN set: the shem pushes the ticket
+# branch once the work reaches ready-for-review and reports that to the
+# orchestrator, which queues the pull request. All three of issue_number,
+# branch_pushed and phase=ready-for-review must hold before one is opened
+# (api.enqueuePRIfReady), so nothing is opened for a web-form ticket or for
+# work that never pushed.
+no_push: false
+max_concurrent: 5
 
 repos:
-  # Local test repo — created automatically by the repo-init service.
-  # Use this for testing the full shem workflow without a real remote.
-  - path: /repos/test
-    remote: local://test
-
   # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.
   - path: /repos/golem
     remote: https://github.com/LeonP92/golem

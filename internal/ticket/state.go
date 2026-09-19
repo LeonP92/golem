@@ -9,15 +9,15 @@ import (
 type Phase string
 
 const (
-	PhaseBrainstorm      Phase = "brainstorm"
-	PhasePlan            Phase = "plan"
-	PhaseApprove         Phase = "approve"
-	PhaseImplement       Phase = "implement"
-	PhaseReview          Phase = "review"
-	PhaseReadyForReview  Phase = "ready-for-review"
-	PhaseNeedsAttention  Phase = "needs-attention"
-	PhaseClose           Phase = "close"
-	PhaseClosed          Phase = "closed"
+	PhaseBrainstorm     Phase = "brainstorm"
+	PhasePlan           Phase = "plan"
+	PhaseApprove        Phase = "approve"
+	PhaseImplement      Phase = "implement"
+	PhaseReview         Phase = "review"
+	PhaseReadyForReview Phase = "ready-for-review"
+	PhaseNeedsAttention Phase = "needs-attention"
+	PhaseClose          Phase = "close"
+	PhaseClosed         Phase = "closed"
 )
 
 type State struct {
@@ -28,6 +28,11 @@ type State struct {
 	WorktreePath             string `json:"worktree_path"`
 	Trivial                  bool   `json:"trivial"`
 	CurrentStepExpectedLines int    `json:"current_step_expected_lines"`
+	// IssueNumber and IssueURL link this ticket to a GitHub issue (set by
+	// `golem ticket new --from-issue` and refreshed by `golem issue sync`).
+	// Zero/empty means the ticket has no linked issue.
+	IssueNumber int    `json:"issue_number,omitempty"`
+	IssueURL    string `json:"issue_url,omitempty"`
 }
 
 // New skips straight to PhasePlan for trivial tickets (spec: Ticket

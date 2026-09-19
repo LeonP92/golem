@@ -13,16 +13,15 @@ func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	}
 	tmpName := tmp.Name()
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		os.Remove(tmpName)
+		_, _ = tmp.Close(), os.Remove(tmpName) // cleanup on the error path
 		return err
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName) // cleanup on the error path
 		return err
 	}
 	if err := os.Chmod(tmpName, perm); err != nil {
-		os.Remove(tmpName)
+		_ = os.Remove(tmpName) // cleanup on the error path
 		return err
 	}
 	return os.Rename(tmpName, path)

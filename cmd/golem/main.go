@@ -27,13 +27,14 @@ var commandGroups = []struct {
 	{"ticket", []string{"ticket", "tickets"}},
 	{"graph", []string{"graph"}},
 	{"wiki", []string{"wiki"}},
+	{"issue", []string{"issue"}},
 	{"log", []string{"log"}},
 	{"misc", []string{"ask", "answer", "observer", "version"}},
 }
 
 func init() {
 	commandTable["version"] = commandEntry{
-		fn:   func(_ []string, stdout, _ io.Writer) int { fmt.Fprintln(stdout, version); return 0 },
+		fn:   func(_ []string, stdout, _ io.Writer) int { _, _ = fmt.Fprintln(stdout, version); return 0 },
 		desc: "Print the golem version.",
 	}
 	commandTable["init"] = commandEntry{fn: cli.Init, desc: "Initialise .golem in a repo."}
@@ -45,12 +46,13 @@ func init() {
 	commandTable["log"] = commandEntry{fn: logDispatch, desc: "Log commands: emit."}
 	commandTable["observer"] = commandEntry{fn: observerDispatch, desc: "Observer commands: dispatch."}
 	commandTable["graph"] = commandEntry{fn: graphDispatch, desc: "Graph commands: build, update, status, who-imports, check-boundary, deps."}
+	commandTable["issue"] = commandEntry{fn: issueDispatch, desc: "GitHub issue commands: list, sync."}
 }
 
 func helpCommand(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
 		for _, g := range commandGroups {
-			fmt.Fprintf(stdout, "\n  %s\n", strings.ToUpper(g.label))
+			_, _ = fmt.Fprintf(stdout, "\n  %s\n", strings.ToUpper(g.label))
 			for _, name := range g.commands {
 				e, ok := commandTable[name]
 				if !ok {
@@ -59,7 +61,7 @@ func helpCommand(args []string, stdout, stderr io.Writer) int {
 				fmt.Fprintf(stdout, "    %-12s  %s\n", name, e.desc)
 			}
 		}
-		fmt.Fprintln(stdout)
+		_, _ = fmt.Fprintln(stdout)
 		return 0
 	}
 	// help <command>: invoke with --help to trigger FlagSet usage output.
@@ -73,7 +75,7 @@ func helpCommand(args []string, stdout, stderr io.Writer) int {
 
 func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 	if len(args) == 0 {
-		fmt.Fprintln(stderr, "usage: golem ticket <new|resume|close|advance|review|set-step|check-bloat> [flags]")
+		_, _ = fmt.Fprintln(stderr, "usage: golem ticket <new|resume|close|advance|review|pr-description|set-step|check-bloat> [flags]")
 		return 1
 	}
 	switch args[0] {
@@ -89,6 +91,10 @@ func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.TicketAdvance(args[1:], stdout, stderr)
 	case "review":
 		return cli.TicketReview(args[1:], stdout, stderr)
+	case "validate":
+		return cli.TicketValidate(args[1:], stdout, stderr)
+	case "pr-description":
+		return cli.TicketPRDescription(args[1:], stdout, stderr)
 	case "close":
 		return cli.TicketClose(args[1:], stdout, stderr)
 	default:
@@ -135,6 +141,12 @@ func graphDispatch(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	switch args[0] {
+	case "help", "-h", "--help":
+		// Asked for by hand far more often than the bare `golem graph`, and
+		// answering with "unknown graph subcommand" for it is needlessly rude.
+		fmt.Fprintln(stdout, "usage: golem graph <build|update|status|who-imports|check-boundary|deps> [flags]")
+		fmt.Fprintln(stdout, "run any subcommand with --help for its own flags")
+		return 0
 	case "build":
 		return cli.GraphBuild(args[1:], stdout, stderr)
 	case "update":
@@ -149,6 +161,22 @@ func graphDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.GraphDeps(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown graph subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func issueDispatch(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: golem issue <list|sync> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "list":
+		return cli.IssueListCmd(args[1:], stdout, stderr)
+	case "sync":
+		return cli.IssueSyncCmd(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown issue subcommand %q\n", args[0])
 		return 1
 	}
 }

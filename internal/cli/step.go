@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/bloat"
+	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/ticket"
 )
 
@@ -107,7 +107,7 @@ func CheckBloat(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "opening log: %v\n", err)
 		return 1
 	}
-	defer w.Close()
+	defer closeLogWriter(w, stderr)
 	e := blog.NewEntry("system", blog.TypeFinding, fmt.Sprintf(
 		"SCOPE_BLOAT: commit changed %d lines against a %d-line expectation (%.1fx)",
 		actual, s.CurrentStepExpectedLines, ratio))

@@ -1,4 +1,4 @@
-{{define "phase_label"}}{{if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
+{{define "phase_label"}}{{if eq . "pending-approval"}}Pending Approval{{else if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
 {{define "layout"}}<!DOCTYPE html>
 <html lang="en" data-theme="nord" id="html-root">
 <script>
@@ -10,13 +10,54 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  {{/* CSRF token for this session, derived from the HttpOnly session cookie
+       (see auth.CSRFTokenForSession). It is published as a meta element
+       rather than inlined into a script element because server/csp.go hashes
+       inline script bodies at startup and rejects any containing a template
+       action — a per-request value could never have a correct startup-time
+       hash, and csp.go's scanner is textual, so even naming the tag here
+       would register as one. The bottom-of-body script reads this once and
+       attaches it to every htmx request. */}}
+  <meta name="csrf-token" content="{{.CSRFToken}}">
   <title>Golem Orchestrator</title>
-  <link href="https://cdn.jsdelivr.net/npm/daisyui@4/dist/full.min.css" rel="stylesheet" type="text/css" />
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script src="https://unpkg.com/htmx.org@2.0.3"></script>
-  <script src="https://unpkg.com/htmx-ext-sse@2.2.2/sse.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@14/marked.min.js"></script>
-  <script src="https://code.iconify.design/3/3.1.0/iconify.min.js"></script>
+  {{/* Every external subresource below is pinned to an EXACT version and
+       carries a Subresource Integrity hash. This is the whole page's rule, not
+       the sanitizer's: DOMPurify is the control on the markdown sink, but
+       marked produces the HTML it is handed and htmx runs with 'unsafe-eval'
+       granted and drives every state-changing request, so pinning only the
+       sanitizer would leave its own input floating.
+
+       A mismatch makes the browser refuse the file, and every such refusal
+       degrades rather than exposes — renderMarkdown guards on DOMPurify being
+       absent and catches marked throwing, and both land on plain text.
+
+       To upgrade any of them: fetch the exact-version URL and recompute with
+         openssl dgst -sha384 -binary <file> | openssl base64 -A
+       ui/subresources_test.go fails on any tag added here without both. */}}
+  <link href="https://cdn.jsdelivr.net/npm/daisyui@4.12.24/dist/full.min.css"
+        integrity="sha384-2V5uSMIWpBK7suX6yRDZH6ll7ktPJF2O58y0HSz+HiFCBCsmqZpxX1AZB4qAHuYI"
+        crossorigin="anonymous" rel="stylesheet" type="text/css" />
+  {{/* The one exception, and the reason is the CDN's: cdn.tailwindcss.com
+       sends no access-control-allow-origin header, so crossorigin="anonymous"
+       would make the browser block this outright, and an integrity attribute
+       without it is not honoured on a cross-origin script. The version is
+       pinned, which at least removes the floating redirect (the bare host 302s
+       to whatever is current). Recorded in noSRIHosts in
+       ui/subresources_test.go. Serving Tailwind from the binary, or building
+       the CSS ahead of time, is what would close it. */}}
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"
+          integrity="sha384-0895/pl2MU10Hqc6jd4RvrthNlDiE9U1tWmX7WRESftEDRosgxNsQG/Ze9YMRzHq"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@14.1.4/marked.min.js"
+          integrity="sha384-lqPzN0kmFw9t2syAMwVPM4VbAyqsz/lPyYWbb2Xt6nSPM0WPNrpSWCUBgdcAdgnC"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.15/dist/purify.min.js"
+          integrity="sha384-uUMu9JDY09vBzRf9SPcK2VgUj+W/70J6Soc+Dded5P474ElQ63iv9j5N3DE7Kp3N"
+          crossorigin="anonymous"></script>
+  <script src="https://code.iconify.design/3/3.1.0/iconify.min.js"
+          integrity="sha384-GYcZF/Xz4/6ZHVch5eVcYcyWmSCvO3+ffsxF+B9hfRyc3XCkSws7SO5ZSGqHlUNH"
+          crossorigin="anonymous"></script>
   <style>
     .log-feed { font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', monospace; font-size: 0.8rem; line-height: 1.6; }
     .entry-FINDING { color: #b45309; }
@@ -26,6 +67,7 @@
     .entry-HUMAN_FEEDBACK { color: #6b7280; font-style: italic; }
     .entry-INFO { color: #374151; }
     .entry-STATUS { color: #0369a1; font-style: italic; }
+    .phase-pending-approval { background-color: #fef9c3; color: #854d0e; }
     .phase-unassigned { background-color: #e5e7eb; color: #6b7280; }
     .phase-claimed { background-color: #dbeafe; color: #1d4ed8; }
     .phase-brainstorm { background-color: #ede9fe; color: #6d28d9; }
@@ -88,6 +130,11 @@
         Users
       </a>
       {{end}}
+      <a href="/settings/github"
+         class="btn btn-sm gap-1.5 {{if eq .Nav `github`}}btn-active text-white{{else}}btn-ghost text-neutral-content opacity-75 hover:opacity-100{{end}}">
+        <span class="iconify" data-icon="heroicons:cog-6-tooth"></span>
+        GitHub
+      </a>
     </div>
     <div class="flex-none gap-2">
       {{if .CanCreateTicket}}
@@ -108,7 +155,10 @@
         <span class="hidden sm:inline">{{.CurrentUser}} · {{.CurrentRole}}</span>
       </a>
       {{end}}
+      <!-- A form, not a link: logging out is a state change, and as a GET it
+           was reachable from any markdown sink via `![](/logout)`. -->
       <form method="POST" action="/logout" class="inline">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
         <button type="submit" class="btn btn-ghost btn-sm text-neutral-content gap-1.5">
           <span class="iconify" data-icon="heroicons:arrow-right-on-rectangle"></span>
           Logout
@@ -121,35 +171,119 @@
     {{template "page_content" .}}
   </main>
   <script>
+    // Markdown is rendered from text an untrusted third party can write (a
+    // GitHub issue body reaching .Spec.Message / .Plan.Message, or any log
+    // entry), so the sanitizer runs with an explicit deny list rather than
+    // DOMPurify's defaults. The defaults keep <form action>, <button
+    // type=submit> and style=, which together are a one-click, same-origin
+    // intake-gate bypass: a full-viewport opacity:0 submit button over the
+    // page turns the operator's first click anywhere into a POST that
+    // approves an unreviewed ticket. Markdown needs none of these tags or
+    // attributes, so forbidding them costs nothing.
+    //
+    // ALLOW_DATA_ATTR:false is what covers data-hx-*: FORBID_ATTR matches
+    // exact names, not patterns, and DOMPurify permits every data-* attribute
+    // by default. Plain hx-* attributes are already dropped because they are
+    // not on DOMPurify's allow list. Neither is exploitable today — htmx
+    // processes swapped content before renderMarkdown injects into it — but
+    // 'unsafe-eval' is granted, so anything that later calls htmx.process()
+    // over rendered markdown would make them live.
+    var MD_SANITIZE_CONFIG = {
+      FORBID_TAGS: ['form', 'input', 'button', 'select', 'textarea',
+                    'option', 'label', 'fieldset', 'style'],
+      FORBID_ATTR: ['style', 'action', 'formaction', 'form'],
+      ALLOW_DATA_ATTR: false
+    };
+
     function renderMarkdown(root) {
+      // marked does no sanitizing, and el.textContent decodes the server's
+      // html/template escaping, so the sanitizer is the only thing between
+      // untrusted document content and the DOM. If DOMPurify failed to load,
+      // degrade to plain text rather than injecting unsanitized HTML.
+      //
+      // The guard accepts 'function' as well as 'object': DOMPurify's UMD
+      // build — the one the CDN tag above serves — exports a callable
+      // factory, so typeof is "function", and an 'object'-only test silently
+      // sent every element down the textContent path. Sanitizer availability
+      // is decided by whether DOMPurify.sanitize is callable, not by which
+      // typeof bucket the namespace object lands in.
+      var purifier = typeof DOMPurify === 'undefined' ? null : DOMPurify;
+      var safe = purifier !== null &&
+                 (typeof purifier === 'function' || typeof purifier === 'object') &&
+                 typeof purifier.sanitize === 'function';
       (root || document).querySelectorAll('.md-content').forEach(el => {
         if (el.dataset.rendered) return;
-        el.innerHTML = marked.parse(el.textContent);
+        var source = el.textContent;
+        if (safe) {
+          try {
+            el.innerHTML = purifier.sanitize(marked.parse(source), MD_SANITIZE_CONFIG);
+          } catch (e) {
+            // One malformed body must not stop the rest of the page rendering.
+            el.textContent = source;
+          }
+        } else {
+          el.textContent = source;
+        }
         el.dataset.rendered = '1';
       });
     }
     document.addEventListener('DOMContentLoaded', () => renderMarkdown());
     document.addEventListener('htmx:afterSwap', e => renderMarkdown(e.detail.elt));
-    document.addEventListener('htmx:sseMessage', () => {
+    // Dispatched by the ticket page's WebSocket client after it prepends an
+    // entry. The activity log moved off SSE — six ticket tabs each holding an
+    // SSE stream exhausted the browser's six-connection-per-origin limit and
+    // no page on the site would load — so the htmx:sseMessage hook this
+    // replaces no longer fires. Live entries carry markdown and must go
+    // through the same sanitizing render path as server-rendered ones.
+    document.addEventListener('golem:log-entry', () => {
       setTimeout(() => renderMarkdown(document.getElementById('log-feed')), 0);
     });
 
-    // Theme toggle
+    // Attach this session's CSRF token to every htmx-issued request. Read
+    // once, from the first matching meta element in document order — which is
+    // the server-rendered one in the page head — so markup injected further
+    // down the page cannot shadow it. Endpoints the server does not protect
+    // ignore the extra header; the ones it does protect refuse the request
+    // without it.
+    var golemCSRFToken = (function () {
+      var el = document.querySelector('meta[name="csrf-token"]');
+      return el ? el.getAttribute('content') : '';
+    })();
+    document.body.addEventListener('htmx:configRequest', function (e) {
+      if (golemCSRFToken) e.detail.headers['X-CSRF-Token'] = golemCSRFToken;
+    });
+
+    // Theme toggle.
+    //
+    // The button and its icon live in the nav, which the layout renders only
+    // when the page supplies a Nav key — so they are absent on every nav-less
+    // page (the login page, and the ticket detail page, which renders with
+    // an empty Nav). Dereferencing them
+    // unconditionally threw "Cannot read properties of null", and because an
+    // uncaught throw abandons the rest of the script block, it silently took
+    // the collapse-state preservation below with it. That is why collapsed
+    // sections on a ticket page sprang open on every poll.
+    //
+    // html-root is on the <html> element and is always present, so the theme
+    // itself still applies on those pages; only the control is optional.
     (function() {
       var root = document.getElementById('html-root');
       var btn = document.getElementById('theme-toggle');
       var icon = document.getElementById('theme-icon');
+      if (!root) return;
       var dark = root.getAttribute('data-theme') === 'dark';
       function apply(isDark) {
         root.setAttribute('data-theme', isDark ? 'dark' : 'nord');
-        icon.setAttribute('data-icon', isDark ? 'heroicons:sun' : 'heroicons:moon');
-        localStorage.setItem('golem-theme', isDark ? 'dark' : 'nord');
+        if (icon) icon.setAttribute('data-icon', isDark ? 'heroicons:sun' : 'heroicons:moon');
+        try { localStorage.setItem('golem-theme', isDark ? 'dark' : 'nord'); } catch (e) { /* private mode */ }
       }
       apply(dark);
-      btn.addEventListener('click', function() {
-        dark = !dark;
-        apply(dark);
-      });
+      if (btn) {
+        btn.addEventListener('click', function() {
+          dark = !dark;
+          apply(dark);
+        });
+      }
     })();
 
     // Preserve collapse open/closed state across #ticket-live polls.

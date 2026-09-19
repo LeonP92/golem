@@ -2,6 +2,7 @@ package client_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -186,5 +187,35 @@ func TestClient_GetAvailable_Empty(t *testing.T) {
 	}
 	if id != nil {
 		t.Errorf("expected nil, got %q", *id)
+	}
+}
+
+func TestPostBranchPushed(t *testing.T) {
+	var gotPath, gotMethod string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotMethod = r.URL.Path, r.Method
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	if err := c.PostBranchPushed("t1", ""); err != nil {
+		t.Fatalf("PostBranchPushed: %v", err)
+	}
+	if gotMethod != http.MethodPost || gotPath != "/api/tickets/t1/branch-pushed" {
+		t.Errorf("got %s %s, want POST /api/tickets/t1/branch-pushed", gotMethod, gotPath)
+	}
+}
+
+func TestPostBranchPushed_NotOwner(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "conflict", http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	c.RetryInitial = 10 * time.Millisecond
+	if err := c.PostBranchPushed("t1", ""); !errors.Is(err, client.ErrNotOwner) {
+		t.Errorf("expected ErrNotOwner, got %v", err)
 	}
 }

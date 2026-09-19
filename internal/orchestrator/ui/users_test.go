@@ -55,6 +55,15 @@ func do(mux *http.ServeMux, method, path string, cookie *http.Cookie, form strin
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	if cookie != nil {
 		req.AddCookie(cookie)
+		// The user-management POSTs create accounts, change roles and delete
+		// users, so they are behind RequireCSRF like every other
+		// state-changing session route — an injected same-origin form in a
+		// markdown sink would otherwise be a privilege escalation. A browser
+		// sends this from the <meta> the layout publishes; the tests send it
+		// the same way. Safe methods pass through without one.
+		if method != http.MethodGet && method != http.MethodHead {
+			req.Header.Set(auth.CSRFHeader, auth.CSRFTokenForSession(cookie.Value))
+		}
 	}
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)

@@ -1,0 +1,128 @@
+# Runs the checks that were previously only available by typing `make check`
+# locally. Before this existed the repository had a Release workflow and
+# nothing else, so every test in the tree — including the ones written
+# specifically to fail when someone reverts a fix — ran only if a human
+# remembered to run them.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+
+    # The outbox's ON CONFLICT DO NOTHING fix exists because a swallowed
+    # duplicate key aborts the surrounding transaction on PostgreSQL and is
+    # harmless on SQLite. Its regression tests skip unless this DSN is set, so
+    # without a real server they had run exactly once, by hand. Everything else
+    # in the suite uses SQLite and is unaffected by this service.
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: golem
+          POSTGRES_PASSWORD: golem
+          POSTGRES_DB: golemtest
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U golem -d golemtest"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt'd:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      # -race needs cgo, which the ubuntu runner has. The Makefile degrades to
+      # a plain `go test` when it is missing; CI should never take that path,
+      # so it is asserted rather than assumed.
+      - name: Assert the race detector is available
+        run: |
+          test "$(go env CGO_ENABLED)" = "1" || { echo "CGO_ENABLED is not 1; -race would be skipped"; exit 1; }
+          command -v gcc >/dev/null || { echo "gcc missing; -race would be skipped"; exit 1; }
+
+      - name: go test -race
+        env:
+          GOLEM_TEST_POSTGRES_DSN: postgres://golem:golem@127.0.0.1:5432/golemtest?sslmode=disable
+        run: go test ./... -race
+
+      # Fails the build if the PostgreSQL tests silently skipped — a green run
+      # that skipped the only tests the service exists for would be worse than
+      # no service at all, because it would look like coverage.
+      - name: Assert the PostgreSQL tests actually ran
+        env:
+          GOLEM_TEST_POSTGRES_DSN: postgres://golem:golem@127.0.0.1:5432/golemtest?sslmode=disable
+        run: |
+          # Only internal/orchestrator/api holds DSN-gated tests; ghsync's
+          # TestEnqueueUsesOnConflictDoNothing asserts the generated SQL and
+          # runs everywhere, so it needs no service and is covered above.
+          out="$(go test ./internal/orchestrator/api/ -run Postgres -v 2>&1)"
+          echo "$out"
+          if echo "$out" | grep -q "GOLEM_TEST_POSTGRES_DSN not set"; then
+            echo "PostgreSQL tests skipped despite the service being up"
+            exit 1
+          fi
+          count="$(echo "$out" | grep -c -- "--- PASS" || true)"
+          if [ "$count" -lt 2 ]; then
+            echo "expected at least 2 PostgreSQL tests to pass, saw $count"
+            exit 1
+          fi
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Installed directly rather than through golangci-lint-action, because
+      # the action's major version is coupled to golangci-lint's: the v6 action
+      # predates golangci-lint v2 and cannot install it. `go install` has no
+      # such coupling, pins the exact version, and is the identical command the
+      # Makefile runs — so a green CI lint and a green local `make check` are
+      # running the same binary against the same config.
+      #
+      # v2 is required at all because v1.64.8's bundled type-checker predates
+      # Go 1.27's export data and reports phantom "undefined method" errors
+      # instead of real findings.
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+
+      - name: golangci-lint
+        run: golangci-lint run ./...

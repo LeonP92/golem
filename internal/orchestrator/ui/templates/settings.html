@@ -43,6 +43,7 @@
       Signed in as <span class="font-medium">{{.CurrentUser}}</span>.
     </p>
     <form method="POST" action="/settings/security/password" class="flex flex-col gap-4 max-w-md">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <div class="form-control">
         <label class="label">
           <span class="label-text font-medium">Current password</span>

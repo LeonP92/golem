@@ -118,7 +118,7 @@ func TestApproveTicket_TransitionsPhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -155,7 +155,7 @@ func TestApproveTicket_PlanToImplement(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -181,7 +181,7 @@ func TestApproveTicket_WrongPhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -208,7 +208,7 @@ func TestAnswerHumanInput_ResolvesAndLogs(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -250,7 +250,7 @@ func TestAnswerHumanInput_MissingFields(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -272,7 +272,7 @@ func TestRequeueTicket_TransitionsToUnassigned(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -309,7 +309,7 @@ func TestRequeueTicket_WrongPhase(t *testing.T) {
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -333,7 +333,7 @@ func TestRequeueTicket_AnyActivePhase(t *testing.T) {
 			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
 			req.Header.Set("Content-Type", "application/json")
-			req.AddCookie(cookie)
+			withSession(req, cookie)
 			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
@@ -355,7 +355,7 @@ func TestCloseTicket_TransitionsToClosed(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -381,7 +381,7 @@ func TestCloseTicket_WrongPhase(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -401,7 +401,7 @@ func TestNeedsAttentionTicket(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -423,6 +423,7 @@ func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	body, _ := json.Marshal(map[string]string{"kind": "approval", "prompt": "Please review the spec."})
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs", ticket.ID)
@@ -451,10 +452,14 @@ func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 
 // TestRequestApproval_EmptyPrompt verifies 400 when prompt is empty.
 func TestRequestApproval_EmptyPrompt(t *testing.T) {
-	_, mux, apiKey := setupAPIKeyTest(t)
+	h, mux, apiKey := setupAPIKeyTest(t)
+
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
+	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	body, _ := json.Marshal(map[string]string{"kind": "approval", "prompt": ""})
-	req := httptest.NewRequest(http.MethodPost, "/api/tickets/some-uuid-here/human-inputs", bytes.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/tickets/"+ticket.ID+"/human-inputs", bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("X-Shem-Name", "test-shem")
@@ -473,6 +478,7 @@ func TestPendingApproval_ReturnsPending(t *testing.T) {
 
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "Review spec"}
 	h.DB.Create(&hi)
 
@@ -517,7 +523,7 @@ func TestActionRequestChanges_FromReadyForReview_MovesToRevisingAndPushes(t *tes
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -574,7 +580,7 @@ func TestActionRequestChanges_FromReadyForReview_NoAssignedShem_Conflict(t *test
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -605,7 +611,7 @@ func TestActionRequestChanges_AlreadyRevising_FallsThroughTo404(t *testing.T) {
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -637,7 +643,7 @@ func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testin
 	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
 	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -675,6 +681,7 @@ func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
 	h.DB.Create(&ticket)
+	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs?kind=approval&resolved=false", ticket.ID)
 	req := httptest.NewRequest(http.MethodGet, url, http.NoBody)

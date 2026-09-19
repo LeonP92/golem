@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 )
@@ -36,7 +37,7 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		// Fetch in case the branch was pushed; ignore errors (no_push mode has no remote branch).
-		_ = gitRun(ctx, repoPath, "fetch", "origin")
+		_ = fetchBranchForAgent(ctx, repoPath, claim.RepoRemote, worktreeBranch)
 		if err := ensureWorktree(ctx, repoPath, worktreePath, worktreeBranch); err != nil {
 			return fmt.Errorf("RecoverTicket: worktree: %w", err)
 		}
@@ -53,6 +54,37 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 	}
 
 	return nil
+}
+
+// fetchBranchForAgent updates origin/<branch> in the agent's repo without
+// handing it the token: root fetches into the push mirror, then the agent
+// fetches from a bundle of that branch.
+func fetchBranchForAgent(ctx context.Context, repoPath, remote, branch string) error {
+	mirror := pushMirrorPath(repoPath)
+	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
+		return err
+	}
+	ref := "refs/heads/" + branch
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "fetch", "--no-tags", remote, "+"+ref+":"+ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s into push mirror: %w\n%s", branch, err, out)
+	}
+
+	f, err := os.CreateTemp("", "golem-*.bundle")
+	if err != nil {
+		return err
+	}
+	bundle := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(bundle) }()
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "bundle", "create", bundle, ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("git bundle %s: %w\n%s", branch, err, out)
+	}
+	if acct := agentenv.User(); acct != nil {
+		if err := os.Chown(bundle, int(acct.UID), int(acct.GID)); err != nil {
+			return err
+		}
+	}
+	return gitRun(ctx, repoPath, "fetch", bundle, "+"+ref+":refs/remotes/origin/"+branch)
 }
 
 // ensureWorktree adds a git worktree at worktreePath on branch, preferring the
@@ -111,7 +143,9 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// Closed explicitly at the end rather than deferred: this file is being
+	// written, so a close error means the recovered log is incomplete and
+	// the caller must hear about it.
 	enc := json.NewEncoder(f)
 	for _, e := range claim.LogEntries {
 		entry := blogEntryJSON{
@@ -121,23 +155,68 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 			Timestamp: e.CreatedAt,
 		}
 		if err := enc.Encode(entry); err != nil {
+			_ = f.Close() // the encode error is the one worth reporting
 			return err
 		}
 	}
-	return nil
+	return f.Close()
 }
 
-// CloneIfMissing runs `git clone remote repoPath` if repoPath does not exist.
-// CloneIfMissing runs `git clone remote repoPath` if repoPath does not exist.
-// Only http/https/ssh/git URL schemes are permitted to prevent git ext:: injection.
+// CloneIfMissing clones remote into repoPath when there is no git repository
+// there yet. Only http/https/ssh/git URL schemes are permitted, to prevent git
+// ext:: injection.
+//
+// "Missing" means no git repository, not merely no directory. The earlier
+// os.IsNotExist check was wrong in a way that produced a baffling failure: a
+// directory that exists but is not a repository — an empty volume mount, or
+// one where a previous run's `golem init` had already created .golem —
+// silently skipped the clone, and the first git command to follow died with
+//
+//	creating worktree: git worktree add: exit status 128
+//	fatal: not a git repository (or any of the parent directories): .git
+//
+// several steps away from the actual cause.
+//
+// A directory that already contains something other than a git repository is
+// reported rather than cloned into: git clone refuses a non-empty target, and
+// working around that with init-plus-fetch would be operating on a directory
+// whose contents nobody has explained.
 func CloneIfMissing(ctx context.Context, repoPath, remote string) error {
-	if _, err := os.Stat(repoPath); os.IsNotExist(err) {
-		if !isSafeRemote(remote) {
-			return fmt.Errorf("remote URL scheme not allowed: %q", remote)
-		}
-		return gitRun(ctx, "", "clone", remote, repoPath)
+	if isGitRepo(repoPath) {
+		return nil
 	}
-	return nil
+	entries, err := os.ReadDir(repoPath)
+	switch {
+	case os.IsNotExist(err):
+		// Nothing there at all: the ordinary first-clone case.
+	case err != nil:
+		return fmt.Errorf("inspecting %s: %w", repoPath, err)
+	case len(entries) > 0:
+		return fmt.Errorf("%s is not a git repository and is not empty "+
+			"(contains %d entr%s, e.g. %q) — clone %s there yourself, or empty "+
+			"the directory and let golem clone it",
+			repoPath, len(entries), plural(len(entries)), entries[0].Name(), remote)
+	}
+	if !isSafeRemote(remote) {
+		return fmt.Errorf("remote URL scheme not allowed: %q", remote)
+	}
+	return gitRun(ctx, "", "clone", remote, repoPath)
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
+}
+
+// isGitRepo reports whether repoPath is the root of a git repository. Checks
+// for .git rather than running git, so it cannot be confused by a parent
+// directory that happens to be a repository — which is exactly what the old
+// failure message ("or any of the parent directories") was complaining about.
+func isGitRepo(repoPath string) bool {
+	_, err := os.Stat(filepath.Join(repoPath, ".git"))
+	return err == nil
 }
 
 func isSafeRemote(remote string) bool {
@@ -149,12 +228,14 @@ func isSafeRemote(remote string) bool {
 	return false
 }
 
-
 // gitRun runs a git sub-command in dir (empty string means no Dir override).
+// Inside a repo it runs as the agent (asAgent); only the clone, with no dir,
+// runs as root.
 func gitRun(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec
 	if dir != "" {
 		cmd.Dir = dir
+		asAgent(cmd)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {

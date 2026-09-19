@@ -2,16 +2,20 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log"
+	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/ticket"
-	"github.com/leonp92/golem/internal/workspace"
 )
 
 // Executor is the interface for running a ticket.
@@ -28,6 +32,12 @@ type Worker struct {
 	stop     chan struct{}
 	mu       sync.Mutex
 	running  map[string]context.CancelFunc // ticketID → cancel for each active ticket
+
+	// graphBuildMu serialises `golem graph build` runs on this shem. Two of
+	// them over one checkout would fight over the graph index, and the
+	// orchestrator's claim cannot prevent that on its own across a shem
+	// restart.
+	graphBuildMu sync.Mutex
 }
 
 // New creates a new Worker. exec may be nil for testing (skips actual execution).
@@ -122,10 +132,22 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 	w.running[claim.TicketID] = cancel
 	w.mu.Unlock()
 
-	log.Printf("worker: resuming ticket %s from checkpoint %q", claim.TicketID, *claim.CheckpointPhase)
-
-	if err := w.client.PostPhase(claim.TicketID, *claim.CheckpointPhase); err != nil {
-		log.Printf("worker: resume: failed to reset phase for ticket %s: %v", claim.TicketID, err)
+	// CheckpointPhase is nil when the shem died during the first phase, before
+	// any checkpoint was written. Those tickets are resumable too — without
+	// that they were unreachable: owned by a shem that would not resume them,
+	// and in a phase that made them unclaimable by anyone else. Dereferencing
+	// it unconditionally, as this did, would panic the shem on startup for
+	// exactly the tickets the widened predicate now returns.
+	//
+	// There is no phase to reset to in that case: RunTicket's nil-checkpoint
+	// branch starts at brainstorm and posts that phase itself.
+	if claim.CheckpointPhase == nil {
+		log.Printf("worker: resuming ticket %s from the start (no checkpoint)", claim.TicketID)
+	} else {
+		log.Printf("worker: resuming ticket %s from checkpoint %q", claim.TicketID, *claim.CheckpointPhase)
+		if err := w.client.PostPhase(claim.TicketID, *claim.CheckpointPhase); err != nil {
+			log.Printf("worker: resume: failed to reset phase for ticket %s: %v", claim.TicketID, err)
+		}
 	}
 
 	defer func() {
@@ -140,11 +162,36 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 			if ctx.Err() != nil {
 				return
 			}
-			log.Printf("worker: ticket %s resume error: %v", claim.TicketID, err)
-			if phaseErr := w.client.PostPhase(claim.TicketID, "needs-attention"); phaseErr != nil {
-				log.Printf("worker: post phase error: %v", phaseErr)
-			}
+			w.failTicket(claim.TicketID, fmt.Errorf("resuming the ticket: %w", err))
 		}
+	}
+}
+
+// failTicket records why a ticket stopped and then parks it in
+// needs-attention.
+//
+// The phase change used to be the only trace: the error went to the shem's
+// stdout via log.Printf and nowhere else, so the dashboard showed a red
+// "Needs Attention" badge above an activity log whose last line was whatever
+// step had been announced before the failure — "Initializing repository…",
+// say. The reason existed, but only for someone with shell access to the
+// shem host, and the one place a human is actually looking said nothing.
+//
+// BLOCKER rather than STATUS: this is the entry type the UI renders as a
+// problem, and it is what the phase badge is claiming.
+func (w *Worker) failTicket(ticketID string, cause error) {
+	log.Printf("worker: ticket %s error: %v", ticketID, cause)
+	if _, logErr := w.client.PostLog(ticketID, client.LogPayload{
+		EntryType: "BLOCKER",
+		FromRole:  "shem",
+		Message:   cause.Error(),
+	}); logErr != nil {
+		// Best effort, and reported: if this fails the operator is back to
+		// an unexplained badge, so the shem log should say why.
+		log.Printf("worker: ticket %s: could not record the failure on the ticket: %v", ticketID, logErr)
+	}
+	if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
+		log.Printf("worker: post phase error: %v", phaseErr)
 	}
 }
 
@@ -154,6 +201,15 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 	case "ticket_available":
 		if msg.TicketID != nil {
 			go w.tryClaimAndRun(*msg.TicketID)
+		}
+	case "graph_build":
+		// Serialised per repository by graphBuildMu: the orchestrator claims
+		// the slot before broadcasting, so a second request for the same repo
+		// is refused there — but a shem restart could overlap with a
+		// still-running build, and two `golem graph build` runs over one
+		// checkout would fight over the index.
+		if msg.Repo != "" {
+			go w.runGraphBuild(msg.Repo)
 		}
 	case "ticket_requeued":
 		if msg.TicketID != nil {
@@ -194,11 +250,16 @@ func (w *Worker) cleanupTicket(repoRemote, ticketID string) {
 	if s, err := ticket.Load(ticketDir); err == nil && s.Branch != "" {
 		branch = s.Branch
 	}
-	if err := workspace.Remove(repoPath, worktreePath, branch); err != nil {
-		log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
-	} else {
-		log.Printf("worker: ticket %s cleaned up (worktree and branch removed)", ticketID)
+	// Not workspace.Remove: that runs git as root, and this repo is the agent's.
+	ctx := context.Background()
+	if _, err := os.Stat(worktreePath); err == nil {
+		if err := gitRun(ctx, repoPath, "worktree", "remove", worktreePath, "--force"); err != nil {
+			log.Printf("worker: cleanup ticket %s: %v", ticketID, err)
+			return
+		}
 	}
+	_ = gitRun(ctx, repoPath, "branch", "-D", branch) // already gone is fine
+	log.Printf("worker: ticket %s cleaned up (worktree and branch removed)", ticketID)
 }
 
 // tryClaimAndRun attempts to claim the ticket and run it.
@@ -250,10 +311,7 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 				log.Printf("worker: ticket %s stopped (context cancelled)", ticketID)
 				return
 			}
-			log.Printf("worker: ticket %s error: %v", ticketID, err)
-			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
-				log.Printf("worker: post phase error: %v", phaseErr)
-			}
+			w.failTicket(ticketID, err)
 		} else {
 			log.Printf("worker: ticket %s finished", ticketID)
 		}
@@ -308,10 +366,7 @@ func (w *Worker) tryReviseAndRun(ticketID string) {
 				log.Printf("worker: ticket %s stopped (context cancelled)", ticketID)
 				return
 			}
-			log.Printf("worker: ticket %s revise error: %v", ticketID, err)
-			if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
-				log.Printf("worker: post phase error: %v", phaseErr)
-			}
+			w.failTicket(ticketID, fmt.Errorf("revising the ticket: %w", err))
 		} else {
 			log.Printf("worker: ticket %s revision finished", ticketID)
 		}
@@ -371,5 +426,52 @@ func (w *Worker) Shutdown() {
 
 	if err := w.client.Deregister(); err != nil {
 		log.Printf("worker: deregister error: %v", err)
+	}
+}
+
+// runGraphBuild runs `golem graph build` for one repository and reports the
+// outcome, which is what the repos view displays.
+//
+// The error text is the agent's own — agentrunner reports both of Claude's
+// streams now — so a failure an operator can act on ("Failed to
+// authenticate", a missing permission) reaches the page rather than an exit
+// status.
+func (w *Worker) runGraphBuild(remote string) {
+	repoPath := repoLocalPath(w.cfg, remote)
+	if repoPath == "" {
+		w.reportGraphBuild(remote, fmt.Sprintf("this shem has no local path configured for %s", remote))
+		return
+	}
+
+	w.graphBuildMu.Lock()
+	defer w.graphBuildMu.Unlock()
+
+	if err := agentenv.EnsureOwnership(repoPath); err != nil {
+		log.Printf("worker: %v", err)
+	}
+	log.Printf("worker: building the code graph for %s in %s", remote, repoPath)
+	out, err := asAgent(exec.Command("golem", "graph", "build", "--repo", repoPath)).CombinedOutput() //nolint:gosec
+	if err != nil {
+		// CombinedOutput rather than the error alone: `golem graph build`
+		// prints why it failed and exits 1, so the exit status on its own
+		// would tell an operator nothing.
+		msg := strings.TrimSpace(string(out))
+		if msg == "" {
+			msg = err.Error()
+		}
+		log.Printf("worker: graph build for %s failed: %v\n%s", remote, err, msg)
+		w.reportGraphBuild(remote, msg)
+		return
+	}
+	log.Printf("worker: graph build for %s finished", remote)
+	w.reportGraphBuild(remote, "")
+}
+
+// reportGraphBuild posts the outcome, and says so locally if it cannot. A
+// dropped report leaves the row reading "building…" until it goes stale,
+// which is recoverable but confusing, so it is worth a line in the log.
+func (w *Worker) reportGraphBuild(remote, buildErr string) {
+	if err := w.client.PostGraphBuildResult(remote, buildErr); err != nil {
+		log.Printf("worker: could not report the graph build result for %s: %v", remote, err)
 	}
 }

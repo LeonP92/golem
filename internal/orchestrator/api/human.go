@@ -2,6 +2,8 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -9,14 +11,17 @@ import (
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
+	"gorm.io/gorm"
 )
 
 // RegisterHumanRoutes adds human-input management and ticket action routes to mux.
 func (h *Handlers) RegisterHumanRoutes(mux *http.ServeMux) {
-	// Shem-facing: CRUD for human inputs (API key auth).
+	// Shem-facing: CRUD for human inputs (API key auth, scoped to the
+	// calling shem's own ticket — see writeTicketOwnership).
 	mux.Handle("POST /api/tickets/{id}/human-inputs",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.createHumanInput)))
 	mux.Handle("GET /api/tickets/{id}/human-inputs",
@@ -24,123 +29,31 @@ func (h *Handlers) RegisterHumanRoutes(mux *http.ServeMux) {
 	mux.Handle("PATCH /api/tickets/{id}/human-inputs/{inputID}",
 		auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resolveHumanInput)))
 
-	// Human-facing: single action dispatcher (session auth).
+	// Human-facing: single action dispatcher (session auth + CSRF).
+	// RequireCSRF sits INSIDE RequireSession because it reads the expected
+	// token out of the context RequireSession populates. Without it, markup
+	// injected into the dashboard's markdown sink can make the operator's
+	// own browser POST here — same origin, so SameSite=Lax does not help —
+	// and "start" is the sole writer of intake_approved (finding S1).
 	mux.Handle("POST /api/tickets/{id}/actions",
-		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketManage)(http.HandlerFunc(h.ticketAction))))
+		auth.RequireSession(h.DB)(auth.RequireCSRF(rbac.Require(rbac.PermTicketManage)(http.HandlerFunc(h.ticketAction)))))
 }
 
-// createHumanInput creates a new HumanInput for a ticket.
-// Body: {"kind": "approval"|"feedback"|"question_answer"|"blocker_ack", "prompt": "..."}
-func (h *Handlers) createHumanInput(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r)
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-
-	var body struct {
-		Kind   string `json:"kind"`
-		Prompt string `json:"prompt"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Kind == "" || body.Prompt == "" {
-		http.Error(w, "kind and prompt are required", http.StatusBadRequest)
-		return
-	}
-
-	hi := db.HumanInput{
-		TicketID:  id,
-		Kind:      body.Kind,
-		Prompt:    body.Prompt,
-		CreatedAt: time.Now(),
-	}
-	if err := h.DB.Create(&hi).Error; err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(hi) //nolint:errcheck
-}
-
-// listHumanInputs returns human inputs for a ticket.
-// Query params:
-//   - kind=approval|feedback|question_answer|blocker_ack  (optional filter)
-//   - resolved=false  (optional; "false" returns only unresolved)
-func (h *Handlers) listHumanInputs(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r)
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-
-	query := h.DB.Where("ticket_id = ?", id)
-	if kind := r.URL.Query().Get("kind"); kind != "" {
-		query = query.Where("kind = ?", kind)
-	}
-	if r.URL.Query().Get("resolved") == "false" {
-		query = query.Where("resolved_at IS NULL")
-	}
-
-	var inputs []db.HumanInput
-	query.Order("created_at asc").Find(&inputs)
-	if inputs == nil {
-		inputs = []db.HumanInput{}
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(inputs) //nolint:errcheck
-}
-
-// resolveHumanInput resolves a HumanInput by recording its response.
-// Body: {"response": "..."}
-func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
-	id, err := parseIDFromPath(r)
-	if err != nil {
-		http.Error(w, "invalid id", http.StatusBadRequest)
-		return
-	}
-	rawInputID := r.PathValue("inputID")
-	inputID, err := strconv.ParseInt(rawInputID, 10, 64)
-	if err != nil || inputID <= 0 {
-		http.Error(w, "invalid inputID", http.StatusBadRequest)
-		return
-	}
-
-	var body struct {
-		Response string `json:"response"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "bad request", http.StatusBadRequest)
-		return
-	}
-
-	now := time.Now()
-	result := h.DB.Model(&db.HumanInput{}).
-		Where("id = ? AND ticket_id = ? AND resolved_at IS NULL", inputID, id).
-		Updates(map[string]any{
-			"response":    body.Response,
-			"resolved_at": now,
-		})
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if result.RowsAffected == 0 {
-		http.Error(w, "not found or already resolved", http.StatusNotFound)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
+// maxActionFormBytes caps the in-memory portion of a multipart action
+// submission. The dashboard only ever sends urlencoded bodies; multipart is
+// accepted for hand-written clients, and does not need to be large.
+const maxActionFormBytes = 1 << 20
 
 // ticketAction is the single dispatcher for all human-initiated ticket actions.
-// Body: {"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer",
+// Body: {"action": "approve"|"requeue"|"close"|"needs-attention"|"request-changes"|"answer"|"start",
 //
 //	"feedback": "...",   (requeue / request-changes)
 //	"input_id": 123,     (answer)
 //	"response": "..."}   (answer)
 //
 // Also accepts application/x-www-form-urlencoded for browser form submissions.
+// Every parameter is read from the request BODY only; nothing is taken from
+// the URL query string (see the r.PostForm comment below).
 func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 	id, err := parseIDFromPath(r)
 	if err != nil {
@@ -153,18 +66,46 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		Feedback string `json:"feedback"`
 		InputID  uint   `json:"input_id"`
 		Response string `json:"response"`
+		// ReviewedBodyHash is the ticket's body_hash as it was when the
+		// page carrying this control was rendered — i.e. the fingerprint
+		// of the description the operator actually read. Only "start"
+		// uses it; see actionStart.
+		ReviewedBodyHash string `json:"reviewed_body_hash"`
 	}
 
 	ct := r.Header.Get("Content-Type")
-	if strings.HasPrefix(ct, "application/x-www-form-urlencoded") || strings.HasPrefix(ct, "multipart/form-data") {
-		if err := r.ParseForm(); err != nil {
+	isURLEncoded := strings.HasPrefix(ct, "application/x-www-form-urlencoded")
+	isMultipart := strings.HasPrefix(ct, "multipart/form-data")
+	if isURLEncoded || isMultipart {
+		// ParseForm alone does not read a multipart body into PostForm —
+		// only ParseMultipartForm does — so dispatch on the content type
+		// rather than relying on r.FormValue to do it lazily (it would also
+		// re-introduce the query-string merge described below).
+		var parseErr error
+		if isMultipart {
+			parseErr = r.ParseMultipartForm(maxActionFormBytes)
+		} else {
+			parseErr = r.ParseForm()
+		}
+		if parseErr != nil {
 			http.Error(w, "bad request", http.StatusBadRequest)
 			return
 		}
-		body.Action = r.FormValue("action")
-		body.Feedback = r.FormValue("feedback")
-		body.Response = r.FormValue("response")
-		if idStr := r.FormValue("input_id"); idStr != "" {
+		// r.PostForm, not r.FormValue: ParseForm merges the URL query into
+		// r.Form, so r.FormValue("action") would accept an action supplied
+		// entirely in the query string of an otherwise empty POST. That is
+		// what lets an injected <form action="/api/tickets/X/actions?action=
+		// start"> work with no form fields of its own — DOMPurify strips
+		// name= from <input> (DOM-clobbering defence), so carrying the
+		// parameters in the form's own URL is the attacker's whole trick
+		// (finding S1). The dashboard's own controls put every parameter in
+		// the body: htmx serializes hx-vals and <input name=...> into the
+		// request body for a POST.
+		body.Action = r.PostForm.Get("action")
+		body.Feedback = r.PostForm.Get("feedback")
+		body.Response = r.PostForm.Get("response")
+		body.ReviewedBodyHash = r.PostForm.Get("reviewed_body_hash")
+		if idStr := r.PostForm.Get("input_id"); idStr != "" {
 			id64, _ := strconv.ParseUint(idStr, 10, 64)
 			body.InputID = uint(id64)
 		}
@@ -201,6 +142,18 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.actionAnswer(w, r, id, body.InputID, body.Response)
+	case "start":
+		// Validated here, alongside the dispatcher's other per-action
+		// required parameters. An absent hash is not "no opinion" — it is
+		// exactly the shape a page cached from before this check produces,
+		// and the shape any caller wanting to skip the check would use, so
+		// it is refused rather than waved through.
+		if body.ReviewedBodyHash == "" {
+			http.Error(w, "reviewed_body_hash is required for start; "+
+				"reload the ticket page and read the description again", http.StatusBadRequest)
+			return
+		}
+		h.actionStart(w, r, id, body.ReviewedBodyHash)
 	default:
 		http.Error(w, "unknown action: "+body.Action, http.StatusBadRequest)
 	}
@@ -237,7 +190,23 @@ func (h *Handlers) actionApprove(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
-	if err := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Update("phase", nextPhase).Error; err != nil {
+	// The phase change and its GitHub label write commit together, like
+	// every other transition (finding I4, round 1c). Before this, approve
+	// was a bare Update that queued nothing, so a linked ticket advancing
+	// brainstorm -> plan -> implement kept whatever golem:* label it had
+	// until some later reconcile pass noticed — and reconcile is skipped on
+	// a 304, which is what a quiet repository answers.
+	if err := h.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", id).
+			Update("phase", nextPhase).Error; err != nil {
+			return err
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, nextPhase, h.BaseURL)
+	}); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -266,20 +235,44 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase NOT IN ('unassigned', 'closed')", id).
-		Updates(map[string]any{
-			"phase":            "unassigned",
-			"assigned_shem":    nil,
-			"checkpoint_phase": nil,
-			"checkpoint_sha":   nil,
-		})
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// pending-approval is deliberately excluded alongside unassigned/closed:
+	// re-queue is a generic "unstick it" action for a ticket a shem has
+	// already touched, not a substitute for the human review that "start"
+	// performs on a never-run, externally-sourced ticket (spec Amendment 1).
+	// The phase change and its GitHub label write commit together, the same
+	// way updatePhase's do. Before fix round 1b this was a bare Update that
+	// queued nothing, so a linked ticket dropped back to unassigned kept
+	// whatever golem:* label it was last given until some later reconcile
+	// pass happened to notice — and on a quiet repo the poll answers 304 and
+	// reconcile does not run at all (finding I4). The WHERE clause is
+	// unchanged.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase NOT IN ('unassigned', 'pending-approval', 'closed')", id).
+			Updates(map[string]any{
+				"phase":            "unassigned",
+				"assigned_shem":    nil,
+				"checkpoint_phase": nil,
+				"checkpoint_sha":   nil,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotRequeueable
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, "unassigned", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotRequeueable) {
+		http.Error(w, "ticket is unassigned, closed, or awaiting intake approval", http.StatusConflict)
 		return
 	}
-	if result.RowsAffected == 0 {
-		http.Error(w, "ticket already unassigned or closed", http.StatusConflict)
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -316,17 +309,54 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		http.Error(w, "ticket not found", http.StatusNotFound)
 		return
 	}
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase != 'closed'", id).
-		Update("phase", "closed")
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if result.RowsAffected == 0 {
+
+	// The close transition and its GitHub close-issue write commit together,
+	// so a close can never be recorded without its follow-up queued.
+	//
+	// The issue-linkage decision below is made from a row re-read inside
+	// this transaction, not from the pre-transaction read above (fix round
+	// 1b, minor m11 — the same defect class as I5). Ingest does not
+	// currently link an already-existing ticket to an issue, so no writer
+	// moves issue_number from NULL to non-NULL today, but deciding a
+	// follow-up write from a snapshot this transaction has already
+	// superseded is the pattern that produced I5, and it is applied
+	// family-wide here rather than left as the one remaining instance.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase != 'closed'", id).
+			Update("phase", "closed")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errAlreadyClosed
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		if fresh.IssueNumber == nil {
+			return nil
+		}
+		if err := ghsync.Enqueue(tx, db.GitHubOutbox{
+			TicketID:       id,
+			Kind:           ghsync.KindClose,
+			Payload:        "{}",
+			IdempotencyKey: ghsync.CloseKey(id),
+		}); err != nil {
+			return fmt.Errorf("enqueue close: %w", err)
+		}
+		return nil
+	})
+	if errors.Is(txErr, errAlreadyClosed) {
 		http.Error(w, "ticket already closed", http.StatusConflict)
 		return
 	}
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	h.DB.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{})
 
 	if ticket.AssignedShem != nil {
@@ -339,14 +369,60 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// errAlreadyClosed signals that the ticket was already in the closed phase
+// when a close action was attempted.
+var errAlreadyClosed = errors.New("ticket already closed")
+
+// errNotRequeueable signals that the ticket was unassigned, closed, or still
+// awaiting intake approval when a requeue action was attempted.
+var errNotRequeueable = errors.New("ticket is not requeueable")
+
+// errNotFlaggable signals that the ticket did not exist, or was still
+// awaiting intake approval, when a needs-attention action was attempted.
+var errNotFlaggable = errors.New("ticket is not flaggable")
+
+// errNotInReview signals that the ticket left ready-for-review before a
+// request-changes submitted from the review screen could move it to revising.
+var errNotInReview = errors.New("ticket is not in ready-for-review")
+
 func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, id string) {
-	result := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Update("phase", "needs-attention")
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// pending-approval is excluded for the same reason requeue excludes it:
+	// flagging a never-run, externally-sourced ticket moves it into a phase
+	// that requeue *does* release, routing around the intake review
+	// (spec Amendment 1).
+	// As in actionRequeue, the phase change and its GitHub label write commit
+	// together (finding I4). The WHERE clause is unchanged.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase != 'pending-approval'", id).
+			Update("phase", "needs-attention")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotFlaggable
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, "needs-attention", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotFlaggable) {
+		var count int64
+		if err := h.DB.Model(&db.Ticket{}).Where("id = ?", id).Count(&count).Error; err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		if count == 0 {
+			http.Error(w, "ticket not found", http.StatusNotFound)
+			return
+		}
+		http.Error(w, "ticket is awaiting intake approval", http.StatusConflict)
 		return
 	}
-	if result.RowsAffected == 0 {
-		http.Error(w, "ticket not found", http.StatusNotFound)
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
@@ -406,15 +482,31 @@ func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "ticket has no assigned shem; use requeue instead", http.StatusConflict)
 		return
 	}
-	result := h.DB.Model(&db.Ticket{}).
-		Where("id = ? AND phase = 'ready-for-review'", ticket.ID).
-		Update("phase", "revising")
-	if result.Error != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	// As in actionApprove and actionRequeue, the phase change and its GitHub
+	// label write commit together (finding I4, round 1c). The WHERE clause is
+	// unchanged.
+	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase = 'ready-for-review'", ticket.ID).
+			Update("phase", "revising")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotInReview
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", ticket.ID).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", ticket.ID, err)
+		}
+		return enqueueGitHubPhase(tx, fresh, "revising", h.BaseURL)
+	})
+	if errors.Is(txErr, errNotInReview) {
+		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
 		return
 	}
-	if result.RowsAffected == 0 {
-		http.Error(w, "ticket not in ready-for-review phase", http.StatusConflict)
+	if txErr != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 

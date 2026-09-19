@@ -10,6 +10,7 @@ import (
 
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/ui"
 )
 
@@ -22,17 +23,13 @@ func TestLoginHandler_ValidCredentials(t *testing.T) {
 	if err != nil {
 		t.Fatalf("bcrypt: %v", err)
 	}
-	gdb.Create(&db.User{Username: "admin", PasswordHash: string(hash)})
+	gdb.Create(&db.User{Username: "admin", PasswordHash: string(hash), Role: string(rbac.RoleAdmin)})
 
 	h := ui.NewHandlers(gdb, nil)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	body := strings.NewReader("username=admin&password=pass")
-	req := httptest.NewRequest("POST", "/login", body)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := signIn(t, mux, "admin", "pass")
 
 	if w.Code != http.StatusFound {
 		t.Errorf("expected redirect (302), got %d", w.Code)
@@ -48,7 +45,7 @@ func TestLoginHandler_InvalidCredentials(t *testing.T) {
 		t.Fatalf("db.Open: %v", err)
 	}
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct"), bcrypt.DefaultCost)
-	gdb.Create(&db.User{Username: "admin", PasswordHash: string(hash)})
+	gdb.Create(&db.User{Username: "admin", PasswordHash: string(hash), Role: string(rbac.RoleAdmin)})
 
 	h := ui.NewHandlers(gdb, nil)
 	mux := http.NewServeMux()
@@ -122,7 +119,7 @@ func TestTicketNewSubmit_SetsCreatedByFromSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	user := db.User{Username: "leon", PasswordHash: "x"}
+	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
 	gdb.Create(&user)
 	w := httptest.NewRecorder()
 	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
@@ -137,7 +134,7 @@ func TestTicketNewSubmit_SetsCreatedByFromSession(t *testing.T) {
 	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&title=Test+Ticket&description=test+ticket")
 	req := httptest.NewRequest("POST", "/tickets/new", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -159,7 +156,7 @@ func TestTicketNewSubmit_MissingTitleRerendersForm(t *testing.T) {
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
 	}
-	user := db.User{Username: "leon", PasswordHash: "x"}
+	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
 	gdb.Create(&user)
 	w := httptest.NewRecorder()
 	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
@@ -178,7 +175,7 @@ func TestTicketNewSubmit_MissingTitleRerendersForm(t *testing.T) {
 	body := strings.NewReader("repo_remote=https://github.com/org/repo&base_branch=main&description=test+ticket")
 	req := httptest.NewRequest("POST", "/tickets/new", body)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.AddCookie(cookie)
+	withSession(req, cookie)
 	w = httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
 
@@ -201,7 +198,10 @@ func TestLoadTemplates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadTemplates: %v", err)
 	}
-	expected := []string{"login", "dashboard", "shems", "ticket_new", "ticket_detail", "users", "settings"}
+	expected := []string{
+		"login", "dashboard", "shems", "ticket_new", "ticket_detail",
+		"github_settings", "users", "settings",
+	}
 	for _, name := range expected {
 		if tmpls[name] == nil {
 			t.Errorf("missing template set for page %q", name)
