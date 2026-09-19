@@ -80,6 +80,12 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		return fmt.Errorf("preparing %s: %w", repoPath, err)
 	}
 
+	// Right after the clone: every later repo command runs as the agent
+	// (asAgent) and needs to own the repo. No-op without an agent account.
+	if err := agentenv.EnsureOwnership(repoPath); err != nil {
+		log.Printf("executor: %v", err)
+	}
+
 	// Before initRepo, which runs `golem graph build` and therefore invokes
 	// the agent: an untrusted workspace makes Claude Code ignore the
 	// repository's own permission allow-list.
@@ -136,13 +142,6 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			}
 			log.Printf("executor: post phase error: %v", phErr)
 		}
-	}
-
-	// The shem runs as root and created the clone, the ticket directory and
-	// the worktree; the agent runs as an unprivileged account and has to be
-	// able to write all of it. No-op when no agent account is configured.
-	if err := agentenv.EnsureOwnership(repoPath); err != nil {
-		log.Printf("executor: %v", err)
 	}
 
 	// Start log-tail before any Claude invocations so we capture all entries.
@@ -282,7 +281,7 @@ func golemTicketNewArgs(ticketID, branch, description string) []string {
 // runGolemTicketNew creates the local ticket scaffold (worktree + branch) without
 // invoking Claude. Claude's role starts at brainstorm, after the scaffold exists.
 func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
-	cmd := exec.CommandContext(ctx, "golem", golemTicketNewArgs(ticketID, branch, description)...)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", golemTicketNewArgs(ticketID, branch, description)...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -294,7 +293,7 @@ func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, descript
 
 // runGolemAdvance advances the local ticket to the given phase.
 func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) error {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -312,10 +311,8 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 // It could not work from the agent. Claude Code runs the agent's shell
 // commands in a sandbox that does not expose the environment, so `golem`
 // started from there has no model credential, and the nested `claude` the
-// reviewer needs reports "Not logged in · Please run /login". The shem has
-// the credential in its own environment, and this is Golem's own command, so
-// it keeps the full environment the way runGolemTicketNew and
-// runGolemAdvance do.
+// reviewer needs reports "Not logged in · Please run /login". The shem runs it
+// via asAgent, which keeps the model credential but not the push token.
 //
 // And it should not have been the agent's job anyway. This is the gate that
 // decides whether work is fit to review; leaving it to the agent to remember
@@ -330,8 +327,8 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 // gate that cannot run must not be treated as a pass, or the failure mode of
 // the validator is "everything is approved".
 func runGolemValidate(ctx context.Context, repoPath, ticketID, stage string) error {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "validate",
-		"--ticket", ticketID, "--stage", stage)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "validate",
+		"--ticket", ticketID, "--stage", stage))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -341,7 +338,7 @@ func runGolemValidate(ctx context.Context, repoPath, ticketID, stage string) err
 }
 
 func runGolemReview(ctx context.Context, repoPath, ticketID string) error {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "review", "--ticket", ticketID)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "review", "--ticket", ticketID))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -360,15 +357,23 @@ func claudePhaseCmd(ctx context.Context, repoPath, prompt string) *exec.Cmd {
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	// The prompt carries untrusted issue text, so this process must not
-	// carry golem's credentials — see internal/agentenv. The golem and git
-	// subprocesses around it are golem's own commands and keep the full
-	// environment, which is what leaves the shem's push credential working.
+	// carry golem's credentials — see internal/agentenv and asAgent.
 	cmd.Env = agentenv.Environ()
 	// Drop to an unprivileged account where one is configured. Environment
 	// filtering keeps the token out of the agent's OWN environment, but an
 	// agent running as root simply reads it out of /proc/1/environ instead —
 	// verified in the deployed container. Filtering is only meaningful once
 	// the agent cannot read the shem's memory.
+	agentenv.DropPrivileges(cmd)
+	return cmd
+}
+
+// asAgent runs a repository command as the agent account without golem's
+// credentials. The agent controls the repo (hooks, fsmonitor, gate commands),
+// so running there as root would leak the push token. Only the mirror push
+// in pushTicketBranch keeps root.
+func asAgent(cmd *exec.Cmd) *exec.Cmd {
+	cmd.Env = agentenv.Environ()
 	agentenv.DropPrivileges(cmd)
 	return cmd
 }
@@ -547,7 +552,7 @@ func nextPhaseAfterCheckpoint(phase string) string {
 func ensureRepoReady(ctx context.Context, repoPath string) error {
 	configPath := filepath.Join(repoPath, ".golem", "config.yaml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		out, err := exec.CommandContext(ctx, "golem", "init", "--backend", "claude-code", "--repo", repoPath).CombinedOutput()
+		out, err := asAgent(exec.CommandContext(ctx, "golem", "init", "--backend", "claude-code", "--repo", repoPath)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem init: %w\n%s", err, out)
 		}
@@ -565,16 +570,16 @@ func ensureRepoReady(ctx context.Context, repoPath string) error {
 
 	indexPath := filepath.Join(repoPath, ".golem", "index")
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		out, err := exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath).CombinedOutput()
+		out, err := asAgent(exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem graph build: %w\n%s", err, out)
 		}
 		log.Printf("executor: built graph in %s", repoPath)
 	} else {
-		out, err := exec.CommandContext(ctx, "golem", "graph", "update", "--repo", repoPath).CombinedOutput()
+		out, err := asAgent(exec.CommandContext(ctx, "golem", "graph", "update", "--repo", repoPath)).CombinedOutput()
 		if err != nil {
 			log.Printf("executor: graph update failed, rebuilding: %v\n%s", err, out)
-			out, err = exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath).CombinedOutput()
+			out, err = asAgent(exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath)).CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("golem graph build: %w\n%s", err, out)
 			}
@@ -815,7 +820,7 @@ func setPushURL(repoPath, url string) {
 	} else {
 		args = []string{"-C", repoPath, "config", "--local", "remote.origin.pushurl", url}
 	}
-	_ = exec.Command("git", args...).Run() //nolint:gosec
+	_ = asAgent(exec.Command("git", args...)).Run() //nolint:gosec
 }
 
 // repoLocalPath returns the local filesystem path for the given normalized remote URL.
@@ -850,7 +855,7 @@ func firstLineOf(s string) string {
 // and the orchestrator appends the closing reference itself from the ticket
 // row — the one place that actually knows it.
 func generatePRDescription(ctx context.Context, repoPath, ticketID string) (string, error) {
-	cmd := exec.CommandContext(ctx, "golem", "ticket", "pr-description", "--ticket", ticketID)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "pr-description", "--ticket", ticketID))
 	cmd.Dir = repoPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

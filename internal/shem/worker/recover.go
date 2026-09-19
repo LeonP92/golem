@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 )
@@ -36,7 +37,7 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		// Fetch in case the branch was pushed; ignore errors (no_push mode has no remote branch).
-		_ = gitRun(ctx, repoPath, "fetch", "origin")
+		_ = fetchBranchForAgent(ctx, repoPath, claim.RepoRemote, worktreeBranch)
 		if err := ensureWorktree(ctx, repoPath, worktreePath, worktreeBranch); err != nil {
 			return fmt.Errorf("RecoverTicket: worktree: %w", err)
 		}
@@ -53,6 +54,37 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 	}
 
 	return nil
+}
+
+// fetchBranchForAgent updates origin/<branch> in the agent's repo without
+// handing it the token: root fetches into the push mirror, then the agent
+// fetches from a bundle of that branch.
+func fetchBranchForAgent(ctx context.Context, repoPath, remote, branch string) error {
+	mirror := pushMirrorPath(repoPath)
+	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
+		return err
+	}
+	ref := "refs/heads/" + branch
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "fetch", "--no-tags", remote, "+"+ref+":"+ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s into push mirror: %w\n%s", branch, err, out)
+	}
+
+	f, err := os.CreateTemp("", "golem-*.bundle")
+	if err != nil {
+		return err
+	}
+	bundle := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(bundle) }()
+	if out, err := exec.CommandContext(ctx, "git", "-C", mirror, "bundle", "create", bundle, ref).CombinedOutput(); err != nil {
+		return fmt.Errorf("git bundle %s: %w\n%s", branch, err, out)
+	}
+	if acct := agentenv.User(); acct != nil {
+		if err := os.Chown(bundle, int(acct.UID), int(acct.GID)); err != nil {
+			return err
+		}
+	}
+	return gitRun(ctx, repoPath, "fetch", bundle, "+"+ref+":refs/remotes/origin/"+branch)
 }
 
 // ensureWorktree adds a git worktree at worktreePath on branch, preferring the
@@ -197,10 +229,13 @@ func isSafeRemote(remote string) bool {
 }
 
 // gitRun runs a git sub-command in dir (empty string means no Dir override).
+// Inside a repo it runs as the agent (asAgent); only the clone, with no dir,
+// runs as root.
 func gitRun(ctx context.Context, dir string, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec
 	if dir != "" {
 		cmd.Dir = dir
+		asAgent(cmd)
 	}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
