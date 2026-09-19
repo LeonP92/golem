@@ -49,5 +49,5 @@ max_concurrent: 5
 
 repos:
   # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.
-  - path: /repos/omnicore-platform
-    remote: https://github.com/zenithflowinc/omnicore-platform
+  - path: /repos/golem
+    remote: https://github.com/LeonP92/golem
