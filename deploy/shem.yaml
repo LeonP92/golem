@@ -37,14 +37,7 @@ name: shem-local
 # works a ticket for it, and a clone needs Contents: Read. Pushing additionally
 # needs Contents: Read and write. Pre-cloning the repository onto the host and
 # mounting it is the way to keep this container credential-free.
-#
-# Turned on, with GOLEM_SHEM_GITHUB_TOKEN set: the shem pushes the ticket
-# branch once the work reaches ready-for-review and reports that to the
-# orchestrator, which queues the pull request. All three of issue_number,
-# branch_pushed and phase=ready-for-review must hold before one is opened
-# (api.enqueuePRIfReady), so nothing is opened for a web-form ticket or for
-# work that never pushed.
-no_push: false
+no_push: true
 max_concurrent: 5
 
 repos:
