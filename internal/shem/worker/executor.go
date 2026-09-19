@@ -106,16 +106,18 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			return fmt.Errorf("recovery failed: %w", err)
 		}
 		startPhase = *claim.CheckpointPhase
-		// Checkpoint records the last *completed* phase. If the approval gate for
-		// that phase was already passed (no pending approval), advance to the next
-		// phase. If approval is still pending, stay so the wait loop re-enters.
+		// A checkpoint records a phase that both COMPLETED and PASSED its
+		// validation — brainstorm and plan are checkpointed only after
+		// runGolemValidate returns — so there is nothing left to wait for and
+		// the next phase always starts.
+		//
+		// This used to ask GetPendingApproval whether a human had approved
+		// yet, and stayed put if not. There is no approval to pend on now:
+		// intake is the only human gate, and it is passed before the ticket is
+		// ever claimable.
 		if startPhase == "brainstorm" || startPhase == "plan" {
-			if pending, _ := c.GetPendingApproval(claim.TicketID); pending == nil {
-				startPhase = nextPhaseAfterCheckpoint(startPhase)
-				postStatus(c, ticketID, "Checkpoint approved — advancing to "+startPhase)
-			} else {
-				postStatus(c, ticketID, "Approval still pending — waiting for human")
-			}
+			startPhase = nextPhaseAfterCheckpoint(startPhase)
+			postStatus(c, ticketID, "Resuming validated "+*claim.CheckpointPhase+" — continuing at "+startPhase)
 		}
 	} else {
 		// Fresh orchestrator ticket (no checkpoint). Always start from brainstorm.
@@ -152,35 +154,28 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	for phase := startPhase; ; {
 		switch phase {
 		case "brainstorm":
-			for {
-				// Skip re-running if approval is already pending (shem restart mid-wait).
-				pending, _ := c.GetPendingApproval(claim.TicketID)
-				if pending == nil {
-					feedback := consumeFeedback(ctx, c, claim.TicketID)
-					postStatus(c, ticketID, "Starting agent (claude) — brainstorm phase")
-					prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
-					if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-brainstorm.log")); err != nil {
-						return err
-					}
-					postStatus(c, ticketID, "Brainstorm complete — spec ready for review")
-					PostCheckpointWithRetry(c, claim.TicketID, "brainstorm", "", 5) //nolint:errcheck
-					postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
-					if err := c.PostApprovalRequest(claim.TicketID, "Brainstorm complete. Review the spec and approve to continue to planning."); err != nil {
-						log.Printf("executor: post approval request: %v", err)
-					}
-				}
-				postStatus(c, ticketID, "Waiting for spec approval…")
-				if err := waitForApproval(ctx, c, claim.TicketID); err != nil {
-					return fmt.Errorf("brainstorm approval: %w", err)
-				}
-				// If the human requested changes, loop and re-run with their feedback.
-				if fb, _ := c.GetPendingFeedback(claim.TicketID); fb != nil {
-					postStatus(c, ticketID, "Spec changes requested — re-running brainstorm")
-					continue
-				}
-				postStatus(c, ticketID, "Spec approved — advancing to planning")
-				break
+			// No human approval gate here any more. Intake is the only
+			// human step: a person reads the description and starts the
+			// ticket. Everything after that advances on the shem's own
+			// validation, so the validation is the gate and a failure
+			// parks the ticket in needs-attention rather than waiting.
+			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			postStatus(c, ticketID, "Starting agent (claude) — brainstorm phase")
+			prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
+			if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-brainstorm.log")); err != nil {
+				return err
 			}
+			postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
+			postStatus(c, ticketID, "Brainstorm complete — validating the spec")
+			if err := runGolemValidate(ctx, repoPath, ticketID, "spec"); err != nil {
+				return fmt.Errorf("spec validation: %w", err)
+			}
+			postStatus(c, ticketID, "Spec validated — advancing to planning")
+			// Checkpointed only after validation passes, so a checkpoint at
+			// "brainstorm" means the stage is finished AND approved. That is
+			// what lets a resume advance straight to the next phase without
+			// having to ask whether an approval is still outstanding.
+			PostCheckpointWithRetry(c, claim.TicketID, "brainstorm", "", 5) //nolint:errcheck
 			if err := runGolemAdvance(ctx, repoPath, ticketID, "plan"); err != nil {
 				log.Printf("executor: advance to plan: %v", err)
 			}
@@ -194,33 +189,19 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			phase = "plan"
 
 		case "plan":
-			for {
-				pending, _ := c.GetPendingApproval(claim.TicketID)
-				if pending == nil {
-					feedback := consumeFeedback(ctx, c, claim.TicketID)
-					postStatus(c, ticketID, "Starting agent (claude) — planning phase")
-					prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
-					if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-plan.log")); err != nil {
-						return err
-					}
-					postStatus(c, ticketID, "Plan complete — ready for review")
-					PostCheckpointWithRetry(c, claim.TicketID, "plan", "", 5) //nolint:errcheck
-					postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
-					if err := c.PostApprovalRequest(claim.TicketID, "Plan complete. Review the plan and approve to begin implementation."); err != nil {
-						log.Printf("executor: post approval request: %v", err)
-					}
-				}
-				postStatus(c, ticketID, "Waiting for plan approval…")
-				if err := waitForApproval(ctx, c, claim.TicketID); err != nil {
-					return fmt.Errorf("plan approval: %w", err)
-				}
-				if fb, _ := c.GetPendingFeedback(claim.TicketID); fb != nil {
-					postStatus(c, ticketID, "Plan changes requested — re-running planning")
-					continue
-				}
-				postStatus(c, ticketID, "Plan approved — starting implementation")
-				break
+			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			postStatus(c, ticketID, "Starting agent (claude) — planning phase")
+			prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
+			if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-plan.log")); err != nil {
+				return err
 			}
+			postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
+			postStatus(c, ticketID, "Plan complete — validating the plan")
+			if err := runGolemValidate(ctx, repoPath, ticketID, "plan"); err != nil {
+				return fmt.Errorf("plan validation: %w", err)
+			}
+			postStatus(c, ticketID, "Plan validated — starting implementation")
+			PostCheckpointWithRetry(c, claim.TicketID, "plan", "", 5) //nolint:errcheck
 			if err := runGolemAdvance(ctx, repoPath, ticketID, "implement"); err != nil {
 				log.Printf("executor: advance to implement: %v", err)
 			}
@@ -333,6 +314,25 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 // decides whether work is fit to review; leaving it to the agent to remember
 // meant a gate the system relies on could be skipped, and nothing but the
 // agent's own word said it had run.
+// runGolemValidate runs the automatic gate that replaced the human approval
+// step after brainstorm and after plan.
+//
+// Exit code 2 means the spec-adherence role raised a blocker, i.e. the stage
+// did not pass; any other non-zero exit means the gate could not run. Both
+// are returned as errors, and both park the ticket in needs-attention — a
+// gate that cannot run must not be treated as a pass, or the failure mode of
+// the validator is "everything is approved".
+func runGolemValidate(ctx context.Context, repoPath, ticketID, stage string) error {
+	cmd := exec.CommandContext(ctx, "golem", "ticket", "validate",
+		"--ticket", ticketID, "--stage", stage)
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("%w\n%s", err, out)
+	}
+	return nil
+}
+
 func runGolemReview(ctx context.Context, repoPath, ticketID string) error {
 	cmd := exec.CommandContext(ctx, "golem", "ticket", "review", "--ticket", ticketID)
 	cmd.Dir = repoPath
@@ -382,30 +382,6 @@ func runClaudePhase(ctx context.Context, repoPath, prompt, logPath string) error
 		return fmt.Errorf("claude --print: %w", err)
 	}
 	return nil
-}
-
-// waitForApproval polls until the pending approval HumanInput for ticketID is
-// resolved (GetPendingApproval returns nil). The human resolves it by clicking
-// "Approve" in the orchestrator UI.  Returns only on context cancellation or
-// when approval is confirmed.
-func waitForApproval(ctx context.Context, c *client.Client, ticketID string) error {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-ticker.C:
-			pending, err := c.GetPendingApproval(ticketID)
-			if err != nil {
-				log.Printf("executor: polling approval for ticket %s: %v", ticketID, err)
-				continue
-			}
-			if pending == nil {
-				return nil
-			}
-		}
-	}
 }
 
 // consumeFeedback retrieves the pending feedback for a ticket and acks it so

@@ -145,7 +145,9 @@ func TestShemWritesAreScopedToTheOwningTicket(t *testing.T) {
 			if err := h.DB.Create(&ticket).Error; err != nil {
 				t.Fatalf("seed ticket: %v", err)
 			}
-			hi := db.HumanInput{TicketID: ticket.ID, Kind: "question_answer", Prompt: "p"}
+			// feedback is the only kind a shem key may resolve; this test is
+			// about WHICH shem may resolve it, not which kind.
+			hi := db.HumanInput{TicketID: ticket.ID, Kind: "feedback", Prompt: "p"}
 			if err := h.DB.Create(&hi).Error; err != nil {
 				t.Fatalf("seed human input: %v", err)
 			}

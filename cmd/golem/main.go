@@ -91,6 +91,8 @@ func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.TicketAdvance(args[1:], stdout, stderr)
 	case "review":
 		return cli.TicketReview(args[1:], stdout, stderr)
+	case "validate":
+		return cli.TicketValidate(args[1:], stdout, stderr)
 	case "pr-description":
 		return cli.TicketPRDescription(args[1:], stdout, stderr)
 	case "close":

@@ -111,8 +111,22 @@ func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
 	}
 
 	now := time.Now()
+	// kind = 'feedback' is the whole point of this clause. This endpoint
+	// authenticates with a SHEM API KEY, and the shem's only legitimate use
+	// of it is consumeFeedback acking the feedback it has just read.
+	//
+	// Without the clause the same key resolves any unresolved input on a
+	// ticket the shem owns — including an approval, which is the human gate.
+	// An agent that reaches the key (it runs as root in the shem container
+	// and the key is in the environment) could answer the question that was
+	// meant for a person.
+	//
+	// Still load-bearing after brainstorm and plan approvals became
+	// automatic: those stages no longer create approval rows, but intake
+	// does, and "the shem cannot close a human's question" should not depend
+	// on which rows happen to exist today.
 	result := h.DB.Model(&db.HumanInput{}).
-		Where("id = ? AND ticket_id = ? AND resolved_at IS NULL", inputID, id).
+		Where("id = ? AND ticket_id = ? AND resolved_at IS NULL AND kind = ?", inputID, id, "feedback").
 		Updates(map[string]any{
 			"response":    body.Response,
 			"resolved_at": now,
