@@ -235,7 +235,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "implement":
 			postStatus(c, ticketID, "Starting agent (claude) — implementation phase")
-			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
+			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
 				return err
 			}
 			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
@@ -247,7 +247,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
 			postStatus(c, ticketID, "Starting agent (claude) — revision phase")
-			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
+			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Branch, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
 				return err
 			}
 			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
@@ -497,7 +497,7 @@ func finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
 
 	if !cfg.NoPush {
 		worktree := filepath.Join(ticketDir, "worktree")
-		if pushErr := pushTicketBranch(ctx, worktree, branch); pushErr != nil {
+		if pushErr := pushTicketBranch(ctx, repoPath, worktree, branch, claim.RepoRemote); pushErr != nil {
 			// A failed push must not block the lifecycle: the ticket still
 			// reaches ready-for-review, just without a pull request.
 			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
@@ -707,21 +707,113 @@ func readState(ticketDir string) (string, string, error) {
 	return state.Phase, state.SHA, nil
 }
 
+// pushCredentialEnv is the variable deploy/shem-entrypoint.sh's git
+// credential helper expands at use time. It is the one value in this
+// process's environment that is worth stealing.
+const pushCredentialEnv = "GOLEM_GITHUB_TOKEN"
+
+// pushMirrorPath is where Golem keeps its own bare clone of a repository, as
+// a sibling of the repository rather than a child of it. The agent works
+// inside repoPath and is entitled to write anything there; the mirror has to
+// be somewhere it is not.
+func pushMirrorPath(repoPath string) string {
+	repoPath = filepath.Clean(repoPath)
+	return filepath.Join(filepath.Dir(repoPath), ".golem-push", filepath.Base(repoPath)+".git")
+}
+
+// withoutPushCredential returns env with the push token removed.
+func withoutPushCredential(env []string) []string {
+	out := make([]string, 0, len(env))
+	for _, kv := range env {
+		if name, _, ok := strings.Cut(kv, "="); ok && name == pushCredentialEnv {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return out
+}
+
 // pushTicketBranch publishes the ticket branch to origin so the orchestrator
 // can open a pull request against it. Golem has no other code path that
 // pushes; agents remain denied `git push` by the tool-call gating policy.
 //
-// This is one of Golem's own subprocesses and deliberately inherits the whole
-// environment, unlike the agent (see agentenv.go). That is what leaves
-// deploy/shem-entrypoint.sh's credential helper working: the helper expands
-// GOLEM_GITHUB_TOKEN at use time, so this push gets the token and a `git
-// credential fill` run by the agent gets an empty password.
-func pushTicketBranch(ctx context.Context, worktreePath, branch string) error {
-	cmd := exec.CommandContext(ctx, "git", "push", "-u", "origin", branch)
-	cmd.Dir = worktreePath
-	out, err := cmd.CombinedOutput()
+// The push does NOT run in the agent's worktree, and this is the whole point
+// of the function's shape.
+//
+// It used to: `git push` with cmd.Dir set to the worktree, inheriting this
+// process's entire environment so the credential helper could expand
+// GOLEM_GITHUB_TOKEN. Git reads configuration and runs hooks from the
+// repository it is invoked in, and every one of those inputs is something
+// the agent is entitled to write:
+//
+//   - core.hooksPath can point at a directory inside the working tree. That
+//     is exactly what husky does, and the repository Golem is deployed
+//     against has core.hooksPath = .husky/_, so a committed, ordinary file
+//     would have executed with the token in its environment. A husky
+//     pre-push hook has already run on this path in production — it failed
+//     with a shell syntax error, which is how we know hooks execute here.
+//   - a local credential.helper is consulted on the `approve` that follows a
+//     successful push, which hands it the credential.
+//   - url.<base>.insteadOf and remote.origin.pushurl redirect where the push
+//     goes.
+//
+// So the branch is moved in two steps, and the token exists in only one of
+// them:
+//
+//  1. A fetch INTO a Golem-owned bare mirror, FROM the worktree, with the
+//     token stripped from the environment. The agent's repository is still
+//     serving this fetch and can still run code through it
+//     (uploadpack.packObjectsHook), but there is no longer a credential in
+//     the environment for that code to take.
+//  2. A push from the mirror to the real remote, with the token. The mirror
+//     is created by Golem, has no hooks, and the agent never writes to it.
+//
+// remote is the repository URL from the orchestrator's claim, not the
+// worktree's origin, so redirecting the push by editing the agent-side
+// remote does not work either.
+func pushTicketBranch(ctx context.Context, repoPath, worktreePath, branch, remote string) error {
+	mirror := pushMirrorPath(repoPath)
+	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
+		return err
+	}
+
+	// Step 1 — token-free. Anything the agent's repo can make git run during
+	// this fetch runs without the credential.
+	fetch := exec.CommandContext(ctx, "git", "-C", mirror, "fetch", "--no-tags",
+		worktreePath, "+"+branch+":"+branch)
+	fetch.Env = withoutPushCredential(os.Environ())
+	if out, err := fetch.CombinedOutput(); err != nil {
+		return fmt.Errorf("git fetch %s into push mirror: %w\n%s", branch, err, out)
+	}
+
+	// Step 2 — carries the credential, in a repository only Golem writes.
+	push := exec.CommandContext(ctx, "git", "-C", mirror, "push", remote,
+		"+"+branch+":"+branch)
+	out, err := push.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("git push %s: %w\n%s", branch, err, out)
+	}
+	return nil
+}
+
+// ensurePushMirror creates the bare mirror if it is not there yet. It is
+// deliberately a plain bare repository with no hooks and no remote of its
+// own: the push names its remote explicitly, so nothing about where this
+// pushes can be changed by editing config on disk.
+func ensurePushMirror(ctx context.Context, mirror, remote string) error {
+	if remote == "" {
+		return fmt.Errorf("push mirror: no remote for this repository")
+	}
+	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(mirror), 0o750); err != nil {
+		return fmt.Errorf("push mirror: %w", err)
+	}
+	init := exec.CommandContext(ctx, "git", "init", "--bare", mirror)
+	init.Env = withoutPushCredential(os.Environ())
+	if out, err := init.CombinedOutput(); err != nil {
+		return fmt.Errorf("push mirror: git init --bare: %w\n%s", err, out)
 	}
 	return nil
 }

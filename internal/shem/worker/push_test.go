@@ -31,7 +31,9 @@ func TestPushTicketBranch(t *testing.T) {
 	run(work, "commit", "--allow-empty", "-m", "work")
 	run(work, "remote", "add", "origin", origin)
 
-	if err := pushTicketBranch(context.Background(), work, "ticket/x"); err != nil {
+	// repoPath and worktree are the same directory here: this fixture has no
+	// linked worktree, and the mirror is a sibling of repoPath either way.
+	if err := pushTicketBranch(context.Background(), work, work, "ticket/x", origin); err != nil {
 		t.Fatalf("pushTicketBranch: %v", err)
 	}
 
@@ -51,7 +53,10 @@ func TestPushTicketBranchReportsFailure(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	if err := pushTicketBranch(context.Background(), work, "ticket/x"); err == nil {
-		t.Fatal("pushTicketBranch returned nil with no origin configured")
+	// The remote is now passed in rather than read from the repo, so the
+	// "cannot succeed" case is a remote that does not exist.
+	missing := filepath.Join(t.TempDir(), "nowhere.git")
+	if err := pushTicketBranch(context.Background(), work, work, "ticket/x", missing); err == nil {
+		t.Fatal("pushTicketBranch returned nil for a remote that does not exist")
 	}
 }
