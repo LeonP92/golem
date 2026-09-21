@@ -146,18 +146,34 @@ func (c *client) GetPullRequest(ctx context.Context, owner, repo string, number 
 // ticket back to revising on every push, before CI had even finished.
 func (c *client) ListFailedChecks(ctx context.Context, owner, repo, ref string) ([]CheckFailure, error) {
 	var out []CheckFailure
+	var runsErr, statusErr, wfErr error
+
+	// Names already reported, so the same failing job arriving from two
+	// sources is listed once. A GitHub Actions job appears BOTH as a check
+	// run and as a workflow run, and a token that can read both would
+	// otherwise report every Actions failure twice and count it twice
+	// against the failure summary.
+	seen := map[string]bool{}
+	add := func(f CheckFailure) {
+		if f.Name == "" || seen[f.Name] {
+			return
+		}
+		seen[f.Name] = true
+		out = append(out, f)
+	}
 
 	opt := &gh.ListCheckRunsOptions{ListOptions: gh.ListOptions{PerPage: 100}}
 	for {
 		runs, resp, err := c.api.Checks.ListCheckRunsForRef(ctx, owner, repo, ref, opt)
 		if err != nil {
-			return nil, fmt.Errorf("list check runs for %s/%s@%s: %w", owner, repo, ref, err)
+			runsErr = fmt.Errorf("check runs: %w", err)
+			break
 		}
 		for _, r := range runs.CheckRuns {
 			if r.GetStatus() != "completed" || !failedConclusion(r.GetConclusion()) {
 				continue
 			}
-			out = append(out, CheckFailure{
+			add(CheckFailure{
 				Name:       r.GetName(),
 				Conclusion: r.GetConclusion(),
 				DetailsURL: r.GetDetailsURL(),
@@ -171,11 +187,43 @@ func (c *client) ListFailedChecks(ctx context.Context, owner, repo, ref string) 
 		opt.Page = resp.NextPage
 	}
 
+	// Workflow runs, via the Actions API. This is a SECOND route to the same
+	// GitHub Actions results the check-runs call above returns, and it
+	// exists because the two need different token permissions: check runs
+	// need Checks, workflow runs need Actions. A fine-grained token granted
+	// only one of them would otherwise see nothing from Actions at all —
+	// which is the case on the deployment this was written against, where
+	// Checks is refused and Actions is not.
+	wopt := &gh.ListWorkflowRunsOptions{HeadSHA: ref, ListOptions: gh.ListOptions{PerPage: 100}}
+	for {
+		wruns, resp, err := c.api.Actions.ListRepositoryWorkflowRuns(ctx, owner, repo, wopt)
+		if err != nil {
+			wfErr = fmt.Errorf("workflow runs: %w", err)
+			break
+		}
+		for _, r := range wruns.WorkflowRuns {
+			if r.GetStatus() != "completed" || !failedConclusion(r.GetConclusion()) {
+				continue
+			}
+			add(CheckFailure{
+				Name:       r.GetName(),
+				Conclusion: r.GetConclusion(),
+				DetailsURL: r.GetHTMLURL(),
+				NeedsHuman: needsHumanConclusion(r.GetConclusion()),
+			})
+		}
+		if resp == nil || resp.NextPage == 0 {
+			break
+		}
+		wopt.Page = resp.NextPage
+	}
+
 	sopt := &gh.ListOptions{PerPage: 100}
 	for {
 		statuses, resp, err := c.api.Repositories.ListStatuses(ctx, owner, repo, ref, sopt)
 		if err != nil {
-			return nil, fmt.Errorf("list statuses for %s/%s@%s: %w", owner, repo, ref, err)
+			statusErr = fmt.Errorf("commit statuses: %w", err)
+			break
 		}
 		// ListStatuses returns every status ever posted for the ref, newest
 		// first, so a context that failed and was then re-run green appears
@@ -190,7 +238,7 @@ func (c *client) ListFailedChecks(ctx context.Context, owner, repo, ref string) 
 			if s.GetState() != "failure" && s.GetState() != "error" {
 				continue
 			}
-			out = append(out, CheckFailure{
+			add(CheckFailure{
 				Name:       ctxName,
 				Conclusion: s.GetState(),
 				DetailsURL: s.GetTargetURL(),
@@ -201,6 +249,30 @@ func (c *client) ListFailedChecks(ctx context.Context, owner, repo, ref string) 
 			break
 		}
 		sopt.Page = resp.NextPage
+	}
+
+	// One source failing does not discard the other. A fine-grained token
+	// can easily reach commit statuses while being refused check runs —
+	// observed on a real deployment — and the failures it CAN see are still
+	// real failures worth acting on.
+	//
+	// The error is still returned alongside them, because a partial view
+	// must never be reported as a clean one: an unreadable source means an
+	// unknown number of invisible failures, so "found nothing" cannot be
+	// promoted to "nothing is wrong". The caller decides what to do with
+	// results and error together.
+	// Check runs and workflow runs are two views of the same Actions
+	// results, so losing ONE of them loses nothing: the other still reports
+	// every Actions failure. Only losing both is a real blind spot.
+	var lost []error
+	if runsErr != nil && wfErr != nil {
+		lost = append(lost, runsErr, wfErr)
+	}
+	if statusErr != nil {
+		lost = append(lost, statusErr)
+	}
+	if len(lost) > 0 {
+		return out, fmt.Errorf("list checks for %s/%s@%s: %w", owner, repo, ref, errors.Join(lost...))
 	}
 	return out, nil
 }

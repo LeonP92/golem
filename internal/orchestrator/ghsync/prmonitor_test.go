@@ -481,3 +481,123 @@ func TestMonitorPRs_UnreadableChecksAreReportedNotMistakenForGreen(t *testing.T)
 			tk.Phase, tk.PRFixAttempts)
 	}
 }
+
+// The activity feed is a column of short lines a person scans. A raw
+// go-github error is not one: the live entry came out at 432 characters,
+// most of it the request URL and a commit SHA the reader cannot act on,
+// with the part that matters — the status and what to grant — at the end.
+func TestCondenseAPIError(t *testing.T) {
+	raw := "list check runs for zenithflowinc/omnicore-platform@b0e8e5102dc9c724b52738e5c4e181223bf18e40: " +
+		"GET https://api.github.com/repos/zenithflowinc/omnicore-platform/commits/" +
+		"b0e8e5102dc9c724b52738e5c4e181223bf18e40/check-runs?per_page=100: " +
+		"403 Resource not accessible by personal access token []"
+
+	got := ghsync.CondenseAPIErrorForTest(errors.New(raw))
+	want := "403 Resource not accessible by personal access token"
+	if got != want {
+		t.Errorf("condensed = %q, want %q", got, want)
+	}
+
+	// Anything that is not a recognisable API error still has to survive
+	// legibly rather than vanish — an unrecognised failure is exactly the
+	// one worth reading.
+	for _, c := range []struct{ in, want string }{
+		{"connection refused", "connection refused"},
+		{"context deadline exceeded\nwhile dialing", "context deadline exceeded"},
+	} {
+		if got := ghsync.CondenseAPIErrorForTest(errors.New(c.in)); got != c.want {
+			t.Errorf("condensed %q = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// And the whole entry has to stay short enough to read at a glance.
+func TestUnreadableChecksEntryIsShort(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	c := &checksErrClient{Fake: github.NewFake(), err: errors.New(
+		"list check runs for org/repo@b0e8e5102dc9c724b52738e5c4e181223bf18e40: " +
+			"GET https://api.github.com/repos/org/repo/commits/b0e8e51/check-runs?per_page=100: " +
+			"403 Resource not accessible by personal access token []")}
+	ghsync.NewSyncer(gdb, c).MonitorPullRequests(context.Background())
+
+	entries := statusEntries(t, gdb)
+	if len(entries) == 0 {
+		t.Fatal("nothing recorded")
+	}
+	msg := entries[len(entries)-1].Message
+	if len(msg) > 200 {
+		t.Errorf("entry is %d characters; too long to scan in the feed:\n%s", len(msg), msg)
+	}
+	if strings.Contains(msg, "api.github.com") {
+		t.Errorf("the request URL is in the entry and the reader cannot act on it:\n%s", msg)
+	}
+	for _, want := range []string{"403", "Checks"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the entry lost %q while being shortened:\n%s", want, msg)
+		}
+	}
+}
+
+// partialChecksClient sees some failures and fails on the rest, the way a
+// token that can read commit statuses but not check runs does.
+type partialChecksClient struct {
+	*github.Fake
+	failures []github.CheckFailure
+	err      error
+}
+
+func (c *partialChecksClient) ListFailedChecks(context.Context, string, string, string) ([]github.CheckFailure, error) {
+	return c.failures, c.err
+}
+
+// A failure that IS visible must still be acted on, even when another source
+// could not be read.
+//
+// The deployed token reaches commit statuses but is refused check runs, so
+// treating the error as total would throw away real, readable failures and
+// leave the pull request sitting red with nobody told.
+func TestMonitorPRs_ActsOnVisibleFailuresDespiteAPartialView(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	c := &partialChecksClient{
+		Fake:     github.NewFake(),
+		failures: []github.CheckFailure{{Name: "ci/lint", Conclusion: "failure", Summary: "unused import"}},
+		err:      errors.New("list checks for org/repo@abc: check runs: 403 Resource not accessible by personal access token"),
+	}
+	ghsync.NewSyncer(gdb, c).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase != "revising" {
+		t.Errorf("phase = %q, want revising: a visible failure was discarded because "+
+			"another source could not be read", tk.Phase)
+	}
+	if tk.PRFixAttempts != 1 {
+		t.Errorf("attempts = %d, want 1", tk.PRFixAttempts)
+	}
+}
+
+// But a partial view with nothing found is NOT green. An unreadable source
+// means an unknown number of invisible failures.
+func TestMonitorPRs_PartialViewWithNoFailuresIsNotReportedGreen(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	c := &partialChecksClient{
+		Fake: github.NewFake(), failures: nil,
+		err: errors.New("list checks for org/repo@abc: check runs: 403 Resource not accessible by personal access token"),
+	}
+	ghsync.NewSyncer(gdb, c).MonitorPullRequests(context.Background())
+
+	entries := statusEntries(t, gdb)
+	if len(entries) == 0 {
+		t.Fatal("nothing recorded for a partial view")
+	}
+	msg := entries[len(entries)-1].Message
+	if strings.Contains(strings.ToLower(msg), "all checks passing") {
+		t.Errorf("a partial view was reported as green:\n%s", msg)
+	}
+	if tk := reload(t, gdb); tk.Phase != "ready-for-review" || tk.PRFixAttempts != 0 {
+		t.Errorf("phase=%q attempts=%d; nothing to fix was found, so nothing should have been dispatched",
+			tk.Phase, tk.PRFixAttempts)
+	}
+}

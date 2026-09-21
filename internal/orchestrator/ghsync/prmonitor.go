@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"regexp"
 	"strings"
 
 	"github.com/leonp92/golem/internal/github"
@@ -114,15 +115,19 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 		log.Printf("pr monitor: ticket %s: record observation: %v", ticket.ID, err)
 	}
 
-	// An empty failure list from a failed call is not "no failures". Acting
-	// on it would report a red pull request as green, and letting it reach
-	// the fix logic below would dispatch the agent at a token permission no
-	// commit can grant.
-	if checksErr != nil {
-		return fmt.Errorf("list checks for pull request #%d: %w", status.Number, checksErr)
-	}
-
+	// A partial view is not a clean one. When a source could not be read,
+	// an empty result means "nothing visible", not "nothing wrong", so it
+	// must not be promoted to green and must not dispatch the agent at a
+	// token permission no commit can grant.
+	//
+	// Failures that ARE visible are still acted on. The deployed token
+	// reaches commit statuses while being refused check runs, and
+	// discarding a readable failure because a different source 403'd would
+	// leave the pull request red with nobody told.
 	if len(failures) == 0 {
+		if checksErr != nil {
+			return fmt.Errorf("list checks for pull request #%d: %w", status.Number, checksErr)
+		}
 		return nil
 	}
 	// A check no commit can clear stops the ticket outright instead of
@@ -207,27 +212,37 @@ func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
 // The same text is the change-detection fingerprint, so the two can never
 // disagree about whether something changed.
 func observation(status github.PullRequestStatus, failures []github.CheckFailure, checksErr error) string {
+	checksErrPartial := checksErr != nil && len(failures) > 0
 	switch {
-	case checksErr != nil:
+	case checksErr != nil && len(failures) == 0:
 		// Named so the operator can act: the overwhelmingly common cause is
 		// a fine-grained token without Checks:Read, and the raw API error
 		// says "Resource not accessible by personal access token" without
 		// ever naming the permission.
-		return fmt.Sprintf("Pull request #%d: checks could not be read — %s. "+
-			"Grant the GitHub token Checks: Read (and Pull requests: Read) or "+
-			"failing checks cannot be seen.", status.Number, firstLine(checksErr.Error()))
+		return fmt.Sprintf("Pull request #%d: checks could not be read (%s). "+
+			"Grant the GitHub token Actions: Read (or Checks: Read).",
+			status.Number, condenseAPIError(checksErr))
 	case status.Conflicted():
 		return fmt.Sprintf("Pull request #%d: conflicts with %s.", status.Number, status.BaseRef)
 	case len(failures) == 0:
 		return fmt.Sprintf("Pull request #%d: all checks passing, merges cleanly.", status.Number)
-	default:
-		names := make([]string, 0, len(failures))
-		for _, f := range failures {
-			names = append(names, f.Name)
-		}
-		return fmt.Sprintf("Pull request #%d: %d check(s) failing (%s).",
+	case checksErrPartial:
+		names := failureNames(failures)
+		return fmt.Sprintf("Pull request #%d: %d check(s) failing (%s); some checks could not be read.",
 			status.Number, len(failures), strings.Join(names, ", "))
+	default:
+		return fmt.Sprintf("Pull request #%d: %d check(s) failing (%s).",
+			status.Number, len(failures), strings.Join(failureNames(failures), ", "))
 	}
+}
+
+// failureNames lists the failing checks by name for a one-line summary.
+func failureNames(failures []github.CheckFailure) []string {
+	names := make([]string, 0, len(failures))
+	for _, f := range failures {
+		names = append(names, f.Name)
+	}
+	return names
 }
 
 // recordObservation writes the current observation to the activity log when
@@ -269,11 +284,29 @@ func (s *Syncer) setPhase(ticket db.Ticket, phase, message string) error {
 	})
 }
 
-// firstLine keeps a multi-line API error to one line so a status entry stays
-// readable in the activity feed.
-func firstLine(s string) string {
-	if i := strings.IndexByte(s, '\n'); i >= 0 {
-		return strings.TrimSpace(s[:i])
+// apiStatusRe picks the HTTP status and message out of a go-github error.
+// Those errors read
+//
+//	<what we were doing>: GET <url>: 403 Resource not accessible by … []
+//
+// and only the tail is worth showing: the URL and commit SHA are most of the
+// length and nothing a reader can act on.
+var apiStatusRe = regexp.MustCompile(`\b([45]\d{2}) ([^\[\n]+)`)
+
+// condenseAPIError reduces an error to the shortest form that still says
+// what happened. Anything unrecognised is returned as its first line rather
+// than dropped — an error whose shape we did not anticipate is precisely the
+// one worth reading.
+func condenseAPIError(err error) string {
+	if err == nil {
+		return ""
 	}
-	return strings.TrimSpace(s)
+	msg := err.Error()
+	if m := apiStatusRe.FindStringSubmatch(msg); m != nil {
+		return strings.TrimSpace(m[1] + " " + m[2])
+	}
+	if i := strings.IndexByte(msg, '\n'); i >= 0 {
+		msg = msg[:i]
+	}
+	return strings.TrimSpace(msg)
 }
