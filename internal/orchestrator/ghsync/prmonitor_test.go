@@ -265,3 +265,81 @@ func TestMonitorPRs_DoesNotActWhileRevising(t *testing.T) {
 		t.Errorf("attempts = %d, want 1; the monitor counted an attempt against work in progress", tk.PRFixAttempts)
 	}
 }
+
+// Some checks cannot be fixed by changing the code, and must not consume
+// fix attempts.
+//
+// Found live: pushing to this project's own pull request produced a CI run
+// with conclusion action_required — GitHub holding a fork's workflow for
+// maintainer approval. Nothing in the repository causes it and no commit
+// clears it; only a person with write access clicking "Approve and run"
+// does. Treated as an ordinary failure, the monitor would send the ticket to
+// revising, the agent would change something at random, the push would
+// produce another run held for approval, and it would repeat until the cap —
+// three agent runs and three pushes spent on a permission prompt.
+func TestMonitorPRs_ChecksOnlyAHumanCanClearGoStraightToNeedsAttention(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "blocked", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {
+		{Name: "CI", Conclusion: "action_required", NeedsHuman: true},
+	}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase != "needs-attention" {
+		t.Errorf("phase = %q, want needs-attention", tk.Phase)
+	}
+	if tk.PRFixAttempts != 0 {
+		t.Errorf("attempts = %d, want 0: no attempt may be spent on a check no commit can clear", tk.PRFixAttempts)
+	}
+	var entries []db.LogEntry
+	gdb.Where("ticket_id = ? AND entry_type = ?", "t1", "STATUS").Find(&entries)
+	var found bool
+	for _, e := range entries {
+		if strings.Contains(e.Message, "CI") && strings.Contains(strings.ToLower(e.Message), "approv") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the status entry does not say which check needs a person or what they must do")
+	}
+}
+
+// A mix must not let the human-only check hide the fixable one, nor the
+// fixable one drag the ticket into a doomed fix loop. A human is required
+// either way, so the ticket stops — and the message has to carry both.
+func TestMonitorPRs_MixedFailuresStopForTheHumanOne(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "blocked", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {
+		{Name: "Test", Conclusion: "failure", Summary: "TestFoo failed"},
+		{Name: "CI", Conclusion: "action_required", NeedsHuman: true},
+	}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase != "needs-attention" {
+		t.Errorf("phase = %q, want needs-attention", tk.Phase)
+	}
+	var entries []db.LogEntry
+	gdb.Where("ticket_id = ? AND entry_type = ?", "t1", "STATUS").Find(&entries)
+	all := ""
+	for _, e := range entries {
+		all += e.Message
+	}
+	for _, want := range []string{"Test", "CI"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("the human is not told about the %q failure:\n%s", want, all)
+		}
+	}
+}

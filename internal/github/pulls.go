@@ -107,6 +107,9 @@ type CheckFailure struct {
 	// only part of a failure the agent can act on without fetching logs, so
 	// it is carried even though it is often empty.
 	Summary string
+	// NeedsHuman marks a failure that no commit can clear, so attempting a
+	// fix is guaranteed to fail and only spends an agent run and a push.
+	NeedsHuman bool
 }
 
 // GetPullRequest returns the current state of a pull request.
@@ -159,6 +162,7 @@ func (c *client) ListFailedChecks(ctx context.Context, owner, repo, ref string) 
 				Conclusion: r.GetConclusion(),
 				DetailsURL: r.GetDetailsURL(),
 				Summary:    r.GetOutput().GetSummary(),
+				NeedsHuman: needsHumanConclusion(r.GetConclusion()),
 			})
 		}
 		if resp == nil || resp.NextPage == 0 {
@@ -215,4 +219,16 @@ func failedConclusion(c string) bool {
 		// pushing a fix.
 		return false
 	}
+}
+
+// needsHumanConclusion reports whether a failure is one no commit can clear.
+//
+// action_required is GitHub holding a workflow for maintainer approval —
+// what a fork's pull request gets when the repository requires approval for
+// outside contributors. Nothing in the tree causes it and no push clears it;
+// a person with write access clicking "Approve and run" does. Observed on
+// this project's own pull request, where every automatic fix attempt would
+// have produced another run held for the same approval.
+func needsHumanConclusion(c string) bool {
+	return c == "action_required"
 }

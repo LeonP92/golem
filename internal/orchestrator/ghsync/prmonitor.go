@@ -105,6 +105,19 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	if len(failures) == 0 {
 		return nil
 	}
+	// A check no commit can clear stops the ticket outright instead of
+	// spending fix attempts on it. Every attempt would push a change that
+	// cannot affect the outcome and produce the same blocked check again,
+	// so the cap would be reached having achieved nothing but noise on the
+	// pull request. The whole set is reported, not just the blocking one:
+	// the person who clears it should see the fixable failures too.
+	for _, f := range failures {
+		if f.NeedsHuman {
+			return s.setPhase(ticket, "needs-attention",
+				"This pull request needs a person; no commit will clear it.\n\n"+
+					describeFailures(status.Number, failures))
+		}
+	}
 	return s.needsFixing(ticket, describeFailures(status.Number, failures))
 }
 
@@ -117,6 +130,10 @@ func describeFailures(prNumber int, failures []github.CheckFailure) string {
 	fmt.Fprintf(&b, "%d check(s) are failing on pull request #%d.\n\n", len(failures), prNumber)
 	for _, f := range failures {
 		fmt.Fprintf(&b, "- %s (%s)\n", f.Name, f.Conclusion)
+		if f.NeedsHuman {
+			fmt.Fprintf(&b, "    Waiting on approval from someone with write access "+
+				"— \"Approve and run\" on the checks tab. No commit clears this.\n")
+		}
 		if sum := strings.TrimSpace(f.Summary); sum != "" {
 			fmt.Fprintf(&b, "    %s\n", sum)
 		}
