@@ -22,6 +22,10 @@ func seedPRTicket(t *testing.T, gdb *gorm.DB, phase string, attempts int) *db.Ti
 		BaseBranch: "main", Description: "d", Phase: phase,
 		IssueNumber: intPtr(7), PRNumber: intPtr(42),
 		PRURL: "https://github.com/org/repo/pull/42", PRFixAttempts: attempts,
+		// Assigned, because that is the only way a ticket reaches
+		// ready-for-review: a shem did the work. An unassigned one is a
+		// separate case with its own test.
+		AssignedShem: func() *uint { u := uint(1); return &u }(),
 	}
 	if err := gdb.Create(&tk).Error; err != nil {
 		t.Fatalf("seed ticket: %v", err)
@@ -599,5 +603,93 @@ func TestMonitorPRs_PartialViewWithNoFailuresIsNotReportedGreen(t *testing.T) {
 	if tk := reload(t, gdb); tk.Phase != "ready-for-review" || tk.PRFixAttempts != 0 {
 		t.Errorf("phase=%q attempts=%d; nothing to fix was found, so nothing should have been dispatched",
 			tk.Phase, tk.PRFixAttempts)
+	}
+}
+
+// Moving a ticket to revising is not enough to make anything happen.
+//
+// The human "request changes" path does three things: it flips the phase,
+// it creates a HumanInput of kind feedback, and it pushes ticket_revise to
+// the assigned shem. The monitor did only the first, plus a log entry for
+// the activity feed — which is not what the shem reads.
+//
+// The result, observed live on three real tickets: all three moved to
+// revising and then sat there. Nothing woke the shem, and because
+// resumableTickets deliberately excludes revising, not even a shem restart
+// would have picked them up. Had one been woken anyway, consumeFeedback
+// reads the HumanInput row, not the log, so the agent would have been told
+// to fix a pull request without being told what was wrong with it.
+func TestMonitorPRs_DispatchCreatesFeedbackAndWakesTheShem(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	shemID := uint(1) // seedPRTicket assigns this
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {
+		{Name: "Python services", Conclusion: "failure", Summary: "pytest: 3 failed"},
+	}}
+
+	s := ghsync.NewSyncer(gdb, f)
+	woken := make(chan uint, 4)
+	s.WakeShem = func(shem uint, ticketID, repo string) { woken <- shem }
+	s.MonitorPullRequests(context.Background())
+
+	if tk := reload(t, gdb); tk.Phase != "revising" {
+		t.Fatalf("phase = %q, want revising", tk.Phase)
+	}
+
+	// The feedback the agent actually reads.
+	var inputs []db.HumanInput
+	gdb.Where("ticket_id = ? AND kind = ? AND resolved_at IS NULL", "t1", "feedback").Find(&inputs)
+	if len(inputs) != 1 {
+		t.Fatalf("got %d unresolved feedback inputs, want 1: consumeFeedback reads this "+
+			"row, not the log, so the agent would be sent to fix an unnamed problem", len(inputs))
+	}
+	for _, want := range []string{"Python services", "pytest: 3 failed"} {
+		if !strings.Contains(inputs[0].Prompt, want) {
+			t.Errorf("the feedback row does not carry %q:\n%s", want, inputs[0].Prompt)
+		}
+	}
+
+	// And the shem has to be told, or the ticket sits in revising forever:
+	// the poll loop only asks for AVAILABLE tickets, and resumableTickets
+	// excludes revising.
+	select {
+	case got := <-woken:
+		if got != shemID {
+			t.Errorf("woke shem %d, want %d", got, shemID)
+		}
+	default:
+		t.Error("no shem was woken; the ticket is in revising with nothing working it")
+	}
+}
+
+// A ticket with no assigned shem must not be dispatched into a state where
+// nothing can pick it up.
+func TestMonitorPRs_UnassignedTicketIsNotSentToRevising(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	if err := gdb.Model(&db.Ticket{}).Where("id = ?", "t1").
+		Update("assigned_shem", nil).Error; err != nil {
+		t.Fatalf("unassign: %v", err)
+	}
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {{Name: "Test", Conclusion: "failure"}}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase == "revising" {
+		t.Error("an unassigned ticket was moved to revising; no shem owns it, the poll " +
+			"loop does not offer revising tickets, and resumableTickets excludes them")
+	}
+	if tk.Phase != "needs-attention" {
+		t.Errorf("phase = %q, want needs-attention", tk.Phase)
 	}
 }

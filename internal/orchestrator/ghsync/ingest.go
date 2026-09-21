@@ -24,6 +24,16 @@ const cursorOverlap = time.Minute
 type Syncer struct {
 	DB *gorm.DB
 	GH github.Client
+
+	// WakeShem notifies the shem that owns a ticket that there is work on
+	// it. Set by main.go to a push over the websocket hub; nil in tests and
+	// in any deployment without a hub, where the ticket still changes phase
+	// and the shem picks it up on its next connection.
+	//
+	// A function rather than the hub itself so this package does not depend
+	// on the transport, and so a test can observe the wake without standing
+	// one up.
+	WakeShem func(shemID uint, ticketID, repoRemote string)
 }
 
 // NewSyncer returns a Syncer over the given database and GitHub client.

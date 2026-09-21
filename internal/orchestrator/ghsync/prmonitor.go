@@ -6,6 +6,7 @@ import (
 	"log"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/config"
@@ -184,12 +185,21 @@ func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
 			ticket.PRFixAttempts, feedback))
 	}
 
-	// Phase change, attempt count and feedback commit together. A feedback
-	// entry without the phase change is an instruction nobody will act on;
-	// a phase change without the count is an attempt that does not count
-	// against the cap, which is how the loop this cap exists to stop gets
-	// back in.
-	return s.DB.Transaction(func(tx *gorm.DB) error {
+	// Nothing owns an unassigned ticket, so moving it to revising strands
+	// it: the shem poll loop offers only AVAILABLE tickets and
+	// resumableTickets deliberately excludes revising, so no restart
+	// recovers it either.
+	if ticket.AssignedShem == nil {
+		return s.setPhase(ticket, "needs-attention",
+			"No shem is assigned, so this cannot be fixed automatically.\n\n"+feedback)
+	}
+
+	// Phase change, attempt count, feedback and the log entry commit
+	// together. A feedback entry without the phase change is an instruction
+	// nobody will act on; a phase change without the count is an attempt
+	// that does not count against the cap, which is how the loop this cap
+	// exists to stop gets back in.
+	if err := s.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = ?", ticket.ID, "ready-for-review").
 			Updates(map[string]any{
@@ -204,8 +214,32 @@ func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
 			// human requesting changes, a requeue. Theirs wins.
 			return nil
 		}
+		// The HumanInput row is what the shem actually reads —
+		// consumeFeedback fetches kind=feedback, not the log — so without
+		// it the agent is sent to fix a pull request without being told
+		// what is wrong. The log entry is for the operator's activity feed.
+		// They are two different consumers and both are needed.
+		if err := tx.Create(&db.HumanInput{
+			TicketID:  ticket.ID,
+			Kind:      "feedback",
+			Prompt:    feedback,
+			CreatedAt: time.Now(),
+		}).Error; err != nil {
+			return err
+		}
 		return appendLog(tx, ticket.ID, "HUMAN_FEEDBACK", "orchestrator", "developer", feedback)
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Wake the shem AFTER the transaction commits, so it cannot look for
+	// work that is not visible yet. Best effort: if the push fails the
+	// ticket is still correctly in revising, and the shem finds it when it
+	// next reconnects.
+	if s.WakeShem != nil {
+		s.WakeShem(*ticket.AssignedShem, ticket.ID, ticket.RepoRemote)
+	}
+	return nil
 }
 
 // observation renders what the monitor saw into a line for the activity log.

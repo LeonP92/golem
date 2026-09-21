@@ -306,8 +306,19 @@ func main() {
 		if err != nil {
 			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)
 		} else {
+			syncer := ghsync.NewSyncer(gdb, client)
+			// How the pull-request monitor tells a shem it has work. Same
+			// message the human "request changes" button sends, because it
+			// is the same situation: feedback on pushed work.
+			syncer.WakeShem = func(shemID uint, ticketID, repoRemote string) {
+				if err := hub.Push(shemID, ws.WSMessage{
+					Type: "ticket_revise", TicketID: &ticketID, Repo: repoRemote,
+				}); err != nil {
+					log.Printf("pr monitor: wake shem %d for ticket %s: %v", shemID, ticketID, err)
+				}
+			}
 			ghWorker = ghsync.NewWorker(
-				ghsync.NewSyncer(gdb, client),
+				syncer,
 				cfg.GitHub.PollIntervalDuration(),
 				cfg.GitHub.DrainIntervalDuration(),
 			)
