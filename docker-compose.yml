@@ -37,6 +37,12 @@ services:
       # Empty is the same as unset here: config.TriggerLabel trims and ignores
       # a blank value, falling back to github.default_label and then "golem".
       - GOLEM_GITHUB_LABEL=${GOLEM_GITHUB_LABEL:-}
+      # How many times the shem may try to fix a failing pull request
+      # before the ticket stops for a human. Empty is the same as unset:
+      # MaxPRFixAttempts trims and ignores a blank value and falls back to
+      # github.pr_fix_attempts, then 3. Use -1 for unlimited, 0 to never
+      # attempt a fix.
+      - GOLEM_PR_FIX_ATTEMPTS=${GOLEM_PR_FIX_ATTEMPTS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s

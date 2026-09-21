@@ -3,6 +3,7 @@ package deploy
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -344,5 +345,53 @@ func TestOrchestratorPortIsConfigurableWithoutMovingTheInternalPort(t *testing.T
 	if !strings.Contains(shemYAML, "http://orchestrator:"+container) {
 		t.Errorf("deploy/shem.yaml does not point at orchestrator:%s; the shem would never "+
 			"connect", container)
+	}
+}
+
+// Every operator setting the orchestrator reads from its environment must
+// actually be passed into its container.
+//
+// GOLEM_PR_FIX_ATTEMPTS was added to the config code and documented in
+// .env.example, and never wired into docker-compose.yml. Inside the
+// container it was simply unset, so the code fell back to its default and
+// the setting did nothing at all in the only deployment anyone uses —
+// including the 0 that is supposed to disable automatic fixing entirely.
+// Nothing failed; the value in .env was read by compose, matched no
+// variable, and was dropped.
+//
+// The list is derived from the config package's own constants rather than
+// written out here, so the next setting added is covered without anyone
+// remembering to extend this test.
+func TestOrchestratorReceivesEveryEnvSettingItReads(t *testing.T) {
+	src := repoFile(t, "internal/orchestrator/config/config.go")
+	names := regexp.MustCompile(`"(GOLEM_[A-Z_]+)"`).FindAllStringSubmatch(src, -1)
+	if len(names) == 0 {
+		t.Fatal("no GOLEM_* env names found in config.go; this test would pass vacuously")
+	}
+
+	var compose portsFile
+	if err := yaml.Unmarshal([]byte(repoFile(t, "docker-compose.yml")), &compose); err != nil {
+		t.Fatalf("parse docker-compose.yml: %v", err)
+	}
+	env := compose.Services["orchestrator"].Environment
+
+	// GOLEM_PORT is the one deliberate omission: it moves the PUBLISHED
+	// port only, and passing it in would move the container's listener away
+	// from the port the healthcheck and the shem both use. That exception
+	// is pinned by its own test.
+	exempt := map[string]bool{"GOLEM_PORT": true}
+
+	seen := map[string]bool{}
+	for _, m := range names {
+		name := m[1]
+		if exempt[name] || seen[name] {
+			continue
+		}
+		seen[name] = true
+		if _, ok := envValue(env, name); !ok {
+			t.Errorf("config.go reads %s but docker-compose.yml never passes it to the "+
+				"orchestrator; in the container it is unset and the setting silently "+
+				"does nothing", name)
+		}
 	}
 }
