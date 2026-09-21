@@ -28,6 +28,13 @@ type Worker struct {
 	pollInterval  time.Duration
 	drainInterval time.Duration
 
+	// PRMonitorInterval is how often open pull requests are examined. Set
+	// after construction (as main.go does with srv.ManualSyncCooldown)
+	// rather than taken as a fourth NewWorker parameter, which would have
+	// meant touching every existing caller to say "unchanged". Zero
+	// disables the watch.
+	PRMonitorInterval time.Duration
+
 	mu       sync.Mutex
 	triggers map[uint]chan struct{} // repo ID → buffered(1) manual-trigger slot
 	notify   chan uint              // repo IDs whose slot has been claimed
@@ -49,6 +56,8 @@ func NewWorker(s *Syncer, pollInterval, drainInterval time.Duration) *Worker {
 		notify:        make(chan uint, notifyBuffer),
 		stop:          make(chan struct{}),
 		exited:        make(chan struct{}),
+
+		PRMonitorInterval: 2 * time.Minute,
 	}
 }
 
@@ -134,9 +143,10 @@ func (w *Worker) TriggerSync(repoID uint) bool {
 
 // Start launches both loops. It does not block.
 func (w *Worker) Start(ctx context.Context) {
-	w.done.Add(2)
+	w.done.Add(3)
 	go w.ingestLoop(ctx)
 	go w.drainLoop(ctx)
+	go w.prMonitorLoop(ctx)
 }
 
 // Stop signals both loops and waits for them to exit. It is safe to call more
@@ -207,6 +217,35 @@ func (w *Worker) ingestOne(ctx context.Context, repoID uint) {
 	}
 	if err := w.syncer.IngestRepo(ctx, &repo); err != nil {
 		log.Printf("ghsync: manual sync %s: %v", repo.RepoRemote, err)
+	}
+}
+
+// prMonitorLoop watches open pull requests: failing checks, merge conflicts,
+// and closure. Its own ticker, because it costs GitHub API calls per open
+// pull request and must not run at the drain rate — see
+// config.PRMonitorIntervalDuration.
+//
+// A zero or negative interval disables it, which is how a deployment that
+// does not want Golem touching its pull requests turns the whole thing off.
+func (w *Worker) prMonitorLoop(ctx context.Context) {
+	defer w.done.Done()
+	defer w.signalExited()
+	interval := w.PRMonitorInterval
+	if interval <= 0 {
+		<-w.stop
+		return
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-w.stop:
+			return
+		case <-ticker.C:
+			w.syncer.MonitorPullRequests(ctx)
+		}
 	}
 }
 

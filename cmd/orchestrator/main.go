@@ -311,10 +311,12 @@ func main() {
 				cfg.GitHub.PollIntervalDuration(),
 				cfg.GitHub.DrainIntervalDuration(),
 			)
+			ghWorker.PRMonitorInterval = cfg.GitHub.PRMonitorIntervalDuration()
 			ghWorker.Start(context.Background())
 			defer ghWorker.Stop()
-			log.Printf("github sync: started (ingest %v, drain %v)",
-				cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration())
+			log.Printf("github sync: started (ingest %v, drain %v, pr monitor %v, max pr fix attempts %d)",
+				cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration(),
+				cfg.GitHub.PRMonitorIntervalDuration(), cfg.GitHub.MaxPRFixAttempts())
 		}
 	}
 

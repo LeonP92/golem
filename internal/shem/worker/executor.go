@@ -233,6 +233,24 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			// Make origin/<base> current before the agent runs. A revision
+			// asked for by the pull-request monitor may be "this no longer
+			// merges into main", and the fix is `git merge origin/main` —
+			// which needs that ref to exist locally and to be up to date.
+			//
+			// The agent cannot fetch it itself: it runs token-free, so on a
+			// private repository the fetch would simply fail auth. This
+			// routes it the way recover.go already does — root fetches into
+			// the Golem-owned mirror with the credential, bundles it, and
+			// the agent fetches from the bundle with no network at all.
+			//
+			// Best effort: a ticket whose revision is about something else
+			// must not fail because the base could not be refreshed.
+			if claim.BaseBranch != "" {
+				if err := fetchBranchForAgent(ctx, repoPath, claim.RepoRemote, claim.BaseBranch); err != nil {
+					log.Printf("executor: refresh origin/%s for %s: %v", claim.BaseBranch, ticketID, err)
+				}
+			}
 			postStatus(c, ticketID, "Starting agent (claude) — revision phase")
 			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Branch, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
 				return err

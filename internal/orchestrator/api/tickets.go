@@ -36,8 +36,13 @@ func toTicketResponse(t db.Ticket, names map[uint]string) ticketResponse {
 
 // ClaimResponse is returned by a successful ticket claim.
 type ClaimResponse struct {
-	TicketID        string        `json:"ticket_id"`
-	Branch          string        `json:"branch"`
+	TicketID string `json:"ticket_id"`
+	Branch   string `json:"branch"`
+	// BaseBranch is what a conflict is resolved against. The shem fetches
+	// it into the agent's repo so `git merge origin/<base>` works without
+	// handing the agent a credential, and it cannot be read from the
+	// worktree's own config because the agent owns and can rewrite that.
+	BaseBranch      string        `json:"base_branch"`
 	Title           string        `json:"title"`
 	RepoRemote      string        `json:"repo_remote"`
 	Description     string        `json:"description"`
@@ -107,6 +112,7 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	return &ClaimResponse{
 		TicketID:        ticketID,
 		Branch:          ticket.Branch,
+		BaseBranch:      ticket.BaseBranch,
 		Title:           ticket.Title,
 		RepoRemote:      ticket.RepoRemote,
 		Description:     ticket.Description,
@@ -206,6 +212,7 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 		claims = append(claims, ClaimResponse{
 			TicketID:        t.ID,
 			Branch:          t.Branch,
+			BaseBranch:      t.BaseBranch,
 			Title:           t.Title,
 			RepoRemote:      t.RepoRemote,
 			Description:     t.Description,
@@ -368,6 +375,7 @@ func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, er
 	return &ClaimResponse{
 		TicketID:        ticketID,
 		Branch:          ticket.Branch,
+		BaseBranch:      ticket.BaseBranch,
 		RepoRemote:      ticket.RepoRemote,
 		Description:     ticket.Description,
 		CheckpointPhase: &revisingPhase,

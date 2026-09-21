@@ -91,6 +91,11 @@ type Client interface {
 	// pull request that already exists is reported rather than re-created.
 	FindPullRequest(ctx context.Context, owner, repo, head string) (PullRequest, bool, error)
 	DefaultBranch(ctx context.Context, owner, repo string) (string, error)
+	// GetPullRequest and ListFailedChecks are what the pull-request monitor
+	// reads: whether the branch still merges, whether CI is green, and
+	// whether the pull request is still open at all.
+	GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequestStatus, error)
+	ListFailedChecks(ctx context.Context, owner, repo, ref string) ([]CheckFailure, error)
 }
 
 type client struct {

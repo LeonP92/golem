@@ -115,12 +115,23 @@ type Ticket struct {
 	// generation failed or was not attempted, in which case
 	// enqueuePRIfReady falls back to the minimal body — a missing
 	// description is an inconvenience, a missing pull request is lost work.
-	PRBody       string    `gorm:"not null;default:''" json:"-"`
-	PRNumber     *int      `json:"pr_number"`
-	PRURL        string    `json:"pr_url"`
-	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	PRBody   string `gorm:"not null;default:''" json:"-"`
+	PRNumber *int   `json:"pr_number"`
+	PRURL    string `json:"pr_url"`
+	// PRFixAttempts counts how many times the pull-request monitor has sent
+	// this ticket back to revising to fix a failing check or a merge
+	// conflict. It is compared against github.MaxPRFixAttempts and is what
+	// stops a failure the agent cannot fix from looping forever.
+	//
+	// Not reset when the pull request goes green: the budget is per ticket,
+	// not per problem. A ticket that needed three attempts and then broke
+	// again has already shown it is not converging, and a human should see
+	// it. A requeue clears it, because that is a human deciding to start
+	// the work over.
+	PRFixAttempts int       `gorm:"not null;default:0" json:"pr_fix_attempts"`
+	BranchPushed  bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {

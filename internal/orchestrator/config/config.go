@@ -34,13 +34,18 @@ type GitHubConfig struct {
 	DrainInterval      string `yaml:"drain_interval"`
 	ManualSyncCooldown string `yaml:"manual_sync_cooldown"`
 	APIBase            string `yaml:"api_base"`
+	PRFixAttempts      int    `yaml:"pr_fix_attempts"`
+	PRMonitorInterval  string `yaml:"pr_monitor_interval"`
 }
 
 const (
 	defaultPollInterval       = 15 * time.Minute
 	defaultDrainInterval      = 20 * time.Second
 	defaultManualSyncCooldown = time.Minute
+	defaultPRMonitorInterval  = 2 * time.Minute
 	defaultTokenEnv           = "GOLEM_GITHUB_TOKEN"
+	defaultPRFixAttemptsEnv   = "GOLEM_PR_FIX_ATTEMPTS"
+	defaultPRFixAttempts      = 3
 	defaultLabelEnv           = "GOLEM_GITHUB_LABEL"
 	// defaultTriggerLabel mirrors ghsync.DefaultTriggerLabel. Duplicated
 	// rather than imported to keep config free of a dependency on the sync
@@ -74,6 +79,32 @@ func (g GitHubConfig) TriggerLabel() string {
 	return defaultTriggerLabel
 }
 
+// MaxPRFixAttempts is how many times the shem may try to fix a pull request
+// — a failing check or a merge conflict — before the ticket stops and waits
+// for a human. Resolved from GOLEM_PR_FIX_ATTEMPTS, then
+// github.pr_fix_attempts, then 3.
+//
+// A cap is not optional. Each attempt is a full agent run, a push, and a CI
+// cycle, and a failure the agent cannot fix produces exactly the same
+// failure again: without a bound that is an unending loop that spends money
+// and fills the pull request with commits for as long as nobody notices.
+//
+// Zero is a real setting, not an unset one: it means never attempt a fix,
+// report the problem and wait. That is why this does not use the "0 means
+// use the default" shorthand that ListenPort can afford — there, 0 is not a
+// port anyone can mean.
+func (g GitHubConfig) MaxPRFixAttempts() int {
+	if raw := strings.TrimSpace(os.Getenv(defaultPRFixAttemptsEnv)); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			return n
+		}
+	}
+	if g.PRFixAttempts > 0 {
+		return g.PRFixAttempts
+	}
+	return defaultPRFixAttempts
+}
+
 // PollIntervalDuration returns the ingest interval, defaulting to 15 minutes.
 func (g GitHubConfig) PollIntervalDuration() time.Duration {
 	return parseDurationOr("github.poll_interval", g.PollInterval, defaultPollInterval)
@@ -85,6 +116,20 @@ func (g GitHubConfig) PollIntervalDuration() time.Duration {
 // prompt for retry backoff to mean anything.
 func (g GitHubConfig) DrainIntervalDuration() time.Duration {
 	return parseDurationOr("github.drain_interval", g.DrainInterval, defaultDrainInterval)
+}
+
+// PRMonitorIntervalDuration returns how often open pull requests are checked
+// for failing checks, conflicts and closure. Defaults to 2 minutes.
+//
+// Deliberately its own interval rather than sharing the drain ticker. Drain
+// runs every 20 seconds because it is delivering queued writes and latency
+// there is user-visible; the monitor spends two GitHub API calls PER OPEN
+// PULL REQUEST per pass, so at the drain rate a handful of open pull
+// requests would burn the hourly rate limit on polling alone. It is also
+// slower than ingest's 15 minutes, because a pull request sitting red with
+// nobody told is worse than an issue being noticed late.
+func (g GitHubConfig) PRMonitorIntervalDuration() time.Duration {
+	return parseDurationOr("github.pr_monitor_interval", g.PRMonitorInterval, defaultPRMonitorInterval)
 }
 
 // ManualSyncCooldownDuration returns the minimum gap between manual syncs of

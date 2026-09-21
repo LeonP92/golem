@@ -42,6 +42,7 @@ type LogPayload struct {
 type ClaimResponse struct {
 	TicketID        string        `json:"ticket_id"`
 	Branch          string        `json:"branch"`
+	BaseBranch      string        `json:"base_branch"`
 	RepoRemote      string        `json:"repo_remote"`
 	Description     string        `json:"description"`
 	CheckpointPhase *string       `json:"checkpoint_phase"`

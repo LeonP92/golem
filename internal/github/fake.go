@@ -25,6 +25,12 @@ type Fake struct {
 	PRs      []PullRequest
 	Default  string // default branch returned by DefaultBranch
 
+	// PRStatuses and FailedChecks drive the pull-request monitor. Both are
+	// keyed so a test can set up one unhealthy pull request without having
+	// to describe every other one: an absent entry means healthy.
+	PRStatuses   map[int]PullRequestStatus
+	FailedChecks map[string][]CheckFailure
+
 	// prByHead indexes PRs by head branch, so CreatePullRequest can refuse a
 	// second pull request from the same branch the way GitHub does (422) and
 	// FindPullRequest can answer for it. Without this the fake accepted
@@ -266,6 +272,34 @@ func (f *Fake) DefaultBranch(_ context.Context, _, _ string) (string, error) {
 		return "", err
 	}
 	return f.Default, nil
+}
+
+// PRStatus is what GetPullRequest returns, keyed by pull request number.
+// A number with no entry answers as an open, clean pull request, so a test
+// that does not care about the monitor gets the healthy case for free.
+func (f *Fake) GetPullRequest(_ context.Context, _, _ string, number int) (PullRequestStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("GetPullRequest"); err != nil {
+		return PullRequestStatus{}, err
+	}
+	if st, ok := f.PRStatuses[number]; ok {
+		return st, nil
+	}
+	mergeable := true
+	return PullRequestStatus{
+		Number: number, State: "open", Mergeable: &mergeable,
+		MergeableState: "clean", HeadSHA: "headsha", BaseRef: "main",
+	}, nil
+}
+
+func (f *Fake) ListFailedChecks(_ context.Context, _, _, ref string) ([]CheckFailure, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("ListFailedChecks"); err != nil {
+		return nil, err
+	}
+	return f.FailedChecks[ref], nil
 }
 
 // CallsSnapshot returns a copy of the method-call log recorded so far. Safe
