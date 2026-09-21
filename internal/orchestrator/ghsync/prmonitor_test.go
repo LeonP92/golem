@@ -2,6 +2,7 @@ package ghsync_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -413,5 +414,70 @@ func TestMonitorPRs_RecordsTheChangeWhenChecksGoRed(t *testing.T) {
 	last := entries[len(entries)-1].Message
 	if !strings.Contains(last, "Lint") {
 		t.Errorf("the entry does not name the failing check:\n%s", last)
+	}
+}
+
+// checksErrClient fails ListFailedChecks the way a token without the Checks
+// permission does, while the pull request itself still reads fine.
+type checksErrClient struct {
+	*github.Fake
+	err error
+}
+
+func (c *checksErrClient) ListFailedChecks(context.Context, string, string, string) ([]github.CheckFailure, error) {
+	return nil, c.err
+}
+
+// A token that cannot read checks must not make the monitor silent, and must
+// never be mistaken for a green pull request.
+//
+// Found live: the deployed fine-grained PAT lacked Checks:Read, so every
+// pass returned "403 Resource not accessible by personal access token". The
+// error aborted the pass before anything was recorded, so the ticket page
+// showed nothing at all and the only evidence was in container logs that a
+// rebuild then destroyed. From the operator's side this was indistinguishable
+// from the monitor not running — which is exactly the complaint that found it.
+//
+// The greater danger is the other way the error could have been handled: an
+// unreadable check list is an EMPTY failure list, and treating that as "no
+// failures" reports a red pull request as passing.
+func TestMonitorPRs_UnreadableChecksAreReportedNotMistakenForGreen(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	c := &checksErrClient{Fake: github.NewFake(),
+		err: errors.New("403 Resource not accessible by personal access token")}
+	s := ghsync.NewSyncer(gdb, c)
+	s.MonitorPullRequests(context.Background())
+
+	entries := statusEntries(t, gdb)
+	if len(entries) == 0 {
+		t.Fatal("checks could not be read and nothing was recorded; the monitor is " +
+			"invisible exactly when something is wrong with it")
+	}
+	msg := entries[len(entries)-1].Message
+	if strings.Contains(strings.ToLower(msg), "all checks passing") {
+		t.Errorf("unreadable checks were reported as passing:\n%s", msg)
+	}
+	// The operator has to be able to act on it, so the entry names the
+	// permission rather than only echoing the API error.
+	for _, want := range []string{"Checks", "403"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("the entry does not mention %q, so the operator cannot tell "+
+				"what to fix:\n%s", want, msg)
+		}
+	}
+
+	// And it must not churn: a missing permission persists, so it is
+	// recorded once and then stays quiet like any other unchanged state.
+	s.MonitorPullRequests(context.Background())
+	if again := statusEntries(t, gdb); len(again) != len(entries) {
+		t.Errorf("entries grew from %d to %d; a persistent permission error is "+
+			"logged on every pass", len(entries), len(again))
+	}
+
+	// No fix attempt: no commit adds a token permission.
+	if tk := reload(t, gdb); tk.PRFixAttempts != 0 || tk.Phase != "ready-for-review" {
+		t.Errorf("phase=%q attempts=%d; an unreadable check list must not dispatch the agent",
+			tk.Phase, tk.PRFixAttempts)
 	}
 }

@@ -98,17 +98,28 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 			status.Number, base, base))
 	}
 
-	failures, err := s.GH.ListFailedChecks(ctx, repo.Owner, repo.Name, status.HeadSHA)
-	if err != nil {
-		return err
-	}
+	// checksErr is carried rather than returned. An unreadable check list is
+	// something to REPORT, not a reason to abandon the pass: returning here
+	// meant nothing was recorded, so a token missing the Checks permission
+	// made the monitor completely silent and the only evidence was a line in
+	// the container log. Observed in deployment, where the fine-grained PAT
+	// lacked Checks:Read and every pass 403'd.
+	failures, checksErr := s.GH.ListFailedChecks(ctx, repo.Owner, repo.Name, status.HeadSHA)
 
 	// Record what was seen, but only when it differs from last time. This is
 	// what makes the monitor visible: without it a healthy pull request
 	// produced no activity at all, so "watching, all fine" and "not running"
 	// were the same thing on screen.
-	if err := s.recordObservation(ticket, status, failures); err != nil {
+	if err := s.recordObservation(ticket, status, failures, checksErr); err != nil {
 		log.Printf("pr monitor: ticket %s: record observation: %v", ticket.ID, err)
+	}
+
+	// An empty failure list from a failed call is not "no failures". Acting
+	// on it would report a red pull request as green, and letting it reach
+	// the fix logic below would dispatch the agent at a token permission no
+	// commit can grant.
+	if checksErr != nil {
+		return fmt.Errorf("list checks for pull request #%d: %w", status.Number, checksErr)
 	}
 
 	if len(failures) == 0 {
@@ -195,8 +206,16 @@ func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
 // observation renders what the monitor saw into a line for the activity log.
 // The same text is the change-detection fingerprint, so the two can never
 // disagree about whether something changed.
-func observation(status github.PullRequestStatus, failures []github.CheckFailure) string {
+func observation(status github.PullRequestStatus, failures []github.CheckFailure, checksErr error) string {
 	switch {
+	case checksErr != nil:
+		// Named so the operator can act: the overwhelmingly common cause is
+		// a fine-grained token without Checks:Read, and the raw API error
+		// says "Resource not accessible by personal access token" without
+		// ever naming the permission.
+		return fmt.Sprintf("Pull request #%d: checks could not be read — %s. "+
+			"Grant the GitHub token Checks: Read (and Pull requests: Read) or "+
+			"failing checks cannot be seen.", status.Number, firstLine(checksErr.Error()))
 	case status.Conflicted():
 		return fmt.Sprintf("Pull request #%d: conflicts with %s.", status.Number, status.BaseRef)
 	case len(failures) == 0:
@@ -217,8 +236,8 @@ func observation(status github.PullRequestStatus, failures []github.CheckFailure
 // The comparison is against a stored fingerprint rather than the previous
 // log entry: reading back the last entry would make this depend on nothing
 // else ever writing one, and the phase transitions below write their own.
-func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestStatus, failures []github.CheckFailure) error {
-	seen := observation(status, failures)
+func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestStatus, failures []github.CheckFailure, checksErr error) error {
+	seen := observation(status, failures, checksErr)
 	if seen == ticket.PRLastState {
 		return nil
 	}
@@ -248,4 +267,13 @@ func (s *Syncer) setPhase(ticket db.Ticket, phase, message string) error {
 		}
 		return appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", message)
 	})
+}
+
+// firstLine keeps a multi-line API error to one line so a status entry stays
+// readable in the activity feed.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return strings.TrimSpace(s[:i])
+	}
+	return strings.TrimSpace(s)
 }
