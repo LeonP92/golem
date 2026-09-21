@@ -40,7 +40,12 @@ func (s *Syncer) MonitorPullRequests(ctx context.Context) {
 	// that closes while the shem is mid-revision still has to end the watch,
 	// and only the check/conflict handling below is limited to
 	// ready-for-review.
-	if err := s.DB.Where("pr_number IS NOT NULL AND phase <> ?", "closed").Find(&tickets).Error; err != nil {
+	// "stopped" is excluded alongside "closed": a human has interrupted the
+	// ticket, and dispatching a fix onto it would be the monitor overruling
+	// them. The pull request is left exactly as it is until someone starts
+	// the ticket again.
+	if err := s.DB.Where("pr_number IS NOT NULL AND phase NOT IN ?",
+		[]string{"closed", "stopped"}).Find(&tickets).Error; err != nil {
 		log.Printf("pr monitor: load tickets: %v", err)
 		return
 	}

@@ -258,6 +258,18 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 			w.mu.Unlock()
 			go w.cleanupTicket(msg.Repo, *msg.TicketID)
 		}
+	case "ticket_stop":
+		// A human interrupted this ticket. Cancel the run immediately;
+		// the orchestrator has already moved it to stopped, so nothing
+		// here will pick it up again.
+		if msg.TicketID != nil {
+			log.Printf("worker: ticket %s stopped by a human — cancelling", *msg.TicketID)
+			w.mu.Lock()
+			if cancel, ok := w.running[*msg.TicketID]; ok {
+				cancel()
+			}
+			w.mu.Unlock()
+		}
 	case "ticket_revise":
 		if msg.TicketID != nil {
 			go w.tryReviseAndRun(*msg.TicketID)

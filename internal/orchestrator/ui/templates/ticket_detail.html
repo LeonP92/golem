@@ -158,6 +158,51 @@
     {{end}}
     {{end}}
 
+    {{/* Stop is offered from every phase that is not already finished or
+         stopped, because the point of it is to interrupt something that is
+         running — and the phase a human most wants to interrupt is whichever
+         one is taking too long. */}}
+    {{if and (ne .Ticket.Phase "stopped") (ne .Ticket.Phase "closed")}}
+    <div class="card bg-base-100 shadow-sm border border-base-300">
+      <div class="card-body p-4">
+        <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+          <input type="hidden" name="action" value="stop">
+          <button type="submit" class="btn btn-sm btn-error btn-outline gap-1.5">
+            <span class="iconify" data-icon="heroicons:stop-circle"></span>
+            Stop
+          </button>
+          <p class="text-xs text-base-content/50 mt-2">
+            Interrupts the shem now. Nothing will pick this ticket up again until you start it.
+          </p>
+        </form>
+      </div>
+    </div>
+    {{end}}
+
+    {{if eq .Ticket.Phase "stopped"}}
+    <div class="card bg-base-100 shadow-sm border border-warning">
+      <div class="card-body p-4">
+        <h2 class="font-semibold text-sm text-base-content/70 mb-2 flex items-center gap-1.5">
+          <span class="iconify" data-icon="heroicons:pause-circle"></span>
+          Stopped
+        </h2>
+        <p class="text-sm text-base-content/60 mb-2">
+          Interrupted{{if .Ticket.StoppedFromPhase}} during {{template "phase_label" .Ticket.StoppedFromPhase}}{{end}}.
+          Only you can start it again.
+        </p>
+        <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+          <input type="hidden" name="action" value="resume">
+          <button type="submit" class="btn btn-sm btn-primary gap-1.5">
+            <span class="iconify" data-icon="heroicons:play-circle"></span>
+            Start again
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
+
     <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box">
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-base-content/40" data-icon="heroicons:information-circle"></span>

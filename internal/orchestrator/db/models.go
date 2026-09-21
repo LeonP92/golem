@@ -139,10 +139,14 @@ type Ticket struct {
 	// dispatched for. A failure reported against a commit already acted on
 	// is the SAME failure — CI has not re-run yet — and dispatching again
 	// spends an attempt on work already in flight.
-	PRDispatchedSHA string    `gorm:"not null;default:''" json:"pr_dispatched_sha"`
-	BranchPushed    bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	PRDispatchedSHA string `gorm:"not null;default:''" json:"pr_dispatched_sha"`
+	// StoppedFromPhase is the phase a human interrupted, remembered so that
+	// starting the ticket again puts it back where it was rather than
+	// somewhere a rule had to guess.
+	StoppedFromPhase string    `gorm:"not null;default:''" json:"stopped_from_phase"`
+	BranchPushed     bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {

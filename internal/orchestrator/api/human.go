@@ -130,6 +130,10 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		h.actionClose(w, r, id)
 	case "needs-attention":
 		h.actionNeedsAttention(w, r, id)
+	case "stop":
+		h.actionStop(w, r, id)
+	case "resume":
+		h.actionResume(w, r, id)
 	case "request-changes":
 		if body.Feedback == "" {
 			http.Error(w, "feedback is required for request-changes", http.StatusBadRequest)

@@ -882,3 +882,46 @@ func TestMonitorPRs_UnlimitedStillWillNotRedispatchTheSameCommit(t *testing.T) {
 		t.Errorf("phase = %q, want ready-for-review", tk.Phase)
 	}
 }
+
+// A human stopped this ticket. The monitor must not overrule them.
+//
+// Every other automatic path excludes stopped; this one has to as well, or
+// a failing check would drag an interrupted ticket straight back into
+// revising and the stop would mean nothing.
+func TestMonitorPRs_LeavesStoppedTicketsAlone(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "stopped", 0)
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(false),
+		MergeableState: "dirty", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {{Name: "Test", Conclusion: "failure"}}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase != "stopped" {
+		t.Errorf("phase = %q; the monitor restarted a ticket a human had stopped", tk.Phase)
+	}
+	if tk.PRFixAttempts != 0 {
+		t.Errorf("attempts = %d, want 0", tk.PRFixAttempts)
+	}
+	if len(statusEntries(t, gdb)) != 0 {
+		t.Error("the monitor wrote to a stopped ticket; it should not be looking at it at all")
+	}
+
+	// Asserted on the CALLS, not only on the outcome. The outcome is
+	// defended three deep — the query excludes stopped, monitorPullRequest
+	// returns early on any phase but ready-for-review, and the dispatch
+	// UPDATE is itself conditional on ready-for-review — so removing any
+	// one of them leaves the ticket untouched and a state-only assertion
+	// passes while the guard it was written for is gone. Checking that
+	// GitHub was never asked about this pull request is the one assertion
+	// that fails when the query stops excluding stopped.
+	for _, call := range f.CallsSnapshot() {
+		if call == "GetPullRequest" || call == "ListFailedChecks" {
+			t.Errorf("the monitor called %s for a stopped ticket; a human has "+
+				"interrupted it and its pull request should not even be looked at", call)
+		}
+	}
+}

@@ -199,7 +199,11 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 		//
 		// The way out of needs-attention is a human: Re-queue, which clears
 		// the checkpoint and starts the ticket over, or Close.
-		[]string{"unassigned", "ready-for-review", "revising", "closed", "needs-attention"},
+		// "stopped" is here for a different reason from the rest: those are
+		// phases where there is nothing to resume, this is one where a
+		// human has said not to. A stop that a shem restart undoes is not
+		// a stop.
+		[]string{"unassigned", "ready-for-review", "revising", "closed", "needs-attention", "stopped"},
 	).Find(&tickets)
 
 	claims := make([]ClaimResponse, 0, len(tickets))

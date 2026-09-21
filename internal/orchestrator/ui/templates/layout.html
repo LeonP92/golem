@@ -1,4 +1,4 @@
-{{define "phase_label"}}{{if eq . "pending-approval"}}Pending Approval{{else if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
+{{define "phase_label"}}{{if eq . "pending-approval"}}Pending Approval{{else if eq . "unassigned"}}Unassigned{{else if eq . "claimed"}}Claimed{{else if eq . "brainstorm"}}Brainstorm{{else if eq . "plan"}}Planning{{else if eq . "implement"}}Implementing{{else if eq . "review"}}In Review{{else if eq . "ready-for-review"}}Ready for Review{{else if eq . "revising"}}Revising{{else if eq . "needs-attention"}}Needs Attention{{else if eq . "stopped"}}Stopped{{else if eq . "closed"}}Closed{{else}}{{.}}{{end}}{{end}}
 {{define "layout"}}<!DOCTYPE html>
 <html lang="en" data-theme="nord" id="html-root">
 <script>
@@ -77,6 +77,7 @@
     .phase-ready-for-review { background-color: #ccfbf1; color: #0f766e; }
     .phase-revising { background-color: #ffedd5; color: #c2410c; }
     .phase-needs-attention { background-color: #fee2e2; color: #991b1b; }
+    .phase-stopped { background-color: #e5e7eb; color: #374151; }
     .phase-closed { background-color: #f3f4f6; color: #9ca3af; }
 
     /* Rendered markdown styles for .md-content elements */
