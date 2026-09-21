@@ -102,6 +102,15 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	if err != nil {
 		return err
 	}
+
+	// Record what was seen, but only when it differs from last time. This is
+	// what makes the monitor visible: without it a healthy pull request
+	// produced no activity at all, so "watching, all fine" and "not running"
+	// were the same thing on screen.
+	if err := s.recordObservation(ticket, status, failures); err != nil {
+		log.Printf("pr monitor: ticket %s: record observation: %v", ticket.ID, err)
+	}
+
 	if len(failures) == 0 {
 		return nil
 	}
@@ -180,6 +189,45 @@ func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
 			return nil
 		}
 		return appendLog(tx, ticket.ID, "HUMAN_FEEDBACK", "orchestrator", "developer", feedback)
+	})
+}
+
+// observation renders what the monitor saw into a line for the activity log.
+// The same text is the change-detection fingerprint, so the two can never
+// disagree about whether something changed.
+func observation(status github.PullRequestStatus, failures []github.CheckFailure) string {
+	switch {
+	case status.Conflicted():
+		return fmt.Sprintf("Pull request #%d: conflicts with %s.", status.Number, status.BaseRef)
+	case len(failures) == 0:
+		return fmt.Sprintf("Pull request #%d: all checks passing, merges cleanly.", status.Number)
+	default:
+		names := make([]string, 0, len(failures))
+		for _, f := range failures {
+			names = append(names, f.Name)
+		}
+		return fmt.Sprintf("Pull request #%d: %d check(s) failing (%s).",
+			status.Number, len(failures), strings.Join(names, ", "))
+	}
+}
+
+// recordObservation writes the current observation to the activity log when
+// it differs from the last one, and remembers it either way.
+//
+// The comparison is against a stored fingerprint rather than the previous
+// log entry: reading back the last entry would make this depend on nothing
+// else ever writing one, and the phase transitions below write their own.
+func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestStatus, failures []github.CheckFailure) error {
+	seen := observation(status, failures)
+	if seen == ticket.PRLastState {
+		return nil
+	}
+	return s.DB.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", ticket.ID).
+			Update("pr_last_state", seen).Error; err != nil {
+			return err
+		}
+		return appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", seen)
 	})
 }
 

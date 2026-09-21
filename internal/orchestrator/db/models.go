@@ -128,10 +128,16 @@ type Ticket struct {
 	// again has already shown it is not converging, and a human should see
 	// it. A requeue clears it, because that is a human deciding to start
 	// the work over.
-	PRFixAttempts int       `gorm:"not null;default:0" json:"pr_fix_attempts"`
-	BranchPushed  bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	PRFixAttempts int `gorm:"not null;default:0" json:"pr_fix_attempts"`
+	// PRLastState is a fingerprint of what the pull-request monitor saw on
+	// its last pass. It exists so the monitor can write to the activity log
+	// when something CHANGES and stay silent otherwise: it runs every couple
+	// of minutes for as long as the pull request is open, so anything
+	// written per pass is written forever and buries the entries that matter.
+	PRLastState  string    `gorm:"not null;default:''" json:"pr_last_state"`
+	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {

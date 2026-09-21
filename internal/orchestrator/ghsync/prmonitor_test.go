@@ -343,3 +343,75 @@ func TestMonitorPRs_MixedFailuresStopForTheHumanOne(t *testing.T) {
 		}
 	}
 }
+
+// countEntries returns the ticket's log entries of a given type.
+func statusEntries(t *testing.T, gdb *gorm.DB) []db.LogEntry {
+	t.Helper()
+	var entries []db.LogEntry
+	gdb.Where("ticket_id = ? AND entry_type = ?", "t1", "STATUS").
+		Order("sequence_num asc").Find(&entries)
+	return entries
+}
+
+// The monitor has to be visible when it is working, not only when it finds
+// something wrong.
+//
+// As first written it wrote to the activity log only on a failure, a
+// conflict, or the pull request closing. A healthy pull request produced
+// nothing at all, so "watching, all fine" and "not running" looked exactly
+// the same from the ticket page — which is how you tell a monitor is dead,
+// and you could not tell.
+func TestMonitorPRs_RecordsThatItIsWatching(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	s := ghsync.NewSyncer(gdb, f)
+
+	s.MonitorPullRequests(context.Background())
+	entries := statusEntries(t, gdb)
+	if len(entries) != 1 {
+		t.Fatalf("got %d status entries on first observation, want 1: %v", len(entries), entries)
+	}
+	msg := entries[0].Message
+	for _, want := range []string{"#42", "passing"} {
+		if !strings.Contains(strings.ToLower(msg), strings.ToLower(want)) {
+			t.Errorf("the entry does not say %q:\n%s", want, msg)
+		}
+	}
+
+	// ...and must then stay quiet. It runs every couple of minutes for as
+	// long as the pull request is open, so anything written per pass is
+	// written forever and buries the entries that matter.
+	s.MonitorPullRequests(context.Background())
+	s.MonitorPullRequests(context.Background())
+	if entries := statusEntries(t, gdb); len(entries) != 1 {
+		t.Errorf("got %d status entries after three passes, want 1: the monitor logs "+
+			"every pass and will bury the activity log", len(entries))
+	}
+}
+
+// A change in what the monitor sees must show up, or the quiet above would
+// be indistinguishable from the monitor having stopped.
+func TestMonitorPRs_RecordsTheChangeWhenChecksGoRed(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	s := ghsync.NewSyncer(gdb, f)
+	s.MonitorPullRequests(context.Background()) // healthy: one entry
+
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {{Name: "Lint", Conclusion: "failure"}}}
+	s.MonitorPullRequests(context.Background())
+
+	entries := statusEntries(t, gdb)
+	if len(entries) < 2 {
+		t.Fatalf("checks went red and nothing was recorded: %v", entries)
+	}
+	last := entries[len(entries)-1].Message
+	if !strings.Contains(last, "Lint") {
+		t.Errorf("the entry does not name the failing check:\n%s", last)
+	}
+}
