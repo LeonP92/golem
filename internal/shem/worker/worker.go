@@ -98,9 +98,15 @@ func (w *Worker) Start() {
 		}
 		log.Printf("worker: %d assigned ticket(s) on startup:", len(assigned))
 		for _, t := range assigned {
-			if resumableIDs[t.TicketID] {
+			switch {
+			case resumableIDs[t.TicketID]:
 				log.Printf("worker:   %s — phase: %s — will resume", t.TicketID, t.Phase)
-			} else {
+			case t.Phase == "revising":
+				// reviseAssigned below picks these up. Saying "no action
+				// needed" here was how the stranding looked in the log for
+				// as long as it went unnoticed, and it would now be a lie.
+				log.Printf("worker:   %s — phase: %s — will revise", t.TicketID, t.Phase)
+			default:
 				log.Printf("worker:   %s — phase: %s — waiting (no action needed)", t.TicketID, t.Phase)
 			}
 		}
