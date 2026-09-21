@@ -188,7 +188,7 @@ func (s *Syncer) needsFixing(ticket db.Ticket, headSHA, feedback string) error {
 	// wasted work must not also prevent the ticket admitting defeat.
 	var cfg config.GitHubConfig
 	max := cfg.MaxPRFixAttempts()
-	if ticket.PRFixAttempts >= max {
+	if max != config.UnlimitedPRFixAttempts && ticket.PRFixAttempts >= max {
 		stuck := ""
 		if headSHA != "" && ticket.PRDispatchedSHA == headSHA {
 			// Every attempt ran and the commit never changed, so the agent

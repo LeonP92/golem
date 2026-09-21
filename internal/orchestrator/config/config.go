@@ -79,6 +79,12 @@ func (g GitHubConfig) TriggerLabel() string {
 	return defaultTriggerLabel
 }
 
+// UnlimitedPRFixAttempts is what MaxPRFixAttempts returns for
+// GOLEM_PR_FIX_ATTEMPTS=-1: keep trying for as long as the pull request is
+// open. Negative so no real cap can be mistaken for it, and so callers test
+// with `max >= 0` rather than against a magic number.
+const UnlimitedPRFixAttempts = -1
+
 // MaxPRFixAttempts is how many times the shem may try to fix a pull request
 // — a failing check or a merge conflict — before the ticket stops and waits
 // for a human. Resolved from GOLEM_PR_FIX_ATTEMPTS, then
@@ -93,13 +99,22 @@ func (g GitHubConfig) TriggerLabel() string {
 // report the problem and wait. That is why this does not use the "0 means
 // use the default" shorthand that ListenPort can afford — there, 0 is not a
 // port anyone can mean.
+//
+// -1 is unlimited. It is safe against the obvious runaway because the
+// monitor will not dispatch twice for the same head commit: an agent that
+// changes nothing cannot re-trigger itself. What it does NOT bound is an
+// agent that keeps producing different, useless commits, so it is opt-in.
+//
+// Every OTHER negative falls back rather than being treated as unlimited.
+// A typo in the one setting whose job is to bound cost should not be the
+// thing that removes the bound.
 func (g GitHubConfig) MaxPRFixAttempts() int {
 	if raw := strings.TrimSpace(os.Getenv(defaultPRFixAttemptsEnv)); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+		if n, err := strconv.Atoi(raw); err == nil && (n >= 0 || n == UnlimitedPRFixAttempts) {
 			return n
 		}
 	}
-	if g.PRFixAttempts > 0 {
+	if g.PRFixAttempts > 0 || g.PRFixAttempts == UnlimitedPRFixAttempts {
 		return g.PRFixAttempts
 	}
 	return defaultPRFixAttempts

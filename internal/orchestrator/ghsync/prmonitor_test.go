@@ -825,3 +825,60 @@ func TestMonitorPRs_ExhaustedTicketParksEvenOnAnUnchangedCommit(t *testing.T) {
 		}
 	}
 }
+
+// -1 keeps trying for as long as the pull request is open.
+//
+// The cap check and the "no new commit" parking both key off the same
+// comparison, so the sentinel has to switch off the cap without switching
+// off anything else: a ticket well past the default of 3 must still be
+// dispatched, and only for a commit that has not been acted on.
+func TestMonitorPRs_UnlimitedAttemptsNeverPark(t *testing.T) {
+	t.Setenv("GOLEM_PR_FIX_ATTEMPTS", "-1")
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 99) // far past any real cap
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "fresh-sha", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"fresh-sha": {{Name: "Test", Conclusion: "failure"}}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase != "revising" {
+		t.Errorf("phase = %q, want revising: -1 means keep trying, and 99 attempts "+
+			"is not a reason to stop", tk.Phase)
+	}
+	if tk.PRFixAttempts != 100 {
+		t.Errorf("attempts = %d, want 100: the counter still records the work", tk.PRFixAttempts)
+	}
+}
+
+// Unlimited must not become a tight loop. The same-commit guard is what
+// makes -1 safe: an agent that produces no commit cannot re-trigger itself,
+// however many attempts remain.
+func TestMonitorPRs_UnlimitedStillWillNotRedispatchTheSameCommit(t *testing.T) {
+	t.Setenv("GOLEM_PR_FIX_ATTEMPTS", "-1")
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 5)
+	if err := gdb.Model(&db.Ticket{}).Where("id = ?", "t1").
+		Update("pr_dispatched_sha", "same-sha").Error; err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "same-sha", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"same-sha": {{Name: "Test", Conclusion: "failure"}}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.PRFixAttempts != 5 {
+		t.Errorf("attempts = %d, want 5: unlimited re-dispatched a commit already acted "+
+			"on, which is a loop every two minutes for as long as the PR is open", tk.PRFixAttempts)
+	}
+	if tk.Phase != "ready-for-review" {
+		t.Errorf("phase = %q, want ready-for-review", tk.Phase)
+	}
+}
