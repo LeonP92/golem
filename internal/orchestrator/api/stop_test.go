@@ -120,7 +120,10 @@ func TestResumeOnlyFromStopped(t *testing.T) {
 func TestStopRejectsTerminalPhases(t *testing.T) {
 	h, mux := setupTicketTest(t)
 	_, cookie := seedSessionUser(t, h.DB, "operator", string(rbac.RoleAdmin))
-	for _, phase := range []string{"closed", "stopped"} {
+	// pending-approval is in this list because the intake gate's invariant
+	// is that approval is the only way out of it; a stop would be a second
+	// exit, and there is nothing running to interrupt anyway.
+	for _, phase := range []string{"closed", "stopped", "pending-approval"} {
 		tk := db.Ticket{RepoRemote: "r", Branch: "b" + phase, Description: "d", Phase: phase}
 		if err := h.DB.Create(&tk).Error; err != nil {
 			t.Fatalf("create: %v", err)

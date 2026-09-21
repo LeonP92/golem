@@ -43,7 +43,16 @@ func (h *Handlers) actionStop(w http.ResponseWriter, r *http.Request, id string)
 
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
-			Where("id = ? AND phase NOT IN ?", id, []string{PhaseStopped, "closed"}).
+			Where("id = ? AND phase NOT IN ?", id,
+				// pending-approval is excluded for a different reason from
+				// the other two. There is nothing running to interrupt —
+				// no shem has it — and more importantly the intake gate's
+				// invariant is that approval is the ONLY way out of that
+				// phase. A stop would be a second exit, and one that hides
+				// the ticket from the approval queue while it waits. The
+				// controls for a ticket nobody has started are approve and
+				// close.
+				[]string{PhaseStopped, "closed", "pending-approval"}).
 			Updates(map[string]any{
 				"phase":              PhaseStopped,
 				"stopped_from_phase": ticket.Phase,
