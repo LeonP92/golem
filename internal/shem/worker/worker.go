@@ -109,9 +109,31 @@ func (w *Worker) Start() {
 	for _, claim := range resumable {
 		go w.tryResumeTicket(claim)
 	}
+	// A ticket already in revising is owed a revision, whether or not this
+	// shem ever saw the ticket_revise push that started it. The push is
+	// transient — sent once, lost to a restart or a dropped connection —
+	// and nothing else recovered it: the poll loop asks only for AVAILABLE
+	// tickets and resumableTickets excludes revising. Three real tickets
+	// sat in that state reporting "waiting (no action needed)" until a
+	// person noticed.
+	//
+	// The PHASE is the instruction; the push only makes it prompt.
+	w.reviseAssigned(assigned)
 
 	log.Printf("worker: poll loop started")
 	go w.pollLoop()
+}
+
+// reviseAssigned starts a revision for every assigned ticket sitting in
+// revising. Safe to call repeatedly: tryReviseAndRun skips a ticket already
+// running here, and revise-claim refuses one this shem does not own or that
+// has since moved on.
+func (w *Worker) reviseAssigned(assigned []client.AssignedTicket) {
+	for _, t := range assigned {
+		if t.Phase == "revising" {
+			go w.tryReviseAndRun(t.TicketID)
+		}
+	}
 }
 
 // tryResumeTicket resumes a ticket that was mid-execution when the shem last
@@ -383,6 +405,11 @@ func (w *Worker) pollLoop() {
 		case <-w.stop:
 			return
 		case <-ticker.C:
+			// Self-heal: a revision whose push was lost is picked up here
+			// rather than waiting for a restart or a person.
+			if assigned, err := w.client.GetAssigned(); err == nil {
+				w.reviseAssigned(assigned)
+			}
 			for _, r := range w.cfg.Repos {
 				select {
 				case <-w.stop:
