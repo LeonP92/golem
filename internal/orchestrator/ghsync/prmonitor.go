@@ -91,7 +91,7 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 		if base == "" {
 			base = ticket.BaseBranch
 		}
-		return s.needsFixing(ticket, fmt.Sprintf(
+		return s.needsFixing(ticket, status.HeadSHA, fmt.Sprintf(
 			"Pull request #%d no longer merges cleanly into %s.\n\n"+
 				"Resolve it in the existing worktree, on the existing branch:\n"+
 				"  git merge origin/%s\n"+
@@ -144,7 +144,7 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 					describeFailures(status.Number, failures))
 		}
 	}
-	return s.needsFixing(ticket, describeFailures(status.Number, failures))
+	return s.needsFixing(ticket, status.HeadSHA, describeFailures(status.Number, failures))
 }
 
 // describeFailures renders failing checks into the feedback the agent reads.
@@ -175,7 +175,17 @@ func describeFailures(prNumber int, failures []github.CheckFailure) string {
 
 // needsFixing sends the ticket back to revising with feedback, unless it has
 // already used its budget of attempts.
-func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
+func (s *Syncer) needsFixing(ticket db.Ticket, headSHA, feedback string) error {
+	// Already dispatched for this exact commit. The shem is either still
+	// working or has pushed and CI has not re-run, so the failure being
+	// reported is the one already being fixed. Spending another attempt on
+	// it burns the budget on work in flight — observed live, where a
+	// perfectly converging ticket reached attempt 2 before its first fix
+	// had even been tested.
+	if headSHA != "" && ticket.PRDispatchedSHA == headSHA {
+		return nil
+	}
+
 	var cfg config.GitHubConfig
 	max := cfg.MaxPRFixAttempts()
 	if ticket.PRFixAttempts >= max {
@@ -203,8 +213,9 @@ func (s *Syncer) needsFixing(ticket db.Ticket, feedback string) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = ?", ticket.ID, "ready-for-review").
 			Updates(map[string]any{
-				"phase":           "revising",
-				"pr_fix_attempts": ticket.PRFixAttempts + 1,
+				"phase":             "revising",
+				"pr_fix_attempts":   ticket.PRFixAttempts + 1,
+				"pr_dispatched_sha": headSHA,
 			})
 		if result.Error != nil {
 			return result.Error

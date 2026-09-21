@@ -693,3 +693,80 @@ func TestMonitorPRs_UnassignedTicketIsNotSentToRevising(t *testing.T) {
 		t.Errorf("phase = %q, want needs-attention", tk.Phase)
 	}
 }
+
+// A fix must not be dispatched twice for the same commit.
+//
+// Seen live. The agent fixed #3189, pushed 4950a8d9, and the ticket
+// returned to ready-for-review. On the next pass the monitor read the
+// failure list and dispatched again — a second attempt against a failure
+// that had already been fixed and whose CI had not finished re-running. At
+// the default cap of three, two wasted passes like that park a ticket that
+// was converging perfectly well.
+//
+// The head SHA is the discriminator: a failure seen on a commit already
+// dispatched for is the SAME failure, not a new one. Only a failure on a
+// commit that has not been acted on is worth another attempt.
+func TestMonitorPRs_DoesNotDispatchTwiceForTheSameCommit(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "sha-one", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"sha-one": {{Name: "Test", Conclusion: "failure"}}}
+	s := ghsync.NewSyncer(gdb, f)
+
+	s.MonitorPullRequests(context.Background())
+	if tk := reload(t, gdb); tk.Phase != "revising" || tk.PRFixAttempts != 1 {
+		t.Fatalf("first pass: phase=%q attempts=%d, want revising/1", tk.Phase, tk.PRFixAttempts)
+	}
+
+	// The shem finishes and the ticket returns to review, but CI has not
+	// re-run yet so the same failure is still what the API reports.
+	if err := gdb.Model(&db.Ticket{}).Where("id = ?", "t1").
+		Update("phase", "ready-for-review").Error; err != nil {
+		t.Fatalf("return to review: %v", err)
+	}
+	s.MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.PRFixAttempts != 1 {
+		t.Errorf("attempts = %d, want 1: a second attempt was spent on the same commit's "+
+			"failure before the fix had even been tested", tk.PRFixAttempts)
+	}
+	if tk.Phase == "revising" {
+		t.Error("the ticket was dispatched again for a commit already acted on")
+	}
+}
+
+// But a failure on a NEW commit is a new failure and must be acted on, or
+// the guard above would stop the loop after one attempt.
+func TestMonitorPRs_DispatchesAgainWhenTheCommitChanges(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "sha-one", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{
+		"sha-one": {{Name: "Test", Conclusion: "failure"}},
+		"sha-two": {{Name: "Test", Conclusion: "failure"}},
+	}
+	s := ghsync.NewSyncer(gdb, f)
+	s.MonitorPullRequests(context.Background())
+
+	// The fix landed as a new commit and CI failed again on it.
+	gdb.Model(&db.Ticket{}).Where("id = ?", "t1").Update("phase", "ready-for-review")
+	f.PRStatuses[42] = github.PullRequestStatus{
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "sha-two", BaseRef: "main",
+	}
+	s.MonitorPullRequests(context.Background())
+
+	if tk := reload(t, gdb); tk.PRFixAttempts != 2 || tk.Phase != "revising" {
+		t.Errorf("phase=%q attempts=%d, want revising/2: a genuinely new failure was ignored",
+			tk.Phase, tk.PRFixAttempts)
+	}
+}

@@ -134,10 +134,15 @@ type Ticket struct {
 	// when something CHANGES and stay silent otherwise: it runs every couple
 	// of minutes for as long as the pull request is open, so anything
 	// written per pass is written forever and buries the entries that matter.
-	PRLastState  string    `gorm:"not null;default:''" json:"pr_last_state"`
-	BranchPushed bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	PRLastState string `gorm:"not null;default:''" json:"pr_last_state"`
+	// PRDispatchedSHA is the head commit the last automatic fix was
+	// dispatched for. A failure reported against a commit already acted on
+	// is the SAME failure — CI has not re-run yet — and dispatching again
+	// spends an attempt on work already in flight.
+	PRDispatchedSHA string    `gorm:"not null;default:''" json:"pr_dispatched_sha"`
+	BranchPushed    bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {
