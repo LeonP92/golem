@@ -176,6 +176,33 @@ func describeFailures(prNumber int, failures []github.CheckFailure) string {
 // needsFixing sends the ticket back to revising with feedback, unless it has
 // already used its budget of attempts.
 func (s *Syncer) needsFixing(ticket db.Ticket, headSHA, feedback string) error {
+	// The cap is checked FIRST, ahead of the same-commit guard below.
+	//
+	// Getting that order wrong produced the worst failure this feature has
+	// had: ticket ed7b8a9b ran three agents against an infrastructure
+	// failure, each concluding there was nothing in the code to fix and
+	// making no commits, so the head never moved. Attempts hit the cap, the
+	// same-commit guard then returned early on every pass, and the ticket
+	// sat in ready-for-review — polled every two minutes, doing nothing,
+	// saying nothing, with its whole budget spent. The guard that prevents
+	// wasted work must not also prevent the ticket admitting defeat.
+	var cfg config.GitHubConfig
+	max := cfg.MaxPRFixAttempts()
+	if ticket.PRFixAttempts >= max {
+		stuck := ""
+		if headSHA != "" && ticket.PRDispatchedSHA == headSHA {
+			// Every attempt ran and the commit never changed, so the agent
+			// produced nothing. That is the signal worth surfacing: the
+			// failure is not one it can reach from the code.
+			stuck = " The last attempt produced no new commit, so this is " +
+				"probably not something the agent can fix from the repository."
+		}
+		return s.setPhase(ticket, "needs-attention", fmt.Sprintf(
+			"Stopping after %d automatic fix attempt(s) — the limit set by "+
+				"GOLEM_PR_FIX_ATTEMPTS.%s The pull request still needs work:\n\n%s",
+			ticket.PRFixAttempts, stuck, feedback))
+	}
+
 	// Already dispatched for this exact commit. The shem is either still
 	// working or has pushed and CI has not re-run, so the failure being
 	// reported is the one already being fixed. Spending another attempt on
@@ -184,15 +211,6 @@ func (s *Syncer) needsFixing(ticket db.Ticket, headSHA, feedback string) error {
 	// had even been tested.
 	if headSHA != "" && ticket.PRDispatchedSHA == headSHA {
 		return nil
-	}
-
-	var cfg config.GitHubConfig
-	max := cfg.MaxPRFixAttempts()
-	if ticket.PRFixAttempts >= max {
-		return s.setPhase(ticket, "needs-attention", fmt.Sprintf(
-			"Stopping after %d automatic fix attempt(s) — the limit set by "+
-				"GOLEM_PR_FIX_ATTEMPTS. The pull request still needs work:\n\n%s",
-			ticket.PRFixAttempts, feedback))
 	}
 
 	// Nothing owns an unassigned ticket, so moving it to revising strands

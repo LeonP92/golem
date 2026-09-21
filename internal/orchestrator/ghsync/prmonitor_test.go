@@ -770,3 +770,58 @@ func TestMonitorPRs_DispatchesAgainWhenTheCommitChanges(t *testing.T) {
 			tk.Phase, tk.PRFixAttempts)
 	}
 }
+
+// A ticket that has exhausted its attempts must park, even when the commit
+// has not changed.
+//
+// Seen live on ticket ed7b8a9b. The agent ran three times against PR #3191,
+// each time concluding it "could not find an actionable code defect to fix"
+// — the failing check was infrastructure — and each time making no commits,
+// so the head never moved. Attempts reached the cap of 3.
+//
+// The same-commit guard then short-circuited ahead of the cap check, so the
+// ticket never reached needs-attention. It sat in ready-for-review, polled
+// every two minutes, doing nothing and saying nothing, with three attempts
+// spent and no way for anyone to know it had given up. The guard that stops
+// wasted work must not also stop the ticket admitting defeat.
+func TestMonitorPRs_ExhaustedTicketParksEvenOnAnUnchangedCommit(t *testing.T) {
+	t.Setenv("GOLEM_PR_FIX_ATTEMPTS", "3")
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 3)
+	if err := gdb.Model(&db.Ticket{}).Where("id = ?", "t1").
+		Update("pr_dispatched_sha", "abc123").Error; err != nil {
+		t.Fatalf("seed dispatched sha: %v", err)
+	}
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "open", Mergeable: boolPtr(true),
+		MergeableState: "unstable", HeadSHA: "abc123", BaseRef: "main",
+	}}
+	f.FailedChecks = map[string][]github.CheckFailure{"abc123": {
+		{Name: "Build, Push, Sign, Verify Images", Conclusion: "failure"},
+	}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	tk := reload(t, gdb)
+	if tk.Phase != "needs-attention" {
+		t.Errorf("phase = %q, want needs-attention: the ticket used every attempt and "+
+			"then sat in ready-for-review with nothing working it and nothing said", tk.Phase)
+	}
+	if tk.PRFixAttempts != 3 {
+		t.Errorf("attempts = %d, want 3 (unchanged)", tk.PRFixAttempts)
+	}
+	var entries []db.LogEntry
+	gdb.Where("ticket_id = ? AND entry_type = ?", "t1", "STATUS").Find(&entries)
+	all := ""
+	for _, e := range entries {
+		all += e.Message + "\n"
+	}
+	// The message has to say the agent changed nothing, because that is the
+	// part a person needs: three runs that produced no commit means the
+	// failure is not one the agent can reach.
+	for _, want := range []string{"3", "no new commit"} {
+		if !strings.Contains(all, want) {
+			t.Errorf("the parking message does not mention %q:\n%s", want, all)
+		}
+	}
+}
