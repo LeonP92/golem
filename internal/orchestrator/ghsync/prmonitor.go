@@ -2,6 +2,8 @@ package ghsync
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"regexp"
@@ -75,7 +77,7 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	// abandoned work as delivered.
 	if status.State == "closed" {
 		if status.Merged {
-			return s.setPhase(ticket, "closed",
+			return s.closeTicket(ticket,
 				fmt.Sprintf("Pull request #%d was merged.", status.Number))
 		}
 		return s.setPhase(ticket, "needs-attention",
@@ -270,8 +272,8 @@ func (s *Syncer) needsFixing(ticket db.Ticket, headSHA, feedback string) error {
 	// work that is not visible yet. Best effort: if the push fails the
 	// ticket is still correctly in revising, and the shem finds it when it
 	// next reconnects.
-	if s.WakeShem != nil {
-		s.WakeShem(*ticket.AssignedShem, ticket.ID, ticket.RepoRemote)
+	if s.NotifyShem != nil {
+		s.NotifyShem(*ticket.AssignedShem, "ticket_revise", ticket.ID, ticket.RepoRemote)
 	}
 	return nil
 }
@@ -333,6 +335,60 @@ func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestSt
 	})
 }
 
+// closeTicket does everything closing a ticket by hand does, not just the
+// part visible on the dashboard.
+//
+// setPhase alone wrote the phase and a log row, which LOOKED right: the
+// ticket showed as closed. But api.actionClose also closes the linked
+// GitHub issue, clears inputs nobody will answer now, and tells the shem so
+// it can remove the worktree and the branch. Skipping those left every
+// auto-merged ticket with its issue still open and a worktree leaked on the
+// shem, with nothing on screen to suggest it.
+func (s *Syncer) closeTicket(ticket db.Ticket, message string) error {
+	if err := s.DB.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase <> ?", ticket.ID, "closed").
+			Update("phase", "closed")
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errAlreadyClosed
+		}
+		// Re-read inside the transaction rather than trusting the snapshot
+		// this pass started from, the same rule the api close path follows.
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", ticket.ID).Error; err != nil {
+			return err
+		}
+		if err := appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", message); err != nil {
+			return err
+		}
+		if fresh.IssueNumber == nil {
+			return nil
+		}
+		return Enqueue(tx, db.GitHubOutbox{
+			TicketID:       ticket.ID,
+			Kind:           KindClose,
+			Payload:        "{}",
+			IdempotencyKey: CloseKey(ticket.ID),
+		})
+	}); err != nil {
+		if errors.Is(err, errAlreadyClosed) {
+			return nil
+		}
+		return err
+	}
+
+	// Outside the transaction, as the api path does: neither is part of the
+	// close being durable, and a failure in either must not roll it back.
+	s.DB.Where("ticket_id = ? AND resolved_at IS NULL", ticket.ID).Delete(&db.HumanInput{})
+	if ticket.AssignedShem != nil && s.NotifyShem != nil {
+		s.NotifyShem(*ticket.AssignedShem, "ticket_closed", ticket.ID, ticket.RepoRemote)
+	}
+	return nil
+}
+
 // setPhase moves the ticket and records why, in one transaction.
 func (s *Syncer) setPhase(ticket db.Ticket, phase, message string) error {
 	if ticket.Phase == phase {
@@ -348,8 +404,58 @@ func (s *Syncer) setPhase(ticket db.Ticket, phase, message string) error {
 		if result.RowsAffected == 0 {
 			return nil
 		}
-		return appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", message)
+		if err := appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", message); err != nil {
+			return err
+		}
+		// The label follows the phase. Without this a ticket the monitor
+		// parked read needs-attention in Golem while the issue still
+		// carried the label of the phase before it.
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", ticket.ID).Error; err != nil {
+			return err
+		}
+		return EnqueuePhaseLabel(tx, fresh, phase)
 	})
+}
+
+// EnqueuePhaseLabel queues the GitHub label write for a phase transition.
+//
+// The idempotency key carries a transition ordinal, advanced only when the
+// phase Golem last queued a label for differs from this one — the
+// difference between "entered a new phase", which must reach GitHub, and
+// "the same transition arrived twice", which must stay a no-op. ticket must
+// be the row as re-read inside tx after the phase write, or LabelPhase and
+// LabelSeq come from a snapshot this transaction has already superseded.
+//
+// Exported and living here rather than in api/tickets.go so the monitor and
+// the human actions queue labels the same way instead of two ways.
+func EnqueuePhaseLabel(tx *gorm.DB, ticket db.Ticket, phase string) error {
+	if ticket.IssueNumber == nil {
+		return nil
+	}
+	payload, err := json.Marshal(LabelPayload{Phase: phase})
+	if err != nil {
+		return fmt.Errorf("marshal label payload: %w", err)
+	}
+	seq := ticket.LabelSeq
+	if ticket.LabelPhase != phase {
+		seq++
+	}
+	if err := Enqueue(tx, db.GitHubOutbox{
+		TicketID:       ticket.ID,
+		Kind:           KindLabel,
+		Payload:        string(payload),
+		IdempotencyKey: LabelKey(ticket.ID, phase, seq),
+	}); err != nil {
+		return fmt.Errorf("enqueue label: %w", err)
+	}
+	if ticket.LabelPhase != phase {
+		if err := tx.Model(&db.Ticket{}).Where("id = ?", ticket.ID).
+			Updates(map[string]any{"label_phase": phase, "label_seq": seq}).Error; err != nil {
+			return fmt.Errorf("record label transition for ticket %s: %w", ticket.ID, err)
+		}
+	}
+	return nil
 }
 
 // apiStatusRe picks the HTTP status and message out of a go-github error.
@@ -378,3 +484,6 @@ func condenseAPIError(err error) string {
 	}
 	return strings.TrimSpace(msg)
 }
+
+// errAlreadyClosed marks a close that lost the race to another writer.
+var errAlreadyClosed = errors.New("ticket already closed")

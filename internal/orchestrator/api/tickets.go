@@ -456,7 +456,13 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 	// this transaction's own write once sourced this way.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
-			Where("id = ? AND assigned_shem = ?", id, shem.ID).
+			// phase <> 'stopped' is what makes a stop hold. Cancelling
+			// the agent is asynchronous, so when a human stops a ticket a
+			// phase report is very likely already in flight; without this
+			// clause that report wrote straight over the stop and answered
+			// 204, leaving the ticket assigned, idle and resumable — the
+			// opposite of the invariant actionStop documents.
+			Where("id = ? AND assigned_shem = ? AND phase <> ?", id, shem.ID, PhaseStopped).
 			Updates(map[string]any{"phase": body.Phase})
 		if result.Error != nil {
 			return result.Error

@@ -93,3 +93,69 @@ func TestWorker_PicksUpRevisingTicketsWithoutAPush(t *testing.T) {
 			"it is stranded until someone notices by hand")
 	}
 }
+
+// A ticket restored to an active phase must be picked up without a restart.
+//
+// Review finding 4: actionResume sets the phase back and returns 204, but
+// nothing dispatches. The poll loop handles only reviseAssigned (revising)
+// and GetAvailable (unassigned); GetResumable is called once in Start(),
+// before the loop begins. So "Start again" on a ticket stopped during
+// brainstorm, plan, implement or review reported success and then sat
+// there until the shem process happened to restart.
+//
+// Fixed the same way the revising case was, and for the same reason: the
+// phase is the instruction. Polling resumable makes any route back into an
+// active phase self-healing, including ones nobody has thought of yet,
+// rather than requiring each to remember to send a message.
+func TestWorker_PicksUpAResumedTicketWithoutRestarting(t *testing.T) {
+	claimed := make(chan string, 4)
+	// GetResumable answers with the ticket only from the second call on, so
+	// a pass that happens during Start() cannot be what satisfies this
+	// test — it has to be the poll loop.
+	var calls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/api/tickets/resumable"):
+			calls++
+			w.Header().Set("Content-Type", "application/json")
+			if calls < 2 {
+				json.NewEncoder(w).Encode([]client.ClaimResponse{}) //nolint:errcheck
+				return
+			}
+			phase := "implement"
+			json.NewEncoder(w).Encode([]client.ClaimResponse{{ //nolint:errcheck
+				TicketID: "resumed-1", Branch: "ticket/x-abc12345", BaseBranch: "main",
+				RepoRemote: "r", CheckpointPhase: &phase,
+			}})
+		case strings.HasSuffix(r.URL.Path, "/api/tickets/assigned"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode([]map[string]string{}) //nolint:errcheck
+		case r.Method == http.MethodPost && strings.Contains(r.URL.Path, "/register"):
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]uint{"shem_id": 1}) //nolint:errcheck
+		default:
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	exec := &recordingExecutor{claims: make(chan *client.ClaimResponse, 4)}
+	cfg := &config.Config{
+		Orchestrator: srv.URL, APIKey: "k", Name: "n",
+		Repos: []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
+	}
+	w := worker.New(cfg, client.New(srv.URL, "k", "test-shem"), exec)
+	go w.Start()
+	defer w.Shutdown()
+
+	select {
+	case got := <-exec.claims:
+		if got.TicketID != "resumed-1" {
+			t.Errorf("ran %q, want resumed-1", got.TicketID)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("a ticket restored to an active phase was never picked up; " +
+			"\"Start again\" reports success and then nothing happens until a restart")
+	}
+	_ = claimed
+}

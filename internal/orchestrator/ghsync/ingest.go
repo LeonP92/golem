@@ -25,15 +25,16 @@ type Syncer struct {
 	DB *gorm.DB
 	GH github.Client
 
-	// WakeShem notifies the shem that owns a ticket that there is work on
-	// it. Set by main.go to a push over the websocket hub; nil in tests and
-	// in any deployment without a hub, where the ticket still changes phase
-	// and the shem picks it up on its next connection.
+	// NotifyShem tells the shem that owns a ticket something has changed:
+	// ticket_revise when there is work on it, ticket_closed when it is
+	// done and the worktree can go. Set by main.go to a push over the
+	// websocket hub; nil in tests and in any deployment without a hub.
 	//
 	// A function rather than the hub itself so this package does not depend
-	// on the transport, and so a test can observe the wake without standing
-	// one up.
-	WakeShem func(shemID uint, ticketID, repoRemote string)
+	// on the transport, and so a test can observe the push without standing
+	// one up. Every message it carries is best effort — the phase in the
+	// database is what is authoritative.
+	NotifyShem func(shemID uint, msgType, ticketID, repoRemote string)
 }
 
 // NewSyncer returns a Syncer over the given database and GitHub client.

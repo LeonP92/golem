@@ -423,10 +423,21 @@ func (w *Worker) pollLoop() {
 		case <-w.stop:
 			return
 		case <-ticker.C:
-			// Self-heal: a revision whose push was lost is picked up here
-			// rather than waiting for a restart or a person.
+			// Self-heal: work whose notification was lost, or that never
+			// had one, is picked up here rather than waiting for a restart
+			// or a person.
 			if assigned, err := w.client.GetAssigned(); err == nil {
 				w.reviseAssigned(assigned)
+			}
+			// Resumable too, not only at startup. A ticket restored to an
+			// active phase — a human clicking "Start again" on a stopped
+			// one — was otherwise invisible until the process restarted,
+			// because nothing dispatches on that transition and the loop
+			// only asked for revising and unassigned work.
+			if resumable, err := w.client.GetResumable(); err == nil {
+				for _, claim := range resumable {
+					go w.tryResumeTicket(claim)
+				}
 			}
 			for _, r := range w.cfg.Repos {
 				select {

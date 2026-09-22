@@ -42,9 +42,24 @@ func trustWorkspace(repoPath string) {
 	if acct := agentenv.User(); acct != nil {
 		homes = append(homes, acct.Home) // the agent reads its own config
 	}
+	acct := agentenv.User()
 	for _, h := range homes {
-		if err := setWorkspaceTrusted(filepath.Join(h, ".claude.json"), repoPath); err != nil {
+		configPath := filepath.Join(h, ".claude.json")
+		if err := setWorkspaceTrusted(configPath, repoPath); err != nil {
 			log.Printf("executor: could not trust workspace %s: %v", repoPath, err)
+			continue
+		}
+		// This process is root and has just rewritten a file the AGENT has
+		// to read. Without handing it back, an on-demand clone left
+		// ~/.claude.json owned by root and the agent could no longer load
+		// its own credentials: `claude --print` reports "Not logged in"
+		// and the phase hangs producing nothing. The entrypoint chowns for
+		// the same reason, but only once at container start, so it does
+		// not cover a repository cloned later.
+		if acct != nil && h == acct.Home {
+			if err := os.Chown(configPath, int(acct.UID), int(acct.GID)); err != nil {
+				log.Printf("executor: could not hand %s back to %s: %v", configPath, acct.Name, err)
+			}
 		}
 	}
 }
@@ -101,7 +116,9 @@ func setWorkspaceTrusted(configPath, repoPath string) error {
 	// Written via a temp file and renamed: Claude Code reads this file, and a
 	// partial write would leave it holding invalid JSON.
 	tmp := configPath + ".golem.tmp"
-	if err := os.WriteFile(tmp, out, 0o600); err != nil {
+	// 0644, not 0600: the reader may be a different user from the writer.
+	// The shem writes this as root on behalf of the agent account.
+	if err := os.WriteFile(tmp, out, 0o644); err != nil { //nolint:gosec
 		return fmt.Errorf("writing %s: %w", tmp, err)
 	}
 	if err := os.Rename(tmp, configPath); err != nil {

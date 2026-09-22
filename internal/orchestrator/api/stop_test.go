@@ -133,3 +133,53 @@ func TestStopRejectsTerminalPhases(t *testing.T) {
 		}
 	}
 }
+
+// A shem's phase report must not undo a stop.
+//
+// Review finding 2, verified by the reviewer as executed: stop sets
+// phase=stopped but leaves assigned_shem set, and updatePhase's WHERE was
+// only `id = ? AND assigned_shem = ?`. A PostPhase already in flight — the
+// shem finishing the phase it was in when the stop arrived — then wrote
+// straight over it and answered 204. The ticket came back assigned, idle
+// and resumable, which is the exact opposite of what stop.go documents as
+// its invariant.
+//
+// The race is real rather than theoretical: cancelling the agent is
+// asynchronous, so a phase report is very likely to be in flight at the
+// moment a human clicks stop.
+func TestStoppedTicketRejectsShemPhaseUpdates(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	shem := seedShem(t, h, "racing-shem", "racingkey")
+	_, cookie := seedSessionUser(t, h.DB, "operator", string(rbac.RoleAdmin))
+
+	tk := db.Ticket{
+		RepoRemote: "https://github.com/org/repo", Branch: "ticket/x-abc12345",
+		BaseBranch: "main", Description: "d", Phase: "brainstorm", AssignedShem: &shem.ID,
+	}
+	if err := h.DB.Create(&tk).Error; err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if code := postAction(t, mux, cookie, tk.ID, "stop"); code != http.StatusNoContent {
+		t.Fatalf("stop = %d", code)
+	}
+
+	// The shem, unaware, reports the phase it had moved on to.
+	body, _ := json.Marshal(map[string]string{"phase": "plan"})
+	req := httptest.NewRequest(http.MethodPatch,
+		fmt.Sprintf("/api/tickets/%s/phase", tk.ID), bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer racingkey")
+	req.Header.Set("X-Shem-Name", "racing-shem")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+
+	if w.Code == http.StatusNoContent {
+		t.Error("the shem's phase update was accepted on a stopped ticket")
+	}
+	var after db.Ticket
+	h.DB.First(&after, "id = ?", tk.ID)
+	if after.Phase != "stopped" {
+		t.Errorf("phase = %q, want stopped: the shem overwrote a human's stop and the "+
+			"ticket is assigned, idle and resumable again", after.Phase)
+	}
+}

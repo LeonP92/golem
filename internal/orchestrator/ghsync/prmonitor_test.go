@@ -634,7 +634,7 @@ func TestMonitorPRs_DispatchCreatesFeedbackAndWakesTheShem(t *testing.T) {
 
 	s := ghsync.NewSyncer(gdb, f)
 	woken := make(chan uint, 4)
-	s.WakeShem = func(shem uint, ticketID, repo string) { woken <- shem }
+	s.NotifyShem = func(shem uint, _, _, _ string) { woken <- shem }
 	s.MonitorPullRequests(context.Background())
 
 	if tk := reload(t, gdb); tk.Phase != "revising" {
@@ -923,5 +923,97 @@ func TestMonitorPRs_LeavesStoppedTicketsAlone(t *testing.T) {
 			t.Errorf("the monitor called %s for a stopped ticket; a human has "+
 				"interrupted it and its pull request should not even be looked at", call)
 		}
+	}
+}
+
+// Closing a ticket because its pull request merged must do everything
+// closing it by hand does.
+//
+// Review finding 3, verified by the reviewer as executed: setPhase wrote
+// the phase and a log row and nothing else. api.actionClose additionally
+// enqueues KindClose so the GitHub issue is actually closed, clears pending
+// HumanInputs, and pushes ticket_closed so the shem removes the worktree
+// and the branch. So after every auto-merge the issue stayed open and the
+// shem leaked a worktree and a branch — silently, because the ticket looked
+// correctly closed from the dashboard.
+func TestMonitorPRs_MergeClosesTheIssueAndCleansUp(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	// A pending question that closing must clear, as actionClose does.
+	if err := gdb.Create(&db.HumanInput{TicketID: "t1", Kind: "question_answer", Prompt: "?"}).Error; err != nil {
+		t.Fatalf("seed input: %v", err)
+	}
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "closed", Merged: true, HeadSHA: "abc123", BaseRef: "main",
+	}}
+	s := ghsync.NewSyncer(gdb, f)
+	var notified []string
+	s.NotifyShem = func(_ uint, msgType, _, _ string) { notified = append(notified, msgType) }
+	s.MonitorPullRequests(context.Background())
+
+	if tk := reload(t, gdb); tk.Phase != "closed" {
+		t.Fatalf("phase = %q, want closed", tk.Phase)
+	}
+
+	// The GitHub issue has to actually be closed.
+	var rows []db.GitHubOutbox
+	gdb.Where("ticket_id = ?", "t1").Find(&rows)
+	var kinds []string
+	for _, r := range rows {
+		kinds = append(kinds, r.Kind)
+	}
+	if !contains(kinds, ghsync.KindClose) {
+		t.Errorf("no %s outbox row (%v); the linked issue stays open forever after "+
+			"an auto-merge", ghsync.KindClose, kinds)
+	}
+
+	// The shem has to be told, or the worktree and branch leak.
+	if !contains(notified, "ticket_closed") {
+		t.Errorf("the shem was not told the ticket closed (%v); it keeps the worktree "+
+			"and the branch", notified)
+	}
+
+	// And a question nobody will ever answer must not be left pending.
+	var pending int64
+	gdb.Model(&db.HumanInput{}).Where("ticket_id = ? AND resolved_at IS NULL", "t1").Count(&pending)
+	if pending != 0 {
+		t.Errorf("%d unresolved human input(s) left on a closed ticket", pending)
+	}
+}
+
+func contains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// A phase the monitor sets must reach the issue's labels, as one set by
+// hand does.
+//
+// Same finding as the close path, one step smaller: setPhase wrote only
+// the phase, so a ticket the monitor parked showed as needs-attention in
+// Golem while the GitHub issue still carried the label of whatever phase
+// it was in before.
+func TestMonitorPRs_NeedsAttentionWritesTheLabel(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	seedPRTicket(t, gdb, "ready-for-review", 0)
+	f := github.NewFake()
+	f.PRStatuses = map[int]github.PullRequestStatus{42: {
+		Number: 42, State: "closed", Merged: false, HeadSHA: "abc123", BaseRef: "main",
+	}}
+	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
+
+	if tk := reload(t, gdb); tk.Phase != "needs-attention" {
+		t.Fatalf("phase = %q, want needs-attention", tk.Phase)
+	}
+	var rows []db.GitHubOutbox
+	gdb.Where("ticket_id = ? AND kind = ?", "t1", ghsync.KindLabel).Find(&rows)
+	if len(rows) == 0 {
+		t.Error("no label row queued; the issue keeps the label of the phase the ticket " +
+			"was in before the monitor moved it")
 	}
 }
