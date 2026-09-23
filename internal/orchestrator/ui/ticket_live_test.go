@@ -13,20 +13,11 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/ui"
 )
 
-// The ticket page has two independent live mechanisms, and they have to agree.
-//
-// The activity log streams over a WebSocket. Everything else — the phase
-// badge, the action buttons, the Details block — comes from the
-// server-rendered page and was never refreshed, so a ticket could sit on
-// screen advertising a phase it had already left. #log-feed already carried
-// hx-preserve, which only means anything if its container is swapped, so the
-// polling was intended and missing rather than deliberately absent.
-//
-// The invariant worth pinning is the interaction: polling a container that
-// holds a streaming element only works while that element is preserved.
-// Without hx-preserve the swap would replace #log-feed every few seconds,
-// dropping and reopening the stream and losing the scroll position.
-func TestTicketPagePollsWithoutDroppingTheLogStream(t *testing.T) {
+// The activity log is the only live part of the ticket page; it streams over
+// a WebSocket. The rest of the page must NOT be polled: #ticket-live holds the
+// Request Changes form, and a timed swap of it replaced the textarea every few
+// seconds, discarding whatever the operator was in the middle of typing.
+func TestTicketPageStreamsOnlyTheLog(t *testing.T) {
 	gdb, err := db.Open(":memory:")
 	if err != nil {
 		t.Fatalf("db.Open: %v", err)
@@ -68,19 +59,13 @@ func TestTicketPagePollsWithoutDroppingTheLogStream(t *testing.T) {
 	if live == nil {
 		t.Fatal("no #ticket-live container on the ticket page")
 	}
-	attrs := live[1]
-	for _, want := range []string{`hx-get="/tickets/` + ticket.ID + `"`, `hx-trigger="every`, `hx-select="#ticket-live"`} {
-		if !strings.Contains(attrs, want) {
-			t.Errorf("#ticket-live is missing %s — the phase and action buttons will not follow the ticket", want)
-		}
+	if strings.Contains(live[1], "hx-trigger") || strings.Contains(live[1], "hx-get") {
+		t.Error("#ticket-live is polled again: each swap wipes text typed into the Request Changes form")
 	}
 
 	feed := regexp.MustCompile(`(?s)<div id="log-feed"(.*?)>`).FindStringSubmatch(body)
 	if feed == nil {
 		t.Fatal("no #log-feed on the ticket page")
-	}
-	if !strings.Contains(feed[1], "hx-preserve") {
-		t.Error("#log-feed has no hx-preserve: each poll of its container would drop and reopen the log stream")
 	}
 	if !strings.Contains(feed[1], `data-log-ws="/ws/tickets/`+ticket.ID+`/log"`) {
 		t.Error("#log-feed carries no data-log-ws endpoint; the activity log would only update on a poll")
