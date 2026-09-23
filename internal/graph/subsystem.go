@@ -29,7 +29,13 @@ func meaningfulSegments(modulePath string) []string {
 	if modulePath == "" || modulePath == "." {
 		return nil
 	}
-	raw := strings.Split(filepath.ToSlash(modulePath), "/")
+	// Both separators, not just the host's. filepath.ToSlash is a no-op on
+	// Unix, so a Windows-style path arrived here as one long segment and
+	// SubsystemForPath("internal\\graph") returned it whole — the test for
+	// that case passed only on Windows. A module path is a directory path,
+	// and normalising both is what every caller means.
+	normalized := strings.ReplaceAll(filepath.ToSlash(modulePath), "\\", "/")
+	raw := strings.Split(normalized, "/")
 	out := make([]string, 0, len(raw))
 	for _, seg := range raw {
 		if seg == "" || seg == "." || subsystemSkip[seg] || strings.Contains(seg, ".") {

@@ -20,6 +20,17 @@ if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ] && [ -z "$CLAUDE_CODE_OA
   exit 1
 fi
 : "${GOLEM_ADMIN_PASSWORD:?Set GOLEM_ADMIN_PASSWORD in .env}"
+
+# Length is checked here, not just by the orchestrator, because the failure is
+# otherwise invisible: the container logs a warning, starts anyway, and the
+# only symptom is a login page answering "Invalid username or password" for
+# credentials the operator can see sitting in their own .env.
+if [ "${#GOLEM_ADMIN_PASSWORD}" -lt 8 ]; then
+  echo "Error: GOLEM_ADMIN_PASSWORD is ${#GOLEM_ADMIN_PASSWORD} characters; the minimum is 8." >&2
+  echo "       Shorter passwords are rejected when the admin account is created," >&2
+  echo "       which leaves the dashboard with no account to sign in to." >&2
+  exit 1
+fi
 : "${GOLEM_SHEM_API_KEY:?Set GOLEM_SHEM_API_KEY in .env}"
 
 # Generate a random shem key if still using the placeholder.
@@ -41,6 +52,25 @@ if [ -n "$CLAUDE_HOME" ]; then
       export CLAUDE_HOME
       ;;
   esac
+
+  # Checked here because Docker's own message for a missing bind-mount source
+  # is actively misleading: it reports the path as "not shared from the host"
+  # and points at Preferences -> Resources -> File Sharing, which diagnoses a
+  # permissions problem when the real one is that the directory does not
+  # exist. That sends people to configure sharing for a path they never meant
+  # to mount.
+  if [ ! -d "$CLAUDE_HOME" ]; then
+    echo "Error: CLAUDE_HOME points at $CLAUDE_HOME, which is not a directory." >&2
+    if [ "$CLAUDE_HOME" != "${CLAUDE_HOME#/c/Users/YourName}" ]; then
+      echo "       That is the placeholder from .env.example. Set it to your own" >&2
+      echo "       ~/.claude directory, or comment it out and use" >&2
+      echo "       CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY instead." >&2
+    else
+      echo "       Set it to your ~/.claude directory, or comment it out to use a" >&2
+      echo "       throwaway volume with CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY." >&2
+    fi
+    exit 1
+  fi
 fi
 
 docker compose up -d

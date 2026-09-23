@@ -52,7 +52,7 @@ func ReadAll(path string) ([]Entry, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 
 	var entries []Entry
 	scanner := bufio.NewScanner(f)

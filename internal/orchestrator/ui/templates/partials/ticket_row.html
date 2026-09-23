@@ -12,6 +12,13 @@
   <td class="max-w-sm">
     <a href="/tickets/{{.Ticket.ID}}" class="link link-hover font-medium truncate block"
        title="{{.Ticket.Title}}">{{truncate 80 (displayTitle .Ticket.Title .Ticket.Description)}}</a>
+    {{if .Ticket.IssueNumber}}
+    <a class="badge badge-sm badge-outline gap-1 font-mono" href="{{.Ticket.IssueURL}}" target="_blank" rel="noopener"
+       title="Synced from GitHub issue #{{.Ticket.IssueNumber}}">
+      <span class="iconify text-xs" data-icon="heroicons:link"></span>
+      #{{.Ticket.IssueNumber}}
+    </a>
+    {{end}}
     <div class="text-xs text-base-content/40 font-mono truncate mt-0.5" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</div>
   </td>
   <td>
@@ -20,7 +27,11 @@
   <td class="text-sm text-base-content/60">{{if .ShemName}}{{.ShemName}}{{else}}&mdash;{{end}}</td>
   <td class="text-sm text-base-content/50 whitespace-nowrap">{{.Age}}</td>
   <td class="text-right">
-    <a href="/tickets/{{.Ticket.ID}}" class="btn btn-ghost btn-xs" title="Open ticket">
+    {{/* New tab: the dashboard is a worklist read top to bottom and it
+         refreshes on a timer, so following a ticket in place loses the
+         reader's position. The icon already promises this. */}}
+    <a href="/tickets/{{.Ticket.ID}}" target="_blank" rel="noopener"
+       class="btn btn-ghost btn-xs" title="Open ticket in a new tab">
       <span class="iconify" data-icon="heroicons:arrow-top-right-on-square"></span>
     </a>
   </td>

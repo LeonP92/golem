@@ -29,7 +29,7 @@ func (h *Handlers) renderUsers(w http.ResponseWriter, r *http.Request, errMsg st
 	data["Roles"] = roles
 	data["Error"] = errMsg
 	data["MinPasswordLen"] = admin.MinPasswordLen
-	h.render(w, "users", data)
+	h.render(w, r, "users", data)
 }
 
 func (h *Handlers) usersPage(w http.ResponseWriter, r *http.Request) {

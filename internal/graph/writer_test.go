@@ -16,8 +16,12 @@ func TestSlug(t *testing.T) {
 	if Slug("test/e2e/dra") == Slug("test/e2e_dra") {
 		t.Error("paths that flatten alike must not share a slug")
 	}
-	if Slug("a/b") != Slug("a/b") {
-		t.Error("Slug must be deterministic")
+	// Bound to names rather than compared inline: two identical expressions
+	// either side of != read as a typo to staticcheck (SA4000), though the
+	// intent — that two separate calls agree — is real.
+	first, second := Slug("a/b"), Slug("a/b")
+	if first != second {
+		t.Errorf("Slug must be deterministic: %q then %q", first, second)
 	}
 }
 

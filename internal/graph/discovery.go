@@ -1,6 +1,8 @@
 package graph
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +33,7 @@ func Discover(repoRoot string, maxFileSizeKB int, extraExts, ignorePatterns []st
 	cmd.Dir = repoRoot
 	out, err := cmd.Output()
 	if err != nil {
-		return nil, err
+		return nil, gitListError(repoRoot, err)
 	}
 
 	exts := extSet(extraExts)
@@ -79,4 +81,28 @@ func skipped(rel string, skips []string) bool {
 		}
 	}
 	return false
+}
+
+// gitListError turns git's exit status into something that names the cause.
+//
+// cmd.Output() already captures git's stderr onto the *exec.ExitError, but
+// returning the bare error discarded it, so callers printed only
+//
+//	discovering modules: exit status 128
+//
+// That is git's code for "not a git repository", and the message saying so
+// was sitting on the error unread — including in the shem's logs, where this
+// appeared as a repo pre-flight warning with nothing to indicate that the
+// directory simply had no repository in it.
+func gitListError(repoRoot string, err error) error {
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || len(exitErr.Stderr) == 0 {
+		return fmt.Errorf("git ls-files in %s: %w", repoRoot, err)
+	}
+	msg := strings.TrimSpace(string(exitErr.Stderr))
+	if strings.Contains(msg, "not a git repository") {
+		return fmt.Errorf("%s is not a git repository — golem graph needs one "+
+			"(clone or git init there first): %s", repoRoot, msg)
+	}
+	return fmt.Errorf("git ls-files in %s: %w: %s", repoRoot, err, msg)
 }

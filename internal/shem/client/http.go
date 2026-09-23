@@ -31,10 +31,18 @@ type LogPayload struct {
 }
 
 // ClaimResponse is the response from claiming a ticket.
+//
+// There is deliberately no Title field. The orchestrator still sends one, and
+// this struct ignores it: the issue title is already composed into Description
+// (github.Issue.TicketDescription), and it is Description that the approval
+// hash covers and that every prompt builder interpolates. Decoding the title
+// separately is not merely redundant — in this file it reads like a second
+// path from issue text to an agent prompt, one the operator's approval hash
+// would not cover. Nothing in internal/shem ever read it.
 type ClaimResponse struct {
 	TicketID        string        `json:"ticket_id"`
 	Branch          string        `json:"branch"`
-	Title           string        `json:"title"`
+	BaseBranch      string        `json:"base_branch"`
 	RepoRemote      string        `json:"repo_remote"`
 	Description     string        `json:"description"`
 	CheckpointPhase *string       `json:"checkpoint_phase"`
@@ -106,7 +114,7 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 			return resp, nil
 		}
 		if resp != nil {
-			resp.Body.Close()
+			_ = resp.Body.Close()
 		}
 
 		lastErr = err
@@ -135,7 +143,7 @@ func (c *Client) Register(name string, repos []string) (uint, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -155,7 +163,7 @@ func (c *Client) Deregister() error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	return nil
 }
 
@@ -172,7 +180,7 @@ func (c *Client) GetAssigned() ([]AssignedTicket, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -190,7 +198,7 @@ func (c *Client) GetResumable() ([]*ClaimResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -207,7 +215,7 @@ func (c *Client) ClaimTicket(id string) (*ClaimResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
 		return nil, ErrNotAvailable
@@ -233,7 +241,7 @@ func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusConflict {
 		return nil, ErrNotAvailable
@@ -258,7 +266,32 @@ func (c *Client) PostPhase(ticketID string, phase string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	return nil
+}
+
+// PostBranchPushed tells the orchestrator that the ticket branch now exists on
+// the remote, which is the precondition for opening a pull request.
+// Returns ErrNotOwner if the orchestrator rejects the update because this shem
+// no longer owns the ticket (409 Conflict — e.g. after a requeue).
+// PostBranchPushed reports that the ticket's branch reached the remote.
+//
+// prBody is the generated pull request description, and may be empty: the
+// orchestrator falls back to a minimal body rather than withholding the pull
+// request, because the branch is already pushed and the work is done.
+func (c *Client) PostBranchPushed(ticketID, prBody string) error {
+	var payload any
+	if prBody != "" {
+		payload = map[string]string{"pr_body": prBody}
+	}
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/branch-pushed", ticketID), payload)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	if resp.StatusCode == http.StatusConflict {
 		return ErrNotOwner
 	}
@@ -275,7 +308,7 @@ func (c *Client) PostCheckpoint(ticketID string, phase, sha string) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	return nil
 }
 
@@ -285,7 +318,7 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -306,7 +339,7 @@ func (c *Client) PostDocumentFile(ticketID string, entryType, fromRole, filePath
 	if err != nil {
 		return 0, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 
 	url := fmt.Sprintf("%s/api/tickets/%s/log/document", c.baseURL, ticketID)
 	req, err := http.NewRequest("POST", url, f)
@@ -323,7 +356,7 @@ func (c *Client) PostDocumentFile(ticketID string, entryType, fromRole, filePath
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode >= 400 {
 		body, _ := io.ReadAll(resp.Body)
@@ -354,7 +387,7 @@ func (c *Client) PostApprovalRequest(ticketID string, prompt string) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
@@ -380,7 +413,7 @@ func (c *Client) AckInput(ticketID string, inputID uint) error {
 	if err != nil {
 		return err
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	return nil
 }
 
@@ -401,7 +434,7 @@ func (c *Client) firstHumanInput(ticketID string, kind string, includeResolved b
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
@@ -428,7 +461,7 @@ func (c *Client) GetAvailable(repo string) (*string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	var tickets []map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&tickets); err != nil {
@@ -450,4 +483,27 @@ func (c *Client) GetAvailable(repo string) (*string, error) {
 	}
 
 	return &id, nil
+}
+
+// GraphBuildResult is the body of a graph-build outcome report.
+type GraphBuildResult struct {
+	RepoRemote string `json:"repo_remote"`
+	Error      string `json:"error,omitempty"`
+}
+
+// PostGraphBuildResult records the outcome of a graph build the orchestrator
+// asked for. An empty buildErr means it succeeded.
+func (c *Client) PostGraphBuildResult(repoRemote, buildErr string) error {
+	resp, err := c.do("POST", "/api/github/graph-build-result", GraphBuildResult{
+		RepoRemote: repoRemote,
+		Error:      buildErr,
+	})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("post graph build result: unexpected status %d", resp.StatusCode)
+	}
+	return nil
 }

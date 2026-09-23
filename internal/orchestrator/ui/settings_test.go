@@ -3,10 +3,13 @@ package ui_test
 import (
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 
 	"github.com/leonp92/golem/internal/orchestrator/admin"
+	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"gorm.io/gorm"
@@ -25,12 +28,49 @@ func seedUISessionWithPassword(t *testing.T, gdb *gorm.DB, mux *http.ServeMux, u
 		t.Fatalf("find %s: %v", username, err)
 	}
 	// Sign in via the real /login flow so the cookie is genuine.
-	form := fmt.Sprintf("username=%s&password=%s", username, password)
-	w := do(mux, "POST", "/login", nil, form)
-	if len(w.Result().Cookies()) == 0 {
-		t.Fatalf("login for %s produced no cookie (status %d)", username, w.Code)
+	w := signIn(t, mux, username, password)
+	var session *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == "golem_session" && c.Value != "" {
+			session = c
+		}
 	}
-	return u, w.Result().Cookies()[0]
+	if session == nil {
+		t.Fatalf("login for %s produced no session cookie (status %d)", username, w.Code)
+	}
+	return u, session
+}
+
+// signIn performs the two-step login a browser performs: GET /login to be
+// issued the pre-session CSRF nonce and the token rendered into the form,
+// then POST with both. Posting straight to /login is what a cross-site
+// attacker does, and the server refuses it — see TestLoginRequiresItsOwnCSRFToken.
+func signIn(t *testing.T, mux *http.ServeMux, username, password string) *httptest.ResponseRecorder {
+	t.Helper()
+	pageW := httptest.NewRecorder()
+	mux.ServeHTTP(pageW, httptest.NewRequest(http.MethodGet, "/login", nil))
+	var nonce *http.Cookie
+	for _, c := range pageW.Result().Cookies() {
+		if c.Name == auth.LoginCSRFCookie {
+			nonce = c
+		}
+	}
+	if nonce == nil {
+		t.Fatalf("GET /login issued no %s cookie", auth.LoginCSRFCookie)
+	}
+	token := auth.CSRFTokenForLogin(nonce.Value)
+
+	form := url.Values{
+		"username":         {username},
+		"password":         {password},
+		auth.CSRFFormField: {token},
+	}
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.AddCookie(nonce)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
 }
 
 func TestSettingsIndex_RedirectsToDefaultSection(t *testing.T) {
@@ -85,11 +125,14 @@ func TestSettingsChangePassword_HappyPath(t *testing.T) {
 	if !strings.Contains(w.Body.String(), "Password updated.") {
 		t.Errorf("expected success banner, body: %s", w.Body.String())
 	}
-	// A subsequent login with the new password must succeed; the old password must not.
-	if got := do(mux, "POST", "/login", nil, "username=leon&password=newerpassword"); len(got.Result().Cookies()) == 0 {
+	// A subsequent login with the new password must succeed; the old password
+	// must not. Checked on the SESSION cookie specifically, not on "any cookie
+	// was set" — the login page now also issues a CSRF nonce, so the weaker
+	// check would pass for a refused sign-in.
+	if sessionCookie(signIn(t, mux, "leon", "newerpassword")) == nil {
 		t.Errorf("new password did not take effect (login failed)")
 	}
-	if got := do(mux, "POST", "/login", nil, "username=leon&password=originalpass"); len(got.Result().Cookies()) != 0 {
+	if sessionCookie(signIn(t, mux, "leon", "originalpass")) != nil {
 		t.Errorf("old password still accepted after change")
 	}
 }

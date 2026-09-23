@@ -106,11 +106,16 @@ func AppendSymbols(wikiDir string, g ModuleGraph) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// Both the writes and the close are checked: this appends to a file on
+	// disk, so a dropped error here loses wiki content silently — the caller
+	// is told the append succeeded and nothing was written.
 	for _, fn := range g.ExportFns {
-		fmt.Fprintf(f, "- `%s` — %s\n", g.Module, fn)
+		if _, err := fmt.Fprintf(f, "- `%s` — %s\n", g.Module, fn); err != nil {
+			f.Close() //nolint:errcheck // the write error is the one worth reporting
+			return fmt.Errorf("append to fns: %w", err)
+		}
 	}
-	return nil
+	return f.Close()
 }
 
 func AppendTypes(wikiDir string, g ModuleGraph) error {
@@ -121,11 +126,16 @@ func AppendTypes(wikiDir string, g ModuleGraph) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	// Both the writes and the close are checked: this appends to a file on
+	// disk, so a dropped error here loses wiki content silently — the caller
+	// is told the append succeeded and nothing was written.
 	for _, t := range g.ExportTypes {
-		fmt.Fprintf(f, "- `%s` — %s\n", g.Module, t)
+		if _, err := fmt.Fprintf(f, "- `%s` — %s\n", g.Module, t); err != nil {
+			f.Close() //nolint:errcheck // the write error is the one worth reporting
+			return fmt.Errorf("append to ts: %w", err)
+		}
 	}
-	return nil
+	return f.Close()
 }
 
 // SubsystemNarratives maps a subsystem name to its cluster narrative.

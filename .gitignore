@@ -36,3 +36,15 @@ Thumbs.db
 
 # Local environment — contains secrets, never commit
 .env
+
+# SQLite scratch databases from local runs and tests. The -wal/-shm
+# sidecars are easy to sweep up with `git add -A` and have been once.
+*.db
+*.db-wal
+*.db-shm
+
+# Claude Code runtime state that lands in the repo when a container runs an
+# agent with this tree bind-mounted. .claude/agents, .claude/commands and
+# .claude/settings.json ARE tracked on purpose — these two are not.
+.claude/projects/
+.claude/backups/

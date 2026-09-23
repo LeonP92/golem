@@ -117,7 +117,7 @@ func FileHash(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err

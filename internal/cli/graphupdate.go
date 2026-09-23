@@ -111,13 +111,17 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "resetting aggregates: %v\n", err)
 		return 1
 	}
+	// Report rather than drop: these append to the wiki's aggregate files, so
+	// a swallowed failure produces a graph that looks complete and silently
+	// is not. Failing the command is right — the aggregates were just reset,
+	// so a partial append leaves them worse than before.
 	for _, g := range allGraphs {
 		if err := graph.AppendSymbols(wikiDir, g); err != nil {
-			fmt.Fprintf(stderr, "writing symbols: %v\n", err)
+			fmt.Fprintf(stderr, "appending symbols for %s: %v\n", g.Module, err)
 			return 1
 		}
 		if err := graph.AppendTypes(wikiDir, g); err != nil {
-			fmt.Fprintf(stderr, "writing types: %v\n", err)
+			fmt.Fprintf(stderr, "appending types for %s: %v\n", g.Module, err)
 			return 1
 		}
 	}
@@ -187,4 +191,3 @@ func staleModules(changed []string) map[string]bool {
 	}
 	return stale
 }
-

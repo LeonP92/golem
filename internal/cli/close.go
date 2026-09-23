@@ -89,8 +89,10 @@ func TicketClose(args []string, stdout, stderr io.Writer) int {
 		// non-fatal: log warning and continue
 		w, _ := blog.NewWriter(logPath)
 		if w != nil {
-			w.Append(blog.NewEntry("system", blog.TypeStatus, "WARNING: graph update failed: "+err.Error()))
-			w.Close()
+			// Best effort: this is already the failure path for the graph
+			// update, and there is nowhere better to report a logging failure.
+			_ = w.Append(blog.NewEntry("system", blog.TypeStatus, "WARNING: graph update failed: "+err.Error()))
+			_ = w.Close()
 		}
 	}
 
@@ -121,12 +123,19 @@ func updateGraphAfterClose(repoRoot, golemDir, branch, logPath string) error {
 	return nil
 }
 
-func promoteReviewerSoulEntries(entries []blog.Entry, soulDir, logPath string) error {
+// The close is reported through the named return rather than dropped: this
+// writer is appending log entries, so a failed close means entries this
+// function reported as written are not on disk.
+func promoteReviewerSoulEntries(entries []blog.Entry, soulDir, logPath string) (err error) {
 	w, err := blog.NewWriter(logPath)
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() {
+		if cerr := w.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing log: %w", cerr)
+		}
+	}()
 	for _, e := range entries {
 		if e.Role != "reviewer" || e.Type != blog.TypeStatus {
 			continue
@@ -135,13 +144,16 @@ func promoteReviewerSoulEntries(entries []blog.Entry, soulDir, logPath string) e
 			if err := soul.Promote(soulDir, p.Filename, p.Content); err != nil {
 				return fmt.Errorf("promoting %s: %w", p.Filename, err)
 			}
-			w.Append(blog.NewEntry("reviewer", blog.TypeStatus, "promoted soul entry: "+p.Filename))
+			if err := w.Append(blog.NewEntry("reviewer", blog.TypeStatus,
+				"promoted soul entry: "+p.Filename)); err != nil {
+				return fmt.Errorf("recording promotion of %s: %w", p.Filename, err)
+			}
 		}
 	}
 	return nil
 }
 
-func proposeAndPromoteSoulEntries(cfg *config.Config, golemDir, worktreePath, logPath string, candidates []soul.Candidate) error {
+func proposeAndPromoteSoulEntries(cfg *config.Config, golemDir, worktreePath, logPath string, candidates []soul.Candidate) (err error) {
 	rolePrompt, err := os.ReadFile(filepath.Join(golemDir, "roles", "reviewer.md"))
 	if err != nil {
 		return err
@@ -166,7 +178,11 @@ func proposeAndPromoteSoulEntries(cfg *config.Config, golemDir, worktreePath, lo
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() {
+		if cerr := w.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing log: %w", cerr)
+		}
+	}()
 
 	soulDir := filepath.Join(golemDir, "wiki", "soul")
 	for _, p := range parseSoulProposals(result.Output) {

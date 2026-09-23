@@ -8,9 +8,11 @@ import (
 	"os"
 	"time"
 
+	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/admin"
 	"github.com/leonp92/golem/internal/orchestrator/config"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/server"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
@@ -30,7 +32,11 @@ func main() {
 	//   orchestrator users remove <username>
 	//   orchestrator shems add --name <name>
 	//   orchestrator shems remove <name>
-	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems") {
+	//   orchestrator repos list
+	//   orchestrator repos remove <remote> [--force]
+	//   orchestrator backfill body-hash [--dry-run]
+	if len(args) >= 2 && (args[0] == "users" || args[0] == "shems" ||
+		args[0] == "repos" || args[0] == "backfill") {
 		dsn := os.Getenv("ORCHESTRATOR_DB")
 		if dsn == "" {
 			dsn = "orchestrator.db"
@@ -112,6 +118,82 @@ func main() {
 			default:
 				log.Fatalf("unknown shems subcommand %q; expected add|remove", args[1])
 			}
+		case "repos":
+			switch args[1] {
+			case "list":
+				repos, err := admin.ReposList(gdb)
+				if err != nil {
+					log.Fatalf("repos list: %v", err)
+				}
+				if len(repos) == 0 {
+					fmt.Println("No repo rows. A remote a shem declares appears on " +
+						"/settings/github without a row until you save its settings.")
+					break
+				}
+				// Reports what an operator asking "did the sync work?"
+				// actually needs: whether it has ever polled, how many
+				// tickets came out, and the last error if any. The log is
+				// not enough on its own — a pass that matched nothing and a
+				// pass that never ran look the same from outside.
+				for _, rp := range repos {
+					state := "disabled"
+					if rp.Enabled {
+						state = "enabled"
+					}
+					polled := "never"
+					if rp.LastPolledAt != nil {
+						polled = rp.LastPolledAt.Format(time.RFC3339)
+					}
+					var tickets int64
+					if err := gdb.Model(&db.Ticket{}).
+						Where("repo_remote = ?", rp.RepoRemote).Count(&tickets).Error; err != nil {
+						log.Fatalf("repos list: count tickets for %s: %v", rp.RepoRemote, err)
+					}
+					fmt.Printf("%s\t%s\tlabel=%s\tpolled=%s\ttickets=%d\n",
+						rp.RepoRemote, state, rp.Label, polled, tickets)
+					if rp.LastError != "" {
+						fmt.Printf("  last error: %s\n", rp.LastError)
+					}
+				}
+			case "remove":
+				if len(args) < 3 {
+					log.Fatal("usage: orchestrator repos remove <remote> [--force]")
+				}
+				force := false
+				for _, a := range args[3:] {
+					if a == "--force" {
+						force = true
+					}
+				}
+				if err := admin.ReposRemove(gdb, args[2], force); err != nil {
+					log.Fatalf("repos remove: %v", err)
+				}
+				fmt.Printf("Repo %q removed.\n", args[2])
+			default:
+				log.Fatalf("unknown repos subcommand %q; expected list|remove", args[1])
+			}
+		case "backfill":
+			// One-shot repair for databases written by a deployment made
+			// partway through the GitHub Issues work, where issue_number had
+			// shipped but body_hash had not. See admin.BackfillBodyHash for
+			// exactly which rows qualify and why nothing else fixes them.
+			if args[1] != "body-hash" {
+				log.Fatalf("unknown backfill subcommand %q; expected body-hash", args[1])
+			}
+			dryRun := false
+			for _, a := range args[2:] {
+				switch a {
+				case "--dry-run":
+					dryRun = true
+				default:
+					log.Fatalf("usage: orchestrator backfill body-hash [--dry-run]")
+				}
+			}
+			res, err := admin.BackfillBodyHash(gdb, dryRun)
+			if err != nil {
+				log.Fatalf("backfill body-hash: %v", err)
+			}
+			fmt.Println(res)
 		}
 		return
 	}
@@ -142,7 +224,28 @@ func main() {
 			username = "admin"
 		}
 		if err := admin.UsersAddOrUpdate(gdb, username, password, string(rbac.RoleAdmin)); err != nil {
-			log.Printf("warn: auto-provision admin user %q: %v", username, err)
+			// Fatal only when it leaves the dashboard with no way in. An
+			// operator who set GOLEM_ADMIN_PASSWORD asked for an account; a
+			// warning they never read, plus a login page saying "Invalid
+			// username or password", is the worst of both worlds — the most
+			// common cause is a password under the 8-character minimum, and
+			// nothing on screen says so.
+			//
+			// An existing admin means the deployment is still usable, so a
+			// bad value there is a warning and not a crash loop on upgrade.
+			var admins int64
+			if cerr := gdb.Model(&db.User{}).Where("role = ?", string(rbac.RoleAdmin)).
+				Count(&admins).Error; cerr != nil {
+				log.Fatalf("auto-provision admin user %q: %v (and counting existing admins failed: %v)",
+					username, err, cerr)
+			}
+			if admins == 0 {
+				log.Fatalf("auto-provision admin user %q: %v\n"+
+					"       No admin account exists, so nobody could sign in. "+
+					"Fix GOLEM_ADMIN_PASSWORD and restart.", username, err)
+			}
+			log.Printf("warn: auto-provision admin user %q: %v (keeping the %d existing admin(s))",
+				username, err, admins)
 		} else {
 			log.Printf("auto-provisioned admin user %q", username)
 		}
@@ -161,9 +264,90 @@ func main() {
 	hub := ws.NewHub()
 	broker := sse.NewBroker()
 	ws.StartHeartbeatMonitor(context.Background(), gdb, hub, 60*time.Second, 90*time.Second)
+
+	// GitHub sync: started whenever a token is present, whether or not any
+	// repository is enabled yet — see githubSyncPlan for why the repo count
+	// must not gate this. Required secrets are validated at startup with a
+	// loud log message, not a silent no-op, and a missing token never
+	// prevents the rest of the orchestrator from serving.
+	var ghWorker *ghsync.Worker
+	// Validated eagerly, and fatally: a trigger label inside the golem:*
+	// namespace is stripped from the issue on its first phase change, which
+	// un-enrols it from the very label that enrolled it. The settings form
+	// already refuses one; an operator who sets it through the environment
+	// deserves the same answer, and at startup rather than on the first
+	// phase transition hours later.
+	if err := ghsync.ValidateTriggerLabel(cfg.GitHub.TriggerLabel()); err != nil {
+		log.Fatalf("github sync: %v", err)
+	}
+
+	token := os.Getenv(cfg.GitHub.TokenEnv)
+	var enabledRepos int64
+	if err := gdb.Model(&db.GitHubRepo{}).Where("enabled = ?", true).Count(&enabledRepos).Error; err != nil {
+		// The count is informational — it only chooses which message to
+		// print — so a failure here must not decide the token question. It
+		// is reported and then treated as zero.
+		log.Printf("ERROR github sync: count enabled repos: %v — continuing as if none were enabled", err)
+		enabledRepos = 0
+	}
+	plan := githubSyncPlan(cfg.GitHub.TokenEnv, token, enabledRepos)
+	log.Print(plan.log)
+	if plan.start {
+		if cfg.BaseURL == "" {
+			// Not fatal — sync still runs — but every milestone comment
+			// ghsync posts to a real GitHub issue would otherwise end in a
+			// bare "/tickets/<id>" with no host, a silently broken link.
+			log.Printf("WARNING github sync: base_url is empty — milestone " +
+				"comments will link to a relative /tickets/<id> path; set " +
+				"base_url in the config to the orchestrator's externally " +
+				"reachable URL")
+		}
+		client, err := github.New(token, cfg.GitHub.APIBase)
+		if err != nil {
+			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)
+		} else {
+			syncer := ghsync.NewSyncer(gdb, client)
+			// How the pull-request monitor tells a shem it has work. Same
+			// message the human "request changes" button sends, because it
+			// is the same situation: feedback on pushed work.
+			syncer.NotifyShem = func(shemID uint, msgType, ticketID, repoRemote string) {
+				if err := hub.Push(shemID, ws.WSMessage{
+					Type: msgType, TicketID: &ticketID, Repo: repoRemote,
+				}); err != nil {
+					log.Printf("pr monitor: notify shem %d (%s) for ticket %s: %v",
+						shemID, msgType, ticketID, err)
+				}
+			}
+			ghWorker = ghsync.NewWorker(
+				syncer,
+				cfg.GitHub.PollIntervalDuration(),
+				cfg.GitHub.DrainIntervalDuration(),
+			)
+			ghWorker.PRMonitorInterval = cfg.GitHub.PRMonitorIntervalDuration()
+			ghWorker.Start(context.Background())
+			defer ghWorker.Stop()
+			log.Printf("github sync: started (ingest %v, drain %v, pr monitor %v, max pr fix attempts %d)",
+				cfg.GitHub.PollIntervalDuration(), cfg.GitHub.DrainIntervalDuration(),
+				cfg.GitHub.PRMonitorIntervalDuration(), cfg.GitHub.MaxPRFixAttempts())
+		}
+	}
+
 	secureCookie := cfg.TLS.Cert != "" && cfg.TLS.Key != ""
-	srv := server.New(gdb, hub, broker, secureCookie)
-	addr := fmt.Sprintf(":%d", cfg.Port)
+	srv := server.New(gdb, hub, broker, secureCookie, cfg.BaseURL)
+	srv.ManualSyncCooldown = cfg.GitHub.ManualSyncCooldownDuration()
+	srv.CSPMode = cfg.CSP.Mode
+	srv.GitHubTokenEnv = cfg.GitHub.TokenEnv
+	srv.GitHubDefaultLabel = cfg.GitHub.TriggerLabel()
+	// Only assign Sync when the worker was actually started. ghWorker is a
+	// *ghsync.Worker; assigning a nil *ghsync.Worker to the api.SyncTrigger
+	// interface field would produce a non-nil interface holding a nil
+	// pointer, so h.Sync == nil in the handler would be false and the first
+	// call into it would panic instead of returning 503. Guarding here keeps
+	// the interface itself nil whenever sync isn't running.
+	if ghWorker != nil {
+		srv.Sync = ghWorker
+	}
+	addr := fmt.Sprintf(":%d", cfg.ListenPort())
 	if secureCookie {
 		log.Printf("listening on %s (TLS)", addr)
 		log.Fatal(http.ListenAndServeTLS(addr, cfg.TLS.Cert, cfg.TLS.Key, srv.Routes()))

@@ -11,7 +11,14 @@
         <span>Invalid username or password.</span>
       </div>
       {{end}}
+      {{if .Expired}}
+      <div class="alert alert-warning mb-4">
+        <span class="iconify" data-icon="heroicons:clock"></span>
+        <span>This form expired. Please sign in again.</span>
+      </div>
+      {{end}}
       <form method="POST" action="/login" class="flex flex-col gap-3">
+        <input type="hidden" name="csrf_token" value="{{.LoginCSRFToken}}">
         <div class="form-control">
           <label class="label"><span class="label-text">Username</span></label>
           <input type="text" name="username" class="input input-bordered" required autofocus>

@@ -26,8 +26,8 @@ type Match struct {
 // credentials — pure Go, no cgo.
 type Index struct {
 	Docs    []Doc
-	Vocab   map[string]int   // term -> index into each vector
-	Vectors [][]float64      // one vector per Doc, same order as Docs
+	Vocab   map[string]int      // term -> index into each vector
+	Vectors [][]float64         // one vector per Doc, same order as Docs
 	Links   map[string][]string // extracted co-mention edges: path -> paths mentioned by that doc
 }
 
@@ -195,8 +195,13 @@ func SaveToFile(idx *Index, path string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	return gob.NewEncoder(f).Encode(idx)
+	// Checked, not deferred: this writes the index, so a close that fails
+	// after a successful Encode still means the file on disk is incomplete.
+	if err := gob.NewEncoder(f).Encode(idx); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func LoadFromFile(path string) (*Index, error) {
@@ -204,7 +209,7 @@ func LoadFromFile(path string) (*Index, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 	var idx Index
 	if err := gob.NewDecoder(f).Decode(&idx); err != nil {
 		return nil, err

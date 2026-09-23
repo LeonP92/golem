@@ -56,3 +56,15 @@ func (b *Broker) Publish(ticketID string, evt LogEntryEvent) {
 		}
 	}
 }
+
+// SubscriberCount returns the number of live subscribers for ticketID.
+//
+// Exposed so that transports can be tested for the leak that matters: a
+// handler that returns without calling its cancel func keeps a channel in the
+// map forever, and Publish walks every subscriber on every entry, so the cost
+// is paid by all future log traffic rather than by the connection that leaked.
+func (b *Broker) SubscriberCount(ticketID string) int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.subscribers[ticketID])
+}

@@ -1,6 +1,46 @@
+# ONE ORCHESTRATOR PROCESS PER DATABASE. Shems scale out; this does not.
+# The GitHub write outbox is drained by a select that takes no lock and writes
+# no claim, so two processes against one database both deliver the same rows:
+# duplicate issue comments, duplicate label writes, wasted rate limit, and no
+# error recorded anywhere. The same applies to the issue polling. Pointing
+# db_path at a PostgreSQL DSN does not change this. See the README section
+# "One orchestrator process per database".
 port: 8080
 db_path: /data/orchestrator.db
+
+# The orchestrator's externally reachable base URL. Used to build links back
+# to tickets — for example the "Golem wrote a spec for this issue" milestone
+# comments ghsync posts to GitHub. Leaving this unset (the default is empty)
+# produces working syncs but broken links (a bare "/tickets/<id>" with no
+# host) and a startup warning once GitHub sync is enabled — uncomment and set
+# it to the real address before enabling GitHub sync in production.
+# base_url: "https://golem.example.com"
 
 # tls:
 #   cert: /etc/golem/tls/cert.pem
 #   key:  /etc/golem/tls/key.pem
+
+github:
+  token_env: GOLEM_GITHUB_TOKEN
+
+  # The opt-in label an issue must carry to be ingested. GOLEM_GITHUB_LABEL in
+  # the environment overrides this, which is the path a Docker deployment uses
+  # — this file is bind-mounted read-only, .env is not. Unset on both means
+  # "golem".
+  #
+  # A default only: it seeds the label when a repository is first registered
+  # and is what /settings/github offers for an unregistered one. A saved
+  # per-repo label is left alone. Must not start with "golem:" — that is the
+  # phase-label namespace, and a trigger inside it would be stripped from the
+  # issue on its first phase change.
+  # default_label: golem
+  poll_interval: 15m
+  drain_interval: 20s
+  manual_sync_cooldown: 60s
+  api_base: ""          # set for GitHub Enterprise
+
+# Content-Security-Policy. "enforce" (default), "report-only", or "off".
+# Verify a new deployment once with the browser console open; "report-only"
+# logs violations without blocking so you can check safely first.
+csp:
+  mode: enforce

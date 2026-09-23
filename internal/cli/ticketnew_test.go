@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,5 +91,58 @@ func TestTicketNew_WithTicketID(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".golem", "tickets", "42")); os.IsNotExist(err) {
 		t.Error("expected ticket dir .golem/tickets/42 to exist")
+	}
+}
+
+// TestTicketNew_DescriptionStartingWithDash proves the real flag.FlagSet
+// honours the "--" separator the shem worker now passes (finding S3), and
+// that the description survives it byte-for-byte.
+//
+// Verified against HEAD 51d9526 without the separator: "- [ ] add dark mode"
+// gave "flag provided but not defined" and exit 1; "---\ntitle: bug\n---"
+// gave "bad flag syntax" and exit 1; and a body of exactly "--from-issue=7"
+// parsed as that flag and reached the GitHub-fetch path, stopped only by
+// GOLEM_GITHUB_TOKEN being unset. Any of those is an issue that can never be
+// worked: the worker posts needs-attention, a human requeues, and it fails
+// identically.
+func TestTicketNew_DescriptionStartingWithDash(t *testing.T) {
+	tests := []struct {
+		name        string
+		description string
+	}{
+		{name: "markdown bullet", description: "- add dark mode"},
+		{name: "markdown checklist", description: "- [ ] add dark mode\n- [ ] add tests"},
+		{name: "horizontal rule and front matter", description: "---\ntitle: bug\n---\nIt crashes."},
+		{name: "single-dash flag lookalike", description: "-trivial"},
+		{name: "flag injection attempt", description: "--from-issue=7"},
+		{name: "repo flag injection attempt", description: "--repo=/tmp"},
+		{name: "ordinary prose is unaffected", description: "Add a dark mode toggle"},
+	}
+
+	for i, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := initRepoForCLI(t)
+			id := fmt.Sprintf("dash-%d", i)
+			var stdout, stderr bytes.Buffer
+
+			args := []string{"--repo", repo, "--ticket-id", id, "--branch", "b" + id, "--", tc.description}
+			if code := TicketNew(args, &stdout, &stderr); code != 0 {
+				t.Fatalf("TicketNew exit %d, want 0: stderr=%s", code, stderr.String())
+			}
+
+			s, err := ticket.Load(filepath.Join(repo, ".golem", "tickets", id))
+			if err != nil {
+				t.Fatalf("ticket.Load: %v", err)
+			}
+			if s.Description != tc.description {
+				t.Errorf("Description = %q, want %q", s.Description, tc.description)
+			}
+			// The GitHub-fetch path must not have been taken: it would have
+			// replaced the description and stamped an issue number.
+			if s.IssueNumber != 0 {
+				t.Errorf("IssueNumber = %d, want 0 — the description was parsed as --from-issue",
+					s.IssueNumber)
+			}
+		})
 	}
 }

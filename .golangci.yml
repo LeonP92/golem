@@ -1,5 +1,53 @@
+version: "2"
+
+# Migrated to the v2 schema so the linter can actually run: the v1-era
+# golangci-lint this repo pinned (v1.64.8) ships a type-checker that predates
+# Go 1.27's export data, so under the current toolchain it reported dozens of
+# phantom "undefined method" errors instead of real findings. A linter whose
+# output you have to ignore is worse than no linter, which is why no lint had
+# ever run here.
+#
+# The linter set is unchanged from the v1 config. Deliberately NOT taking the
+# exclusion presets `golangci-lint migrate` adds by default: std-error-handling
+# in particular waives unchecked errors on common stdlib calls, and "never
+# silently swallow an error" is a standing constraint in this codebase — the
+# one sanctioned exception is the outbox's duplicate-key swallow, which is
+# explicit at its call site.
+# No issue caps: the defaults (50 per linter, 3 per identical message) silently
+# truncate the report, which made an earlier count of this backlog wrong.
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
 linters:
+  default: none
   enable:
-    - unused
-    - staticcheck
     - errcheck
+    - staticcheck
+    - unused
+  settings:
+    errcheck:
+      # Writing to stdout/stderr: the error is unactionable by construction —
+      # the only thing you could do about a failed write to stderr is write to
+      # stderr. ~270 of the 299 findings when the linter was first made to run
+      # were this, across every CLI command, and burying the ~30 real ones
+      # under them is how a linter gets switched off.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - (io.Writer).Write
+  exclusions:
+    generated: lax
+    rules:
+      # errcheck is off for test files. An unchecked os.WriteFile in test setup
+      # announces itself as a test failure on the very next line; the standing
+      # "never silently swallow an error" rule is about production behaviour,
+      # where a dropped error is invisible. Production code is held to it with
+      # no exclusions — it is at zero findings and must stay there.
+      - linters: [errcheck]
+        path: _test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

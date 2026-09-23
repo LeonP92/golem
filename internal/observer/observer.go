@@ -97,7 +97,7 @@ func (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) e
 	if err != nil {
 		return err
 	}
-	defer w.Close()
+	defer func() { _ = w.Close() }()
 
 	e := blog.NewEntry(role, entryType, result.Output)
 	e.CommitSHA = commitSHA
