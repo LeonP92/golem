@@ -108,7 +108,6 @@ func TestWorker_PicksUpRevisingTicketsWithoutAPush(t *testing.T) {
 // active phase self-healing, including ones nobody has thought of yet,
 // rather than requiring each to remember to send a message.
 func TestWorker_PicksUpAResumedTicketWithoutRestarting(t *testing.T) {
-	claimed := make(chan string, 4)
 	// GetResumable answers with the ticket only from the second call on, so
 	// a pass that happens during Start() cannot be what satisfies this
 	// test — it has to be the poll loop.
@@ -157,5 +156,4 @@ func TestWorker_PicksUpAResumedTicketWithoutRestarting(t *testing.T) {
 		t.Fatal("a ticket restored to an active phase was never picked up; " +
 			"\"Start again\" reports success and then nothing happens until a restart")
 	}
-	_ = claimed
 }

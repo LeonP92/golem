@@ -84,13 +84,29 @@ if [ -n "$GOLEM_AGENT_USER" ]; then
     echo "shem: WARNING GOLEM_AGENT_USER=$GOLEM_AGENT_USER has no account; the agent will run as root" >&2
   else
     mkdir -p "$agent_home/.claude"
-    if [ -n "$CLAUDE_HOME" ] && [ -f "$CLAUDE_JSON" ]; then
-      # Session mode: the agent cannot read root's home, so give it a copy
-      # of the mounted session rather than a bare bootstrap.
-      cp -f "$CLAUDE_JSON" "$agent_home/.claude.json" 2>/dev/null || true
-      cp -R "$CLAUDE_DIR/." "$agent_home/.claude/" 2>/dev/null || true
-    elif [ ! -f "$agent_home/.claude.json" ]; then
+    # Session mode: the agent cannot read root's home, so give it a copy of
+    # the mounted session. Gated on the mounted DIRECTORY, not on
+    # .claude.json — that file lives beside ~/.claude, not inside it, so a
+    # host whose mount carries only the directory still has credentials to
+    # copy. Failures are reported: a silent one leaves the agent with a
+    # config that looks fine and no credentials in it.
+    if [ -n "$CLAUDE_HOME" ] && [ -d "$CLAUDE_DIR" ]; then
+      if ! cp -R "$CLAUDE_DIR/." "$agent_home/.claude/"; then
+        echo "shem: WARNING could not copy $CLAUDE_DIR into $agent_home/.claude" >&2
+      fi
+      if [ -f "$CLAUDE_JSON" ] && ! cp -f "$CLAUDE_JSON" "$agent_home/.claude.json"; then
+        echo "shem: WARNING could not copy $CLAUDE_JSON to $agent_home" >&2
+      fi
+    fi
+    if [ ! -f "$agent_home/.claude.json" ]; then
       printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$agent_home/.claude.json"
+    fi
+    # Say so now rather than letting every phase fail with "Not logged in".
+    if [ ! -f "$agent_home/.claude/.credentials.json" ] &&
+       [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+      echo "shem: WARNING no credentials for $GOLEM_AGENT_USER — claude will report" >&2
+      echo "shem:   \"Not logged in\" and every phase will fail. Mount a logged-in" >&2
+      echo "shem:   CLAUDE_HOME, or set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN." >&2
     fi
     chown -R "$GOLEM_AGENT_USER" "$agent_home"
     echo "shem: prepared $agent_home for agent account $GOLEM_AGENT_USER"

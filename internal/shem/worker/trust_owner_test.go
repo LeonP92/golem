@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"syscall"
 	"testing"
 )
 
@@ -54,5 +53,4 @@ func TestSetWorkspaceTrusted_LeavesTheFileAgentReadable(t *testing.T) {
 	if entry == nil || entry["hasTrustDialogAccepted"] != true {
 		t.Errorf("the repo was not trusted: %v", cfg)
 	}
-	_ = syscall.Getuid
 }

@@ -39,10 +39,10 @@ func trustWorkspace(repoPath string) {
 		return
 	}
 	homes := []string{home}
-	if acct := agentenv.User(); acct != nil {
+	acct := agentenv.User()
+	if acct != nil {
 		homes = append(homes, acct.Home) // the agent reads its own config
 	}
-	acct := agentenv.User()
 	for _, h := range homes {
 		configPath := filepath.Join(h, ".claude.json")
 		if err := setWorkspaceTrusted(configPath, repoPath); err != nil {
