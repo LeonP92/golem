@@ -76,7 +76,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	// Fatal rather than a warning, unlike the pre-flight below: without a
 	// repository on disk every later step fails, and doing so here names the
 	// cause instead of leaving a git exit status to explain it.
-	if err := CloneIfMissing(ctx, repoPath, claim.RepoRemote); err != nil {
+	if err := CloneIfMissing(ctx, repoPath, repoCloneRemote(cfg, claim.RepoRemote)); err != nil {
 		return fmt.Errorf("preparing %s: %w", repoPath, err)
 	}
 
@@ -849,6 +849,19 @@ func repoLocalPath(cfg *config.Config, normalizedRemote string) string {
 		}
 	}
 	return ""
+}
+
+// repoCloneRemote returns the URL to clone from: the one the operator wrote in
+// shem.yaml, not the normalized form, which has had ".git" and its case
+// stripped and is only meant to identify a repository. Falls back to the given
+// remote when no repo is configured for it.
+func repoCloneRemote(cfg *config.Config, normalizedRemote string) string {
+	for _, r := range cfg.Repos {
+		if r.NormalizedRemote == normalizedRemote && r.Remote != "" {
+			return r.Remote
+		}
+	}
+	return normalizedRemote
 }
 
 // firstLineOf trims a multi-line command failure to something that reads as a

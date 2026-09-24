@@ -251,7 +251,7 @@ func (r GitHubRepo) GraphBuildStale(now time.Time) bool {
 	if r.GraphBuildStartedAt == nil {
 		return false
 	}
-	if r.GraphBuildFinishedAt != nil && r.GraphBuildFinishedAt.After(*r.GraphBuildStartedAt) {
+	if r.graphBuildFinished() {
 		return false
 	}
 	return now.Sub(*r.GraphBuildStartedAt) > GraphBuildTimeout
@@ -262,10 +262,17 @@ func (r GitHubRepo) GraphBuildRunning(now time.Time) bool {
 	if r.GraphBuildStartedAt == nil {
 		return false
 	}
-	if r.GraphBuildFinishedAt != nil && r.GraphBuildFinishedAt.After(*r.GraphBuildStartedAt) {
+	if r.graphBuildFinished() {
 		return false
 	}
 	return !r.GraphBuildStale(now)
+}
+
+// graphBuildFinished reports whether the last build reported back. Uses >=,
+// not >, so a build that finishes in the same clock tick it started counts as
+// finished — matching the SQL claim predicate.
+func (r GitHubRepo) graphBuildFinished() bool {
+	return r.GraphBuildFinishedAt != nil && !r.GraphBuildFinishedAt.Before(*r.GraphBuildStartedAt)
 }
 
 // GraphBuildTimeout bounds how long a build is believed to still be running.

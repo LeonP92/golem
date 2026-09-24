@@ -27,7 +27,7 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 		return fmt.Errorf("RecoverTicket: no local path for repo %q", claim.RepoRemote)
 	}
 
-	if err := CloneIfMissing(ctx, repoPath, claim.RepoRemote); err != nil {
+	if err := CloneIfMissing(ctx, repoPath, repoCloneRemote(cfg, claim.RepoRemote)); err != nil {
 		return fmt.Errorf("RecoverTicket: clone: %w", err)
 	}
 
