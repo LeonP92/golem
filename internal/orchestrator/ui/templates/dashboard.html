@@ -1,6 +1,6 @@
 {{define "page_content"}}
 <div id="dashboard-live"
-  hx-get="/dashboard"
+  hx-get="/dashboard{{if eq .View "closed"}}?view=closed{{end}}"
   hx-trigger="every 10s"
   hx-select="#dashboard-live"
   hx-target="#dashboard-live"
@@ -14,6 +14,23 @@
   <a href="/tickets/new" class="btn btn-primary btn-sm gap-1.5">
     <span class="iconify" data-icon="heroicons:plus"></span>
     New Ticket
+  </a>
+</div>
+
+<div role="tablist" class="join mb-3" aria-label="Ticket view">
+  <a href="/dashboard?view=active" role="tab"
+     aria-selected="{{if ne .View "closed"}}true{{else}}false{{end}}"
+     class="join-item btn btn-sm gap-1.5 {{if ne .View "closed"}}btn-active btn-neutral{{end}}">
+    <span class="iconify" data-icon="heroicons:bolt"></span>
+    Active
+    <span class="badge badge-sm">{{.ActiveCount}}</span>
+  </a>
+  <a href="/dashboard?view=closed" role="tab"
+     aria-selected="{{if eq .View "closed"}}true{{else}}false{{end}}"
+     class="join-item btn btn-sm gap-1.5 {{if eq .View "closed"}}btn-active btn-neutral{{end}}">
+    <span class="iconify" data-icon="heroicons:archive-box"></span>
+    Closed
+    <span class="badge badge-sm">{{.ClosedCount}}</span>
   </a>
 </div>
 
@@ -38,9 +55,14 @@
             <tr>
               <td colspan="6" class="text-center py-12 text-base-content/50">
                 <div class="flex flex-col items-center gap-2">
+                  {{if eq .View "closed"}}
+                  <span class="iconify text-4xl" data-icon="heroicons:archive-box"></span>
+                  <p>No closed tickets.</p>
+                  {{else}}
                   <span class="iconify text-4xl" data-icon="heroicons:inbox"></span>
-                  <p>No tickets yet.</p>
+                  <p>No active tickets.</p>
                   <a href="/tickets/new" class="btn btn-primary btn-sm">Create one</a>
+                  {{end}}
                 </div>
               </td>
             </tr>

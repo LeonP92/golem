@@ -391,9 +391,31 @@ type ShemRow struct {
 	RepoList      []string
 }
 
+// Dashboard views, selected by ?view=. Anything unrecognised is the active
+// worklist, so a stale or hand-typed link still lands somewhere useful.
+const (
+	dashboardViewActive = "active"
+	dashboardViewClosed = "closed"
+)
+
 func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
+	view := dashboardViewActive
+	if r.URL.Query().Get("view") == dashboardViewClosed {
+		view = dashboardViewClosed
+	}
+
+	var activeCount, closedCount int64
+	h.DB.Model(&db.Ticket{}).Where("phase <> ?", "closed").Count(&activeCount)
+	h.DB.Model(&db.Ticket{}).Where("phase = ?", "closed").Count(&closedCount)
+
 	var tickets []db.Ticket
-	h.DB.Order("created_at desc").Find(&tickets)
+	q := h.DB.Order("created_at desc")
+	if view == dashboardViewClosed {
+		q = q.Where("phase = ?", "closed")
+	} else {
+		q = q.Where("phase <> ?", "closed")
+	}
+	q.Find(&tickets)
 
 	var shems []db.Shem
 	h.DB.Find(&shems)
@@ -433,6 +455,9 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	data := h.base(r, "dashboard")
 	data["Tickets"] = rows
+	data["View"] = view
+	data["ActiveCount"] = activeCount
+	data["ClosedCount"] = closedCount
 	h.render(w, r, "dashboard", data)
 }
 
