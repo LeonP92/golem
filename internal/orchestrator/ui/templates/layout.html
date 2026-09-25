@@ -286,25 +286,6 @@
         });
       }
     })();
-
-    // Preserve collapse open/closed state across #ticket-live polls.
-    let _collapseStates = {};
-    document.addEventListener('htmx:beforeSwap', e => {
-      if (e.detail.target && e.detail.target.id === 'ticket-live') {
-        document.querySelectorAll('#ticket-live .collapse input[type="checkbox"][id]').forEach(el => {
-          _collapseStates[el.id] = el.checked;
-        });
-      }
-    });
-    document.addEventListener('htmx:afterSwap', e => {
-      if (e.detail.target && e.detail.target.id === 'ticket-live') {
-        Object.entries(_collapseStates).forEach(([id, checked]) => {
-          const el = document.getElementById(id);
-          if (el) el.checked = checked;
-        });
-        _collapseStates = {};
-      }
-    });
   </script>
 </body>
 </html>
