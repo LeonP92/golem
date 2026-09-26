@@ -102,6 +102,113 @@ func TestCheckBloatFlagsCommitFarOverExpectation(t *testing.T) {
 	}
 }
 
+// gitCommitFiles commits several files (creating parent dirs) in one commit.
+func gitCommitFiles(t *testing.T, dir string, files map[string]string, message string) string {
+	t.Helper()
+	for name, content := range files {
+		path := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatalf("mkdir: %v", err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	add := exec.Command("git", "add", "-A")
+	add.Dir = dir
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git add: %v\n%s", err, out)
+	}
+	commit := exec.Command("git", "commit", "-q", "-m", message)
+	commit.Dir = dir
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	shaCmd := exec.Command("git", "rev-parse", "HEAD")
+	shaCmd.Dir = dir
+	out, err := shaCmd.Output()
+	if err != nil {
+		t.Fatalf("git rev-parse: %v", err)
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func assertNoFindings(t *testing.T, repo, ticketID string) {
+	t.Helper()
+	entries, err := blog.ReadAll(filepath.Join(repo, ".golem", "tickets", ticketID, "log.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no findings, got %+v", entries)
+	}
+}
+
+// Regression: a Pact consumer test whose plan said "~150 lines + 1 generated
+// JSON fixture" was flagged because the fixture's lines were counted too.
+func TestCheckBloatIgnoresGeneratedFiles(t *testing.T) {
+	repo, worktree, ticketID := setUpTicketForStepTest(t)
+	SetStep([]string{"--repo", repo, "--ticket", ticketID, "--expected-lines", "10"}, &bytes.Buffer{}, &bytes.Buffer{})
+
+	sha := gitCommitFiles(t, worktree, map[string]string{
+		"consumer_test.go":           strings.Repeat("line of code\n", 10),
+		"pacts/bff-svc.json":         strings.Repeat("{}\n", 200),
+		"go.sum":                     strings.Repeat("mod h1:x\n", 200),
+		"gen/account.pb.go":          strings.Repeat("// generated\n", 200),
+		"__snapshots__/view.ts.snap": strings.Repeat("snap\n", 200),
+	}, "add pact test + fixture")
+
+	var stdout, stderr bytes.Buffer
+	if code := CheckBloat([]string{"--repo", repo, "--ticket", ticketID, "--commit", sha}, &stdout, &stderr); code != 0 {
+		t.Fatalf("CheckBloat failed: exit %d, stderr=%s", code, stderr.String())
+	}
+	assertNoFindings(t, repo, ticketID)
+}
+
+func TestCheckBloatHonoursLinguistGeneratedAttribute(t *testing.T) {
+	repo, worktree, ticketID := setUpTicketForStepTest(t)
+	gitCommitFiles(t, worktree, map[string]string{
+		".gitattributes": "fixtures/** linguist-generated\n",
+	}, "mark fixtures generated")
+	SetStep([]string{"--repo", repo, "--ticket", ticketID, "--expected-lines", "10"}, &bytes.Buffer{}, &bytes.Buffer{})
+
+	sha := gitCommitFiles(t, worktree, map[string]string{
+		"feature.go":         strings.Repeat("line of code\n", 10),
+		"fixtures/dump.yaml": strings.Repeat("k: v\n", 200),
+	}, "add feature + fixture")
+
+	var stdout, stderr bytes.Buffer
+	if code := CheckBloat([]string{"--repo", repo, "--ticket", ticketID, "--commit", sha}, &stdout, &stderr); code != 0 {
+		t.Fatalf("CheckBloat failed: exit %d, stderr=%s", code, stderr.String())
+	}
+	assertNoFindings(t, repo, ticketID)
+}
+
+func TestCountChangedLinesSkipsBinaryAndCountsRenamesByContent(t *testing.T) {
+	_, worktree, _ := setUpTicketForStepTest(t)
+	gitCommitFiles(t, worktree, map[string]string{
+		"old.go": strings.Repeat("line of code\n", 50),
+	}, "seed")
+
+	mv := exec.Command("git", "mv", "old.go", "new.go")
+	mv.Dir = worktree
+	if out, err := mv.CombinedOutput(); err != nil {
+		t.Fatalf("git mv: %v\n%s", err, out)
+	}
+	sha := gitCommitFiles(t, worktree, map[string]string{
+		"new.go":    strings.Repeat("line of code\n", 50) + "one more\n",
+		"image.bin": "\x00\x01\x02binary",
+	}, "rename + binary")
+
+	got, err := countChangedLines(worktree, sha)
+	if err != nil {
+		t.Fatalf("countChangedLines: %v", err)
+	}
+	if got != 1 {
+		t.Errorf("countChangedLines = %d, want 1 (rename is +1 line, binary is uncounted)", got)
+	}
+}
+
 func TestCheckBloatStaysSilentWithinExpectation(t *testing.T) {
 	repo, worktree, ticketID := setUpTicketForStepTest(t)
 	SetStep([]string{"--repo", repo, "--ticket", ticketID, "--expected-lines", "10"}, &bytes.Buffer{}, &bytes.Buffer{})
