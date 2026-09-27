@@ -225,6 +225,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
 				return err
 			}
+			observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
 			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
@@ -255,6 +256,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Branch, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
 				return err
 			}
+			observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
 			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
