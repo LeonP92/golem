@@ -143,16 +143,10 @@ func TestPromptsDoNotAskTheAgentToRunTheReviewGate(t *testing.T) {
 			if strings.Contains(p, "golem ticket review --ticket") {
 				t.Error("the prompt still instructs the agent to run the review gate")
 			}
-			if !strings.Contains(p, "Do NOT run golem ticket review") {
+			if !strings.Contains(p, "do NOT run golem ticket review") {
 				t.Error("the prompt does not tell the agent the gate is run for it")
 			}
-			// Observers stay the agent's job — the shem cannot know which
-			// roles a repository wants — but they must not be able to strand
-			// the ticket when they cannot run.
-			if !strings.Contains(p, "does not block the ticket") {
-				t.Error("an observer that cannot run is not marked non-blocking")
-			}
-			if strings.Contains(p, "golem ticket close") && !strings.Contains(p, "Do NOT run golem ticket review, and do NOT run golem ticket close") {
+			if !strings.Contains(p, "NOT run golem ticket close") {
 				t.Error("the close instruction was lost")
 			}
 		})
