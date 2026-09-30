@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
@@ -70,7 +71,9 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		// page carrying this control was rendered — i.e. the fingerprint
 		// of the description the operator actually read. Only "start"
 		// uses it; see actionStart.
-		ReviewedBodyHash string `json:"reviewed_body_hash"`
+		ReviewedBodyHash string            `json:"reviewed_body_hash"`
+		Models           map[string]string `json:"models"`
+		Backend          string            `json:"backend"`
 	}
 
 	ct := r.Header.Get("Content-Type")
@@ -109,6 +112,17 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			id64, _ := strconv.ParseUint(idStr, 10, 64)
 			body.InputID = uint(id64)
 		}
+		body.Backend = r.PostForm.Get("model_backend")
+		body.Models = map[string]string{}
+		if v := r.PostForm.Get("model_" + models.DefaultKey); v != "" {
+			body.Models[models.DefaultKey] = v
+		}
+		// revise is a stage, so model_revise is covered by this loop.
+		for _, st := range models.Stages {
+			if v := r.PostForm.Get("model_" + string(st)); v != "" {
+				body.Models[string(st)] = v
+			}
+		}
 	} else {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action == "" {
 			http.Error(w, "action is required", http.StatusBadRequest)
@@ -125,7 +139,7 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 	case "approve":
 		h.actionApprove(w, r, id)
 	case "requeue":
-		h.actionRequeue(w, r, id, body.Feedback)
+		h.actionRequeue(w, r, id, body.Feedback, body.Models, body.Backend)
 	case "close":
 		h.actionClose(w, r, id)
 	case "needs-attention":
@@ -139,7 +153,9 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "feedback is required for request-changes", http.StatusBadRequest)
 			return
 		}
-		h.actionRequestChanges(w, r, id, body.Feedback)
+		h.actionRequestChanges(w, r, id, body.Feedback, body.Models, body.Backend)
+	case "set-models":
+		h.actionSetModels(w, r, id, body.Models, body.Backend)
 	case "answer":
 		if body.InputID == 0 || body.Response == "" {
 			http.Error(w, "input_id and response are required for answer", http.StatusBadRequest)
@@ -157,7 +173,7 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 				"reload the ticket page and read the description again", http.StatusBadRequest)
 			return
 		}
-		h.actionStart(w, r, id, body.ReviewedBodyHash)
+		h.actionStart(w, r, id, body.ReviewedBodyHash, body.Models, body.Backend)
 	default:
 		http.Error(w, "unknown action: "+body.Action, http.StatusBadRequest)
 	}
@@ -231,7 +247,7 @@ func (h *Handlers) actionApprove(w http.ResponseWriter, r *http.Request, id stri
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id string, feedback string) {
+func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id string, feedback string, raw map[string]string, backend string) {
 	// Read before clearing so we can notify the currently-assigned shem.
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
@@ -250,15 +266,24 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 	// pass happened to notice — and on a quiet repo the poll answers 304 and
 	// reconcile does not run at all (finding I4). The WHERE clause is
 	// unchanged.
+	// The submitted default replaces the stored set, so merge is false.
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, false)
+	if !ok {
+		return
+	}
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{
+			"phase":            "unassigned",
+			"assigned_shem":    nil,
+			"checkpoint_phase": nil,
+			"checkpoint_sha":   nil,
+		}
+		for k, v := range cols {
+			updates[k] = v
+		}
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase NOT IN ('unassigned', 'pending-approval', 'closed')", id).
-			Updates(map[string]any{
-				"phase":            "unassigned",
-				"assigned_shem":    nil,
-				"checkpoint_phase": nil,
-				"checkpoint_sha":   nil,
-			})
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -432,16 +457,18 @@ func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (h *Handlers) actionRequestChanges(w http.ResponseWriter, r *http.Request, id string, feedback string) {
+func (h *Handlers) actionRequestChanges(w http.ResponseWriter, r *http.Request, id string, feedback string, raw map[string]string, backend string) {
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
 		http.Error(w, "ticket not found", http.StatusNotFound)
 		return
 	}
 	if ticket.Phase == "ready-for-review" {
-		h.requestChangesFromReview(w, r, ticket, feedback)
+		h.requestChangesFromReview(w, r, ticket, feedback, raw, backend)
 		return
 	}
+	// The pending-approval path reruns brainstorm or plan on an already-claimed
+	// ticket and never reaches the revise stage, so it writes no selections.
 
 	var hi db.HumanInput
 	if err := h.DB.
@@ -481,7 +508,7 @@ func (h *Handlers) actionRequestChanges(w http.ResponseWriter, r *http.Request, 
 // requestChangesFromReview handles request-changes submitted while a ticket
 // is in ready-for-review: it moves the ticket to revising and wakes the
 // assigned shem, instead of resolving a (nonexistent) pending approval.
-func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Request, ticket db.Ticket, feedback string) {
+func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Request, ticket db.Ticket, feedback string, raw map[string]string, backend string) {
 	if ticket.AssignedShem == nil {
 		http.Error(w, "ticket has no assigned shem; use requeue instead", http.StatusConflict)
 		return
@@ -489,10 +516,19 @@ func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Reque
 	// As in actionApprove and actionRequeue, the phase change and its GitHub
 	// label write commit together (finding I4, round 1c). The WHERE clause is
 	// unchanged.
+	// merge: a revise-stage override leaves the other stages alone.
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, true)
+	if !ok {
+		return
+	}
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{"phase": "revising"}
+		for k, v := range cols {
+			updates[k] = v
+		}
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = 'ready-for-review'", ticket.ID).
-			Update("phase", "revising")
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
