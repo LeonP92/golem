@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/agentrunner"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
@@ -73,7 +74,8 @@ func (w *Worker) Start() {
 	}
 
 	log.Printf("worker: registering with orchestrator (repos: %v)", repos)
-	if _, err := w.client.Register(w.cfg.Name, repos); err != nil {
+	backend := agentrunner.ResolveBackend(w.cfg.Backend)
+	if _, err := w.client.Register(w.cfg.Name, repos, backend.Adapter, backend.Catalog); err != nil {
 		log.Printf("worker: register error: %v", err)
 	}
 

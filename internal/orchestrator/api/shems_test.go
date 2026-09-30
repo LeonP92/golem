@@ -3,6 +3,7 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -68,6 +69,12 @@ func TestClaimTicket_AtomicOneWinner(t *testing.T) {
 		Phase:       "unassigned",
 	}
 	gdb.Create(&ticket)
+
+	// A claim resolves the requesting shem's catalog, so each contender needs
+	// a row.
+	for i := 1; i <= 5; i++ {
+		gdb.Create(&db.Shem{Name: fmt.Sprintf("shem-%d", i), APIKeyHash: "x", Repos: "[]"})
+	}
 
 	wins := make(chan bool, 10)
 	var wg sync.WaitGroup

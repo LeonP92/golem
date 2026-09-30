@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
@@ -49,6 +50,10 @@ type ClaimResponse struct {
 	CheckpointPhase *string       `json:"checkpoint_phase"`
 	CheckpointSHA   *string       `json:"checkpoint_sha"`
 	LogEntries      []db.LogEntry `json:"log_entries"`
+	// Backend is the adapter the claiming shem runs.
+	Backend string `json:"backend"`
+	// Models is every stage's model id; "" means the vendor default.
+	Models map[string]string `json:"models"`
 }
 
 // ClaimTicket atomically claims a ticket for shemID. Exactly one concurrent
@@ -92,9 +97,24 @@ type ClaimResponse struct {
 // unaffected. admin.BackfillBodyHash repairs such rows;
 // TestEmptyHashesAreNotAnApproval pins all four predicates.
 func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, error) {
+	shem, err := h.shemRow(shemID)
+	if err != nil {
+		return nil, err
+	}
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", ticketID).Error; err != nil {
+		return nil, fmt.Errorf("ticket not available")
+	}
+	// A shem whose catalog lacks a selected id would run the wrong model;
+	// another shem of the same backend may have it. The read above is
+	// advisory — the guarded update below is the atomicity point.
+	if !shem.ModelCatalog().Has(ticket.ModelSelections()) {
+		return nil, fmt.Errorf("shem %s's catalog does not have every model this ticket selects", shem.Name)
+	}
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'unassigned' AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))", ticketID).
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			"(model_backend = '' OR model_backend = ?)", ticketID, shem.Backend).
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
 	if result.Error != nil {
 		return nil, result.Error
@@ -102,24 +122,9 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	if result.RowsAffected == 0 {
 		return nil, fmt.Errorf("ticket not available")
 	}
-	var ticket db.Ticket
+	// Re-read: the response must reflect the row as written.
 	h.DB.First(&ticket, "id = ?", ticketID)
-	var entries []db.LogEntry
-	h.DB.Where("ticket_id = ?", ticketID).Order("sequence_num asc").Find(&entries)
-	if entries == nil {
-		entries = []db.LogEntry{}
-	}
-	return &ClaimResponse{
-		TicketID:        ticketID,
-		Branch:          ticket.Branch,
-		BaseBranch:      ticket.BaseBranch,
-		Title:           ticket.Title,
-		RepoRemote:      ticket.RepoRemote,
-		Description:     ticket.Description,
-		CheckpointPhase: ticket.CheckpointPhase,
-		CheckpointSHA:   ticket.CheckpointSHA,
-		LogEntries:      entries,
-	}, nil
+	return h.claimResponse(ticket, shem), nil
 }
 
 // RegisterTicketRoutes adds ticket-related routes to mux.
@@ -184,6 +189,11 @@ func (h *Handlers) assignedTickets(w http.ResponseWriter, r *http.Request) {
 // and something (currently nothing automatic) requeues it.
 func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
+	shemRow, err := h.shemRow(shem.ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	var tickets []db.Ticket
 	h.DB.Where(
 		"assigned_shem = ? AND phase NOT IN ? AND "+
@@ -208,22 +218,7 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 
 	claims := make([]ClaimResponse, 0, len(tickets))
 	for _, t := range tickets {
-		var entries []db.LogEntry
-		h.DB.Where("ticket_id = ?", t.ID).Order("sequence_num asc").Find(&entries)
-		if entries == nil {
-			entries = []db.LogEntry{}
-		}
-		claims = append(claims, ClaimResponse{
-			TicketID:        t.ID,
-			Branch:          t.Branch,
-			BaseBranch:      t.BaseBranch,
-			Title:           t.Title,
-			RepoRemote:      t.RepoRemote,
-			Description:     t.Description,
-			CheckpointPhase: t.CheckpointPhase,
-			CheckpointSHA:   t.CheckpointSHA,
-			LogEntries:      entries,
-		})
+		claims = append(claims, *h.claimResponse(t, shemRow))
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(claims) //nolint:errcheck
@@ -231,10 +226,12 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		RepoRemote  string `json:"repo_remote"`
-		Branch      string `json:"branch"`
-		Title       string `json:"title"`
-		Description string `json:"description"`
+		RepoRemote  string            `json:"repo_remote"`
+		Branch      string            `json:"branch"`
+		Title       string            `json:"title"`
+		Description string            `json:"description"`
+		Backend     string            `json:"backend"`
+		Models      map[string]string `json:"models"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -258,6 +255,18 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID
 	}
+	fleet, err := db.LoadFleet(h.DB)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	sel, bound, err := models.ValidateSelections(fleet.Catalogs(), body.Backend, body.Models)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	ticket.SetModelSelections(sel)
+	ticket.ModelBackend = bound
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -307,16 +316,27 @@ func (h *Handlers) getTicket(w http.ResponseWriter, r *http.Request) {
 // availableTickets lists claimable tickets. See ClaimTicket's doc comment for
 // why intake_approved, not phase alone, gates externally-sourced tickets.
 func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
+	shem, err := h.shemRow(auth.ShemFromRequest(r).ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	repo := r.URL.Query().Get("repo")
-	query := h.DB.Where("phase = 'unassigned' AND " +
-		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))")
+	query := h.DB.Where("phase = 'unassigned' AND "+
+		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+		"(model_backend = '' OR model_backend = ?)", shem.Backend)
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
 	}
-	var tickets []db.Ticket
-	query.Order("created_at asc").Find(&tickets)
-	if tickets == nil {
-		tickets = []db.Ticket{}
+	var rows []db.Ticket
+	query.Order("created_at asc").Find(&rows)
+	// A shem whose catalog lacks a selected id would run the wrong model.
+	catalog := shem.ModelCatalog()
+	tickets := []db.Ticket{}
+	for _, t := range rows {
+		if catalog.Has(t.ModelSelections()) {
+			tickets = append(tickets, t)
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(tickets) //nolint:errcheck
@@ -370,22 +390,14 @@ func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, er
 	if result.Error != nil {
 		return nil, fmt.Errorf("ticket not available for revision")
 	}
-	var entries []db.LogEntry
-	h.DB.Where("ticket_id = ?", ticketID).Order("sequence_num asc").Find(&entries)
-	if entries == nil {
-		entries = []db.LogEntry{}
+	shem, err := h.shemRow(shemID)
+	if err != nil {
+		return nil, err
 	}
 	revisingPhase := "revising"
-	return &ClaimResponse{
-		TicketID:        ticketID,
-		Branch:          ticket.Branch,
-		BaseBranch:      ticket.BaseBranch,
-		RepoRemote:      ticket.RepoRemote,
-		Description:     ticket.Description,
-		CheckpointPhase: &revisingPhase,
-		CheckpointSHA:   ticket.CheckpointSHA,
-		LogEntries:      entries,
-	}, nil
+	resp := h.claimResponse(ticket, shem)
+	resp.CheckpointPhase = &revisingPhase
+	return resp, nil
 }
 
 func (h *Handlers) reviseClaim(w http.ResponseWriter, r *http.Request) {
