@@ -1,0 +1,79 @@
+{{define "model_selects"}}
+{{if .Backends}}
+<div class="model-selects form-control">
+  <label class="label"><span class="label-text font-medium">Model</span>
+    <span class="label-text-alt text-base-content/50">Larger models for reasoning, smaller for mechanical work</span></label>
+  {{if eq (len .Backends) 1}}
+  <input type="hidden" name="model_backend" value="{{.Backend}}">
+  {{else}}
+  <select name="model_backend" class="select select-bordered"
+          hx-get="/tickets/model-selects"
+          hx-target="closest .model-selects" hx-swap="outerHTML"
+          hx-include="closest .model-selects">
+    {{range .Backends}}<option value="{{.Name}}" {{if eq .Name $.Backend}}selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  {{end}}
+  {{if .Catalog.SupportsSelection}}
+  {{$cat := .Catalog}}
+  <select name="{{.Default.Field}}" class="select select-bordered">
+    <option value="">{{.Default.Empty}}</option>
+    <optgroup label="Tiers">
+      {{range $t := $cat.Tiers}}
+      <option value="tier:{{$t}}" {{if eq (printf "tier:%s" $t) $.Default.Chosen}}selected{{end}}>{{$t}} (this worker's choice)</option>
+      {{end}}
+    </optgroup>
+    <optgroup label="Models">
+      {{range $m := $cat.Models}}
+      <option value="{{$m.ID}}" {{if eq $m.ID $.Default.Chosen}}selected{{end}}>{{$m.Label}}</option>
+      {{end}}
+    </optgroup>
+  </select>
+  <details class="mt-2">
+    <summary class="cursor-pointer text-sm text-base-content/60">Per-stage overrides</summary>
+    {{range $s := .Stages}}
+    <label class="label"><span class="label-text text-sm">{{$s.Label}}</span></label>
+    <select name="{{$s.Field}}" class="select select-bordered select-sm w-full">
+      <option value="">{{$s.Empty}}</option>
+      <optgroup label="Tiers">
+        {{range $t := $cat.Tiers}}
+        <option value="tier:{{$t}}" {{if eq (printf "tier:%s" $t) $s.Chosen}}selected{{end}}>{{$t}} (this worker's choice)</option>
+        {{end}}
+      </optgroup>
+      <optgroup label="Models">
+        {{range $m := $cat.Models}}
+        <option value="{{$m.ID}}" {{if eq $m.ID $s.Chosen}}selected{{end}}>{{$m.Label}}</option>
+        {{end}}
+      </optgroup>
+    </select>
+    {{end}}
+  </details>
+  {{else}}
+  <p class="text-sm text-base-content/50">{{.Backend}} runs a single model.</p>
+  {{end}}
+</div>
+{{else}}
+<p class="text-sm text-base-content/50">No worker has reported a model catalog yet.</p>
+{{end}}
+{{end}}
+
+{{define "one_model_select"}}
+{{if .Show}}
+{{/* model_backend so a concrete id validates on a ticket whose stored
+     model_backend is empty. */}}
+<input type="hidden" name="model_backend" value="{{.Backend}}">
+<label class="label"><span class="label-text text-sm">{{.Select.Label}}</span></label>
+<select name="{{.Select.Field}}" class="select select-bordered select-sm">
+  <option value="">{{.Select.Empty}}</option>
+  <optgroup label="Tiers">
+    {{range $t := .Catalog.Tiers}}
+    <option value="tier:{{$t}}">{{$t}} (this worker's choice)</option>
+    {{end}}
+  </optgroup>
+  <optgroup label="Models">
+    {{range $m := .Catalog.Models}}
+    <option value="{{$m.ID}}">{{$m.Label}}</option>
+    {{end}}
+  </optgroup>
+</select>
+{{end}}
+{{end}}

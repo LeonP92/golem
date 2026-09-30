@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
@@ -206,6 +207,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 		h.sessionWriteRoute(rbac.PermShemManage, h.buildGraph))
 	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
 	mux.Handle("POST /tickets/new", h.sessionWriteRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
+	mux.Handle("GET /tickets/model-selects", h.sessionRoute(rbac.PermTicketCreate, h.modelSelects))
 	mux.Handle("GET /tickets/{id}", h.sessionRoute(rbac.PermTicketView, h.ticketDetail))
 	mux.Handle("GET /users", h.sessionRoute(rbac.PermUserManage, h.usersPage))
 	mux.Handle("POST /users", h.sessionWriteRoute(rbac.PermUserManage, h.usersCreate))
@@ -383,6 +385,8 @@ type TicketRow struct {
 	CreatedByName      string
 	Age                string
 	HasPendingApproval bool
+	// WaitingFor is why no shem can claim this ticket, else "".
+	WaitingFor string
 }
 
 type ShemRow struct {
@@ -434,6 +438,13 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 
 	creatorNames := db.CreatorNames(h.DB, tickets)
 
+	// One query for the whole page, not one per row.
+	fleet, err := db.LoadFleet(h.DB)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+
 	rows := make([]TicketRow, len(tickets))
 	for i, t := range tickets {
 		name := ""
@@ -450,6 +461,7 @@ func (h *Handlers) dashboard(w http.ResponseWriter, r *http.Request) {
 			CreatedByName:      createdBy,
 			Age:                humanAge(t.CreatedAt),
 			HasPendingApproval: pendingApprovalSet[t.ID],
+			WaitingFor:         fleet.WaitingFor(t),
 		}
 	}
 
@@ -495,6 +507,8 @@ type ticketForm struct {
 	BaseBranch  string
 	Title       string
 	Description string
+	Models      map[string]string
+	Backend     string
 }
 
 // shemsRepos returns the deduplicated union of repos registered by all shems.
@@ -517,10 +531,16 @@ func (h *Handlers) shemsRepos() []string {
 // renderTicketNew renders the new-ticket form with the given field values and
 // an optional validation error.
 func (h *Handlers) renderTicketNew(w http.ResponseWriter, r *http.Request, form ticketForm, errMsg string) {
+	fleet, err := db.LoadFleet(h.DB)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	data := h.base(r, "new")
 	data["Form"] = form
 	data["Error"] = errMsg
 	data["AvailableRepos"] = h.shemsRepos()
+	data["ModelPicker"] = modelPicker(fleet, form.Backend, form.Models)
 	h.render(w, r, "ticket_new", data)
 }
 
@@ -533,11 +553,14 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
+	rawModels, backend := formModelSelections(r)
 	form := ticketForm{
 		RepoRemote:  r.FormValue("repo_remote"),
 		BaseBranch:  r.FormValue("base_branch"),
 		Title:       r.FormValue("title"),
 		Description: r.FormValue("description"),
+		Models:      rawModels,
+		Backend:     backend,
 	}
 	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
 		h.renderTicketNew(w, r, form, "All fields are required.")
@@ -557,6 +580,18 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID
 	}
+	fleet, err := db.LoadFleet(h.DB)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	sel, bound, err := models.ValidateSelections(fleet.Catalogs(), form.Backend, form.Models)
+	if err != nil {
+		h.renderTicketNew(w, r, form, err.Error())
+		return
+	}
+	ticket.SetModelSelections(sel)
+	ticket.ModelBackend = bound
 	if err := h.DB.Create(&ticket).Error; err != nil {
 		h.renderTicketNew(w, r, form, "Failed to create ticket.")
 		return
@@ -626,8 +661,23 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// nav="" keeps the ticket detail page's current nav-less layout.
+	fleet, err := db.LoadFleet(h.DB)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	cat, _ := fleet.Catalog(ticket.ModelBackend)
+	resolved, _ := models.Resolve(cat, ticket.ModelSelections())
+
 	data := h.base(r, "")
 	data["Ticket"] = ticket
+	data["ResolvedModels"] = resolved
+	data["Selections"] = ticket.ModelSelections()
+	picker := modelPicker(fleet, ticket.ModelBackend, ticket.ModelSelections())
+	data["ModelPicker"] = picker
+	data["RequeueSelect"] = singleModelSelect(picker, "model_"+models.DefaultKey, "Model")
+	data["ReviseSelect"] = singleModelSelect(picker, "model_"+string(models.StageRevise), "Revision model")
+	data["WaitingFor"] = fleet.WaitingFor(ticket)
 	data["CreatedByName"] = createdBy
 	data["LogEntries"] = logEntries
 	data["PendingInput"] = pending

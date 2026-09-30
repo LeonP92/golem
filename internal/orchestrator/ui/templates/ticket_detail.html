@@ -57,6 +57,9 @@
               hx-post="/api/tickets/{{.Ticket.ID}}/actions"
               {{/* reviewed_body_hash is the fingerprint of the description rendered ABOVE, submitted with the approval so actionStart can refuse it if a poll edited the issue while this page sat open (fix round 1c). Without it the server cannot tell what the operator was shown, and an edit landing between render and click would be approved unread. htmx serialises hx-vals into the request BODY for a POST, which is where the dispatcher reads every parameter from (finding S1); the CSRF token travels separately as a header, added by the htmx:configRequest listener in layout.html. */}}
               hx-vals='{"action":"start","reviewed_body_hash":"{{.Ticket.BodyHash}}"}'
+              {{/* Only the panel's selects, not any button's hx-vals, so the
+                   body carries exactly one action value. */}}
+              hx-include="#ticket-models .model-selects"
               hx-confirm="Approve and start this ticket? A shem will be able to claim it immediately."
               hx-on::after-request="if(event.detail.successful) window.location.reload()">
               <span class="iconify" data-icon="heroicons:play"></span>
@@ -112,14 +115,18 @@
       </button>
       {{end}}
       {{if ne .Ticket.Phase "pending-approval"}}
-      <button class="btn btn-sm btn-ghost gap-1.5"
-        hx-post="/api/tickets/{{.Ticket.ID}}/actions"
-        hx-vals='{"action":"requeue"}'
-        hx-confirm="Re-queue this ticket? The shem will pick it up again from its current state."
-        hx-on::after-request="if(event.detail.successful) window.location.reload()">
-        <span class="iconify" data-icon="heroicons:arrow-path"></span>
-        Re-queue
-      </button>
+      <form id="requeue-form" class="contents">
+        {{template "one_model_select" .RequeueSelect}}
+        <button type="button" class="btn btn-sm btn-ghost gap-1.5"
+          hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+          hx-vals='{"action":"requeue"}'
+          hx-include="#requeue-form"
+          hx-confirm="Re-queue this ticket? The shem will pick it up again from its current state."
+          hx-on::after-request="if(event.detail.successful) window.location.reload()">
+          <span class="iconify" data-icon="heroicons:arrow-path"></span>
+          Re-queue
+        </button>
+      </form>
       {{end}}
     </div>
 
@@ -133,6 +140,7 @@
         <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
               hx-on::after-request="if(event.detail.successful) window.location.reload()">
           <input type="hidden" name="action" value="request-changes">
+          {{template "one_model_select" .ReviseSelect}}
           <textarea name="feedback" rows="4"
             class="textarea textarea-bordered w-full text-sm"
             placeholder="Describe what needs to change…" required></textarea>
@@ -191,6 +199,13 @@
     </div>
     {{end}}
 
+    {{if .WaitingFor}}
+    <div class="alert alert-warning">
+      <span class="iconify" data-icon="heroicons:clock"></span>
+      <span>{{.WaitingFor}}</span>
+    </div>
+    {{end}}
+
     <details class="group bg-base-100 shadow-sm border border-base-300 rounded-box">
       <summary class="flex items-center gap-2 px-4 py-3 cursor-pointer select-none font-semibold text-sm list-none">
         <span class="iconify text-base-content/40" data-icon="heroicons:information-circle"></span>
@@ -211,7 +226,45 @@
           <dd class="text-xs">{{.Ticket.CreatedAt.Format "2006-01-02 15:04"}}</dd>
           <dt class="text-base-content/50">Created by</dt>
           <dd class="text-xs">{{if .CreatedByName}}{{.CreatedByName}}{{else}}unknown{{end}}</dd>
+          {{if .Ticket.ModelBackend}}
+          <dt class="text-base-content/50">Backend</dt>
+          <dd class="font-mono text-xs">{{.Ticket.ModelBackend}}</dd>
+          {{end}}
         </dl>
+        {{/* Always rendered, so a claimed ticket still shows what it is running on. */}}
+        <h3 class="font-semibold text-xs text-base-content/50 mt-3 mb-1">Models</h3>
+        <dl class="grid gap-x-6 gap-y-1 text-sm" style="grid-template-columns:auto 1fr">
+          {{$sel := .Selections}}
+          {{range $stage, $model := .ResolvedModels}}
+          <dt class="text-base-content/50">{{$stage}}</dt>
+          <dd class="font-mono text-xs">
+            {{if $model}}{{$model}}{{else}}vendor default{{end}}
+            {{if index $sel (printf "%s" $stage)}}<span class="badge badge-ghost badge-xs ml-1">overridden</span>{{end}}
+          </dd>
+          {{end}}
+        </dl>
+
+        {{/* The editable panel only while unclaimed and not closed — the two
+             conditions set-models itself enforces, so the page never offers a
+             control that can only 409. */}}
+        {{if and (not .Ticket.AssignedShem) (ne .Ticket.Phase "closed")}}
+        <form id="ticket-models" class="mt-4">
+          {{template "model_selects" .ModelPicker}}
+          <div class="flex gap-2 mt-2">
+            <button type="button" class="btn btn-sm"
+                    hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+                    hx-vals='{"action":"set-models"}'
+                    hx-include="#ticket-models .model-selects"
+                    hx-on::after-request="if(event.detail.successful) window.location.reload()">Save models</button>
+            {{/* No hx-include: it posts action and nothing else, which is an
+                 empty selection set — what clears both columns. */}}
+            <button type="button" class="btn btn-sm btn-ghost"
+                    hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+                    hx-vals='{"action":"set-models"}'
+                    hx-on::after-request="if(event.detail.successful) window.location.reload()">Clear model selections</button>
+          </div>
+        </form>
+        {{end}}
       </div>
     </details>
 

@@ -2,7 +2,8 @@
 <div class="log-entry entry-{{.EntryType}} py-0.5" style="display:grid;grid-template-columns:auto auto auto 1fr;gap:0 0.75rem;align-items:baseline">
   <span class="text-base-content/30 select-none">[{{.SequenceNum}}]</span>
   <span class="font-semibold truncate">{{.EntryType}}</span>
-  <span class="text-base-content/50 truncate">{{if .FromRole}}{{.FromRole}}{{end}}{{if and .FromRole .ToRole}} → {{end}}{{if .ToRole}}{{.ToRole}}{{end}}</span>
+  <span class="text-base-content/50 truncate">{{if .FromRole}}{{.FromRole}}{{end}}{{if and .FromRole .ToRole}} → {{end}}{{if .ToRole}}{{.ToRole}}{{end}}{{if .Model}}
+    <span class="badge badge-ghost badge-xs font-mono ml-1" title="backend/model">{{.Backend}}/{{.Model}}</span>{{end}}</span>
   <div class="md-content text-base-content break-words min-w-0">{{.Message}}</div>
 </div>
 {{end}}

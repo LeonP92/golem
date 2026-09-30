@@ -28,6 +28,13 @@
       <span class="text-base-content/40">&mdash;</span>
     {{end}}
   </td>
+  <td class="text-sm">
+    {{if .Shem.Backend}}
+      <span class="badge badge-ghost badge-sm font-mono">{{.Shem.Backend}}</span>
+    {{else}}
+      <span class="text-base-content/40">&mdash;</span>
+    {{end}}
+  </td>
   <td class="text-sm text-base-content/60">
     {{if .Shem.LastHeartbeat}}{{.Shem.LastHeartbeat.Format "2006-01-02 15:04"}}{{else}}&mdash;{{end}}
   </td>
