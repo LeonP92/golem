@@ -25,7 +25,7 @@ func (c Catalog) Validate() error {
 		}
 	}
 	for stage, tier := range c.StageDefaults {
-		if !IsStage(string(stage)) {
+		if !isStage(string(stage)) {
 			return fmt.Errorf("stage_defaults key %q is not a stage", stage)
 		}
 		if !tiers[tier] {
@@ -35,7 +35,7 @@ func (c Catalog) Validate() error {
 	return nil
 }
 
-func (c Catalog) Lookup(id string) (Model, bool) {
+func (c Catalog) lookup(id string) (Model, bool) {
 	for _, m := range c.Models {
 		if m.ID == id {
 			return m, true
@@ -54,14 +54,14 @@ func (c Catalog) Has(s Selections) bool {
 		if _, ok := TierRef(v); ok {
 			continue
 		}
-		if _, ok := c.Lookup(v); !ok {
+		if _, ok := c.lookup(v); !ok {
 			return false
 		}
 	}
 	return true
 }
 
-func (c Catalog) DeclaresTier(t Tier) bool { return c.tierIndex(t) >= 0 }
+func (c Catalog) declaresTier(t Tier) bool { return c.tierIndex(t) >= 0 }
 
 func (c Catalog) tierIndex(t Tier) int {
 	for i, d := range c.Tiers {
@@ -108,19 +108,19 @@ func (c Catalog) ValidateSelections(s Selections) error {
 		if v == "" {
 			continue
 		}
-		if k != DefaultKey && !IsStage(k) {
+		if k != DefaultKey && !isStage(k) {
 			return fmt.Errorf("unknown stage %q", k)
 		}
 		if !c.SupportsSelection {
 			return fmt.Errorf("backend does not support model selection")
 		}
 		if t, ok := TierRef(v); ok {
-			if !c.DeclaresTier(t) {
+			if !c.declaresTier(t) {
 				return fmt.Errorf("unknown tier %q", t)
 			}
 			continue
 		}
-		if _, ok := c.Lookup(v); !ok {
+		if _, ok := c.lookup(v); !ok {
 			return fmt.Errorf("unknown model %q", v)
 		}
 	}

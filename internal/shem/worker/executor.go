@@ -168,7 +168,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			}
 			postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
 			postStatus(c, ticketID, "Brainstorm complete — validating the spec")
-			if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", c); err != nil {
+			if err := e.runGolemValidate(ctx, c, repoPath, ticketID, "spec"); err != nil {
 				return fmt.Errorf("spec validation: %w", err)
 			}
 			postStatus(c, ticketID, "Spec validated — advancing to planning")
@@ -199,7 +199,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			}
 			postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
 			postStatus(c, ticketID, "Plan complete — validating the plan")
-			if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", c); err != nil {
+			if err := e.runGolemValidate(ctx, c, repoPath, ticketID, "plan"); err != nil {
 				return fmt.Errorf("plan validation: %w", err)
 			}
 			postStatus(c, ticketID, "Plan validated — starting implementation")
@@ -223,7 +223,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
-			if revErr := e.runGolemReview(ctx, repoPath, ticketID, c); revErr != nil {
+			if revErr := e.runGolemReview(ctx, c, repoPath, ticketID); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
@@ -255,7 +255,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
-			if revErr := e.runGolemReview(ctx, repoPath, ticketID, c); revErr != nil {
+			if revErr := e.runGolemReview(ctx, c, repoPath, ticketID); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
@@ -346,7 +346,7 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 // are returned as errors, and both park the ticket in needs-attention — a
 // gate that cannot run must not be treated as a pass, or the failure mode of
 // the validator is "everything is approved".
-func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID, stage string, c *client.Client) error {
+func (e *GolemExecutor) runGolemValidate(ctx context.Context, c *client.Client, repoPath, ticketID, stage string) error {
 	model := sanitizeModel(c, ticketID, e.Agent.StageModel(models.StageValidate))
 	args := e.Agent.subcommandArgs([]string{"ticket", "validate",
 		"--ticket", ticketID, "--stage", stage}, model)
@@ -359,7 +359,7 @@ func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID
 	return nil
 }
 
-func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID string, c *client.Client) error {
+func (e *GolemExecutor) runGolemReview(ctx context.Context, c *client.Client, repoPath, ticketID string) error {
 	model := sanitizeModel(c, ticketID, e.Agent.StageModel(models.StageReview))
 	args := e.Agent.subcommandArgs([]string{"ticket", "review", "--ticket", ticketID}, model)
 	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))

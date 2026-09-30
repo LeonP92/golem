@@ -41,7 +41,7 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 	// field and the options can never name different backends.
 	fallback, _ := models.Resolve(cat, nil)
 	out.Default = modelSelect{
-		Field:  "model_" + models.DefaultKey,
+		Field:  models.FieldPrefix + models.DefaultKey,
 		Empty:  "Per-stage defaults",
 		Chosen: sel[models.DefaultKey],
 	}
@@ -51,7 +51,7 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 			empty = id
 		}
 		out.Stages = append(out.Stages, modelSelect{
-			Field:  "model_" + string(st),
+			Field:  models.FieldPrefix + string(st),
 			Label:  string(st),
 			Empty:  empty,
 			Chosen: sel[string(st)],
@@ -88,29 +88,10 @@ func (h *Handlers) modelSelects(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	q := r.URL.Query()
-	sel := map[string]string{models.DefaultKey: q.Get("model_" + models.DefaultKey)}
-	for _, st := range models.Stages {
-		sel[string(st)] = q.Get("model_" + string(st))
-	}
-	picker := modelPicker(fleet, q.Get("model_backend"), sel)
+	sel, backend := models.FromValues(r.URL.Query())
+	picker := modelPicker(fleet, backend, sel)
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	if err := h.tmpls["ticket_new"].ExecuteTemplate(w, "model_selects", picker); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 	}
-}
-
-// formModelSelections reads the model_backend and model_<stage> fields out of
-// a parsed form.
-func formModelSelections(r *http.Request) (map[string]string, string) {
-	sel := map[string]string{}
-	if v := r.PostFormValue("model_" + models.DefaultKey); v != "" {
-		sel[models.DefaultKey] = v
-	}
-	for _, st := range models.Stages {
-		if v := r.PostFormValue("model_" + string(st)); v != "" {
-			sel[string(st)] = v
-		}
-	}
-	return sel, r.PostFormValue("model_backend")
 }

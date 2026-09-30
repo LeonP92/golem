@@ -22,7 +22,7 @@ var observerRoles = []string{"convention-enforcer", "spec-adherence"}
 // their findings. Best effort, like the gate: an observer that cannot run is
 // reported, not fatal to the ticket.
 func (e *GolemExecutor) observe(ctx context.Context, c *client.Client, repoPath, ticketDir, ticketID, baseBranch string) {
-	if err := e.runObservers(ctx, repoPath, filepath.Join(ticketDir, "worktree"), ticketID, baseBranch, c); err != nil {
+	if err := e.runObservers(ctx, c, repoPath, filepath.Join(ticketDir, "worktree"), ticketID, baseBranch); err != nil {
 		postStatus(c, ticketID, "Observers failed to run: "+firstLineOf(err.Error()))
 		log.Printf("executor: observers for %s: %v", ticketID, err)
 	}
@@ -38,7 +38,7 @@ func (e *GolemExecutor) observe(ctx context.Context, c *client.Client, repoPath,
 //
 // With a base branch the review covers the whole branch, not only its last
 // commit — a ticket is several commits, and the rest went unseen.
-func (e *GolemExecutor) runObservers(ctx context.Context, repoPath, worktree, ticketID, baseBranch string, c *client.Client) error {
+func (e *GolemExecutor) runObservers(ctx context.Context, c *client.Client, repoPath, worktree, ticketID, baseBranch string) error {
 	head, err := worktreeHead(ctx, worktree)
 	if err != nil {
 		return fmt.Errorf("observers: resolving the commit to review: %w", err)

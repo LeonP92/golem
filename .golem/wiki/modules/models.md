@@ -6,7 +6,7 @@ resolution. Stdlib only, no catalog data as a runtime source of truth.
 ## Types
 
 - `Stage` and `Stages` — the closed set of nine agent invocation sites, in
-  display order. `IsStage` checks membership.
+  display order.
 - `Tier` — an operator-defined label. `Catalog.Tiers` lists them cheapest
   first.
 - `Model` — `{ID, Label, Tier}`.
@@ -16,10 +16,10 @@ resolution. Stdlib only, no catalog data as a runtime source of truth.
 
 ## Functions
 
-- `TierRef` splits a `tier:<label>` value; `TierPrefix` is the marker.
+- `TierRef` splits a `tier:<label>` value.
 - `ValidModelID` reports whether an id is safe as a single argv token.
 - `Catalog.Validate` reports the first structural fault in a catalog.
-- `Catalog.Lookup`, `Has`, `DeclaresTier`, `ValidateSelections`.
+- `Catalog.Has` and `Catalog.ValidateSelections`.
 - `Catalog.ForTier` returns the first model at a tier, else the nearest
   cheaper, else the nearest larger, else `""`.
 - `Resolve` returns a model id for every stage plus the selections it dropped.
@@ -29,3 +29,6 @@ resolution. Stdlib only, no catalog data as a runtime source of truth.
   named catalogs and returns what to store plus the backend to bind it to. A
   tier-only selection binds no backend.
 - `Describe` renders a selection as `default=opus, plan=sonnet`.
+- `FieldPrefix`, `BackendField` and `FromValues` are the one decoder for the
+  `model_backend` / `model_<stage>` wire format, shared by the API form reader,
+  the UI form reader and the htmx query reader.

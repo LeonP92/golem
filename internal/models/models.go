@@ -31,7 +31,7 @@ var Stages = []Stage{
 	StageObserve, StageReview, StagePRDescription, StageGraph,
 }
 
-func IsStage(s string) bool {
+func isStage(s string) bool {
 	for _, st := range Stages {
 		if string(st) == s {
 			return true
@@ -61,15 +61,15 @@ type Catalog struct {
 // "tier:<label>" reference.
 type Selections map[string]string
 
-// TierPrefix marks a Selections value naming a tier rather than a model id.
-const TierPrefix = "tier:"
+// tierPrefix marks a Selections value naming a tier rather than a model id.
+const tierPrefix = "tier:"
 
 // TierRef returns the tier a value names, if it names one.
 func TierRef(v string) (Tier, bool) {
-	if !strings.HasPrefix(v, TierPrefix) {
+	if !strings.HasPrefix(v, tierPrefix) {
 		return "", false
 	}
-	t := Tier(strings.TrimPrefix(v, TierPrefix))
+	t := Tier(strings.TrimPrefix(v, tierPrefix))
 	return t, t != ""
 }
 

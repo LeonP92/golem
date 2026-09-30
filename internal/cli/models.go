@@ -144,6 +144,6 @@ func ModelsProbe(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	stdout.Write(data) //nolint:errcheck
+	fmt.Fprint(stdout, string(data))
 	return 0
 }

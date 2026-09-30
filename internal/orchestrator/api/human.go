@@ -112,17 +112,7 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			id64, _ := strconv.ParseUint(idStr, 10, 64)
 			body.InputID = uint(id64)
 		}
-		body.Backend = r.PostForm.Get("model_backend")
-		body.Models = map[string]string{}
-		if v := r.PostForm.Get("model_" + models.DefaultKey); v != "" {
-			body.Models[models.DefaultKey] = v
-		}
-		// revise is a stage, so model_revise is covered by this loop.
-		for _, st := range models.Stages {
-			if v := r.PostForm.Get("model_" + string(st)); v != "" {
-				body.Models[string(st)] = v
-			}
-		}
+		body.Models, body.Backend = models.FromValues(r.PostForm)
 	} else {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action == "" {
 			http.Error(w, "action is required", http.StatusBadRequest)

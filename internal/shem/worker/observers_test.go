@@ -24,7 +24,7 @@ func TestRunObserversDispatchesEachRoleOverTheWholeBranch(t *testing.T) {
 	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_observer")
 
 	e := testExecutor(t)
-	if err := e.runObservers(context.Background(), repo, worktree, "t-1", "main", nil); err != nil {
+	if err := e.runObservers(context.Background(), nil, repo, worktree, "t-1", "main"); err != nil {
 		t.Fatalf("runObservers: %v", err)
 	}
 
@@ -53,7 +53,7 @@ func TestRunObserversSkipsARoleTheRepositoryRemoved(t *testing.T) {
 	repo, worktree, _ := observerFixture(t, "spec-adherence")
 	calls, _ := fakeGolemOnPath(t)
 
-	if err := testExecutor(t).runObservers(context.Background(), repo, worktree, "t-1", "", nil); err != nil {
+	if err := testExecutor(t).runObservers(context.Background(), nil, repo, worktree, "t-1", ""); err != nil {
 		t.Fatalf("runObservers: %v", err)
 	}
 
@@ -70,7 +70,7 @@ func TestRunObserversReportsARoleThatFailed(t *testing.T) {
 	repo, worktree, _ := observerFixture(t, "convention-enforcer", "spec-adherence")
 	failingGolemOnPath(t)
 
-	err := testExecutor(t).runObservers(context.Background(), repo, worktree, "t-1", "main", nil)
+	err := testExecutor(t).runObservers(context.Background(), nil, repo, worktree, "t-1", "main")
 	if err == nil {
 		t.Fatal("an observer that could not run was reported as success")
 	}

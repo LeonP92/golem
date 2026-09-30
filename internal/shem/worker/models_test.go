@@ -289,10 +289,10 @@ func TestSubcommandsCarryTheBackendDocument(t *testing.T) {
 	c, _ := logCapture(t)
 	ctx := context.Background()
 
-	if err := e.runGolemValidate(ctx, repo, "t-1", "spec", c); err != nil {
+	if err := e.runGolemValidate(ctx, c, repo, "t-1", "spec"); err != nil {
 		t.Logf("validate: %v", err)
 	}
-	if err := e.runGolemReview(ctx, repo, "t-1", c); err != nil {
+	if err := e.runGolemReview(ctx, c, repo, "t-1"); err != nil {
 		t.Logf("review: %v", err)
 	}
 	if _, err := e.generatePRDescription(ctx, repo, "t-1"); err != nil {

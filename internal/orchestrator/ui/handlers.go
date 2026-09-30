@@ -553,7 +553,7 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
-	rawModels, backend := formModelSelections(r)
+	rawModels, backend := models.FromValues(r.PostForm)
 	form := ticketForm{
 		RepoRemote:  r.FormValue("repo_remote"),
 		BaseBranch:  r.FormValue("base_branch"),
@@ -675,8 +675,8 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	data["Selections"] = ticket.ModelSelections()
 	picker := modelPicker(fleet, ticket.ModelBackend, ticket.ModelSelections())
 	data["ModelPicker"] = picker
-	data["RequeueSelect"] = singleModelSelect(picker, "model_"+models.DefaultKey, "Model")
-	data["ReviseSelect"] = singleModelSelect(picker, "model_"+string(models.StageRevise), "Revision model")
+	data["RequeueSelect"] = singleModelSelect(picker, models.FieldPrefix+models.DefaultKey, "Model")
+	data["ReviseSelect"] = singleModelSelect(picker, models.FieldPrefix+string(models.StageRevise), "Revision model")
 	data["WaitingFor"] = fleet.WaitingFor(ticket)
 	data["CreatedByName"] = createdBy
 	data["LogEntries"] = logEntries

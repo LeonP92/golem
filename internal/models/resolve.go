@@ -23,11 +23,11 @@ func Resolve(c Catalog, s Selections) (map[Stage]string, []string) {
 			continue
 		}
 		switch t, isTier := TierRef(raw); {
-		case isTier && c.DeclaresTier(t):
+		case isTier && c.declaresTier(t):
 			out[st] = c.ForTier(t)
 			continue
 		case !isTier:
-			if _, ok := c.Lookup(raw); ok {
+			if _, ok := c.lookup(raw); ok {
 				out[st] = raw
 				continue
 			}
