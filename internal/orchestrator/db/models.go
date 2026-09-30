@@ -143,10 +143,19 @@ type Ticket struct {
 	// StoppedFromPhase is the phase a human interrupted, remembered so that
 	// starting the ticket again puts it back where it was rather than
 	// somewhere a rule had to guess.
-	StoppedFromPhase string    `gorm:"not null;default:''" json:"stopped_from_phase"`
-	BranchPushed     bool      `gorm:"not null;default:false" json:"branch_pushed"`
-	CreatedAt        time.Time `json:"created_at"`
-	UpdatedAt        time.Time `json:"updated_at"`
+	StoppedFromPhase string `gorm:"not null;default:''" json:"stopped_from_phase"`
+	// ReapedFromShem and ReapedFromPhase record which shem the heartbeat
+	// reaper released this ticket from, and the phase it was in. A missed
+	// heartbeat does not mean the shem is dead — a stalled database delays
+	// heartbeats just as well — and a shem still running the ticket uses
+	// these to take it back (api reclaim) instead of finishing into
+	// "ticket not owned" and redoing the phase. Cleared by any other phase
+	// change (see BeforeUpdate).
+	ReapedFromShem  *uint     `gorm:"index" json:"-"`
+	ReapedFromPhase string    `gorm:"not null;default:''" json:"-"`
+	BranchPushed    bool      `gorm:"not null;default:false" json:"branch_pushed"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 func (s Shem) RepoList() []string {
@@ -159,6 +168,22 @@ func (s Shem) RepoList() []string {
 func (t *Ticket) BeforeCreate(tx *gorm.DB) error {
 	if t.ID == "" {
 		t.ID = uuid.New().String()
+	}
+	return nil
+}
+
+// BeforeUpdate ends a ticket's reaped record on any phase change that does
+// not set the record itself. The record says "this ticket was released from
+// shem N and has sat in the pool untouched since", which is what makes it
+// safe for that shem to reclaim. Once the phase moves — an issue edit
+// re-gating it to pending-approval, a human stop, a close — that is no
+// longer true, and a later re-approval or resume must not hand it back to a
+// run working from the old text or told to quit. Clearing it per call site
+// missed two of them in review, so it lives here, on every phase write.
+func (t *Ticket) BeforeUpdate(tx *gorm.DB) error {
+	if tx.Statement.Changed("Phase") && !tx.Statement.Changed("ReapedFromShem") {
+		tx.Statement.SetColumn("ReapedFromShem", nil)
+		tx.Statement.SetColumn("ReapedFromPhase", "")
 	}
 	return nil
 }

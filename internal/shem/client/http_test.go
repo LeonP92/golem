@@ -269,3 +269,48 @@ func TestPostCheckpoint_NotOwner(t *testing.T) {
 		srv.Close()
 	}
 }
+
+func TestGetReaped(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/tickets/reaped" {
+			t.Errorf("got %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"ticket_id":"t1"},{"ticket_id":"t2"}]`))
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	got, err := c.GetReaped()
+	if err != nil {
+		t.Fatalf("GetReaped: %v", err)
+	}
+	if len(got) != 2 || got[0] != "t1" || got[1] != "t2" {
+		t.Errorf("got %v, want [t1 t2]", got)
+	}
+}
+
+func TestReclaim(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.Method + " " + r.URL.Path
+		if strings.Contains(r.URL.Path, "/taken/") {
+			http.Error(w, "ticket is not reclaimable", http.StatusConflict)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	c.RetryInitial = 10 * time.Millisecond
+	if err := c.Reclaim("t1"); err != nil {
+		t.Fatalf("Reclaim: %v", err)
+	}
+	if gotPath != "POST /api/tickets/t1/reclaim" {
+		t.Errorf("got %s", gotPath)
+	}
+	if err := c.Reclaim("taken"); !errors.Is(err, client.ErrNotAvailable) {
+		t.Errorf("expected ErrNotAvailable, got %v", err)
+	}
+}
