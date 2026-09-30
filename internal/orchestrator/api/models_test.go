@@ -517,3 +517,34 @@ func TestListModels(t *testing.T) {
 		t.Error("GET /api/models answered an unauthenticated request")
 	}
 }
+
+// A set-models landing between the catalog check and the claim update leaves
+// the ticket unclaimed instead of handing this shem a model it lacks.
+func TestClaimFailsWhenSelectionsChangeMidClaim(t *testing.T) {
+	h, gdb := modelsTestDB(t)
+	shem := seedShemWithCatalog(t, gdb, "node-a", "key1", "claude-code", modelCatalog("opus"))
+	ticket := seedTicketWithModels(t, gdb, models.Selections{"brainstorm": "opus"}, "claude-code")
+
+	fired := false
+	const hook = "test:change_models_mid_claim"
+	if err := gdb.Callback().Query().After("gorm:query").Register(hook, func(tx *gorm.DB) {
+		if fired || tx.Statement.Table != "tickets" {
+			return
+		}
+		fired = true
+		tx.Session(&gorm.Session{NewDB: true, SkipHooks: true}).
+			Exec("UPDATE tickets SET models = ? WHERE id = ?", `{"brainstorm":"gpt-big"}`, ticket.ID)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	defer gdb.Callback().Query().Remove(hook) //nolint:errcheck
+
+	if _, err := h.ClaimTicket(ticket.ID, shem.ID); err == nil {
+		t.Fatal("the claim succeeded although the selections changed after the catalog check")
+	}
+	var got db.Ticket
+	gdb.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "unassigned" || got.AssignedShem != nil {
+		t.Errorf("phase=%s assigned=%v, want the ticket left unclaimed", got.Phase, got.AssignedShem)
+	}
+}

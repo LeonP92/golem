@@ -106,15 +106,15 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 		return nil, fmt.Errorf("ticket not available")
 	}
 	// A shem whose catalog lacks a selected id would run the wrong model;
-	// another shem of the same backend may have it. The read above is
-	// advisory — the guarded update below is the atomicity point.
+	// another shem of the same backend may have it. The update below only
+	// claims the selections checked here.
 	if !shem.ModelCatalog().Has(ticket.ModelSelections()) {
 		return nil, fmt.Errorf("shem %s's catalog does not have every model this ticket selects", shem.Name)
 	}
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'unassigned' AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
-			"(model_backend = '' OR model_backend = ?)", ticketID, shem.Backend).
+			"(model_backend = '' OR model_backend = ?) AND models = ?", ticketID, shem.Backend, ticket.Models).
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
 	if result.Error != nil {
 		return nil, result.Error
