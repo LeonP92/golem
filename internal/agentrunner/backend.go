@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/models"
 	"gopkg.in/yaml.v3"
 )
@@ -72,7 +73,11 @@ func (b BackendConfig) Write(path string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o644) //nolint:gosec // read by the agent account
+	if err := os.WriteFile(path, data, 0o644); err != nil { //nolint:gosec // read by the agent account
+		return err
+	}
+	// WriteFile's mode is masked by the umask.
+	return os.Chmod(path, 0o644)
 }
 
 // SeedClaudeCode returns the embedded claude-code backend block.
@@ -112,6 +117,11 @@ func (b BackendConfig) Validate() error {
 		}
 		if reserved[tok] {
 			return fmt.Errorf("extra_args may not contain %q", arg)
+		}
+	}
+	for name := range b.Env {
+		if agentenv.IsGolemOwned(name) {
+			return fmt.Errorf("env may not set %s: golem's own variables never reach the agent", name)
 		}
 	}
 	return b.Catalog.Validate()

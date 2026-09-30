@@ -196,3 +196,11 @@ func golemEnvNamesFromSource(t *testing.T) []string {
 	}
 	return names
 }
+
+func TestFilterPairsKeepsOperatorNamesDropsGolemOwn(t *testing.T) {
+	got := FilterPairs(map[string]string{"MY_TOOL_TOKEN": "a", "OPENAI_API_KEY": "b", "GOLEM_SHEM_API_KEY": "c", "ORCHESTRATOR_DB": "d"})
+	want := []string{"MY_TOOL_TOKEN=a", "OPENAI_API_KEY=b"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("FilterPairs = %v, want %v", got, want)
+	}
+}

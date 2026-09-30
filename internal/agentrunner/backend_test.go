@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/leonp92/golem/internal/models"
@@ -168,5 +169,19 @@ func TestBackendConfigValidate(t *testing.T) {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// The operator's env reaches the agent as declared, except golem's own
+// variables, which are refused at startup rather than silently dropped.
+func TestBackendEnvRefusesGolemOwnNames(t *testing.T) {
+	b := SeedClaudeCode()
+	b.Env = map[string]string{"MY_TOOL_TOKEN": "x"}
+	if err := b.Validate(); err != nil {
+		t.Errorf("Validate with an operator variable: %v", err)
+	}
+	b.Env = map[string]string{"GOLEM_SHEM_API_KEY": "x"}
+	if err := b.Validate(); err == nil || !strings.Contains(err.Error(), "GOLEM_SHEM_API_KEY") {
+		t.Errorf("Validate = %v, want an error naming GOLEM_SHEM_API_KEY", err)
 	}
 }

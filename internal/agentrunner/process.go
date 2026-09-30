@@ -3,6 +3,7 @@ package agentrunner
 import (
 	"context"
 	"os/exec"
+	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
 )
@@ -22,5 +23,8 @@ func agentCmd(ctx context.Context, o Options, dir string, args ...string) *exec.
 	// environment is only meaningful if the agent cannot read the shem's
 	// memory: as root in the same container it reads /proc/1/environ instead.
 	agentenv.DropPrivileges(cmd)
+	// Bounds the wait for output pipes after ctx kills the process, in case a
+	// child it spawned still holds them open.
+	cmd.WaitDelay = 5 * time.Second
 	return cmd
 }

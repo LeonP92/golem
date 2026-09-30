@@ -194,12 +194,20 @@ func passthroughNames(parent []string) map[string]bool {
 // agent exec site passes to cmd.Env.
 func Environ() []string { return Filter(os.Environ()) }
 
-// FilterPairs returns m as KEY=VALUE pairs, minus the variables Filter strips.
+// FilterPairs returns operator-declared variables as KEY=VALUE pairs, minus
+// golem's own. The allow-list does not apply: the operator named them.
 func FilterPairs(m map[string]string) []string {
 	pairs := make([]string, 0, len(m))
 	for k, v := range m {
+		if k == "" || IsGolemOwned(k) {
+			continue
+		}
 		pairs = append(pairs, k+"="+v)
 	}
 	sort.Strings(pairs)
-	return Filter(pairs)
+	return pairs
 }
+
+// IsGolemOwned reports whether name is golem's own configuration, which never
+// reaches an agent.
+func IsGolemOwned(name string) bool { return denied(name) }
