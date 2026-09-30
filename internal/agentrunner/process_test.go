@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,7 @@ func TestAgentCmdStripsGolemSecretsFromEveryAdapterProcess(t *testing.T) {
 // the original state: it puts a fake vendor CLI on PATH, runs the real
 // RunPhase through it, and reads back the environment the agent received.
 func TestRunPhaseGivesTheAgentAScopedEnvironment(t *testing.T) {
+	skipWithoutShell(t)
 	dir := t.TempDir()
 	dump := filepath.Join(dir, "env.txt")
 	script := "#!/bin/sh\nenv > " + dump + "\ncat > /dev/null\n"
@@ -77,5 +79,13 @@ func TestRunPhaseGivesTheAgentAScopedEnvironment(t *testing.T) {
 	}
 	if !sawKey {
 		t.Errorf("the agent process did not receive ANTHROPIC_API_KEY; it cannot reach a model\ngot: %v", seen)
+	}
+}
+
+// skipWithoutShell skips a test whose fake binary is a POSIX shell script.
+func skipWithoutShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a POSIX shell script")
 	}
 }

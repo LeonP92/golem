@@ -27,6 +27,7 @@ import (
 // file and returns that path. The prompt arrives on stdin and is discarded.
 func fakeClaude(t *testing.T) string {
 	t.Helper()
+	skipWithoutShell(t)
 	dir := t.TempDir()
 	dump := filepath.Join(dir, "env.txt")
 	script := "#!/bin/sh\nenv > " + dump + "\ncat > /dev/null\n"

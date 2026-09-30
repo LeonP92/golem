@@ -67,6 +67,7 @@ func TestInvalidModelIsRefusedWithNoProcessStarted(t *testing.T) {
 }
 
 func TestRunAgentReportsTheModelItWasGiven(t *testing.T) {
+	skipWithoutShell(t)
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
 		t.Fatal(err)

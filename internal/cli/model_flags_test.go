@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -249,6 +250,7 @@ func TestBackendConfigKeepsTheRepoConfigOutOfTheShemPath(t *testing.T) {
 // An operator's own command and env reach the agent process end to end, which
 // is what makes a different vendor binary usable without a code change.
 func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
+	skipWithoutShell(t)
 	repo, ticketID, sha := observerFixtureRepo(t, "backend: claude-code\n")
 
 	// A recording script standing in for the vendor CLI, named by `command`.
@@ -286,6 +288,7 @@ func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
 // The marker is absent from a run without the flag, so it comes from the
 // document rather than the ambient environment.
 func TestWithoutTheBackendDocumentTheOperatorEnvIsAbsent(t *testing.T) {
+	skipWithoutShell(t)
 	repo, ticketID, sha := observerFixtureRepo(t, "backend: claude-code\n")
 
 	dir := t.TempDir()
@@ -343,5 +346,13 @@ func TestBadBackendFlagsFailFast(t *testing.T) {
 				t.Errorf("%s %v: exit %d, stderr %q; want non-zero naming %q", c.name, flags, code, stderr.String(), want)
 			}
 		}
+	}
+}
+
+// skipWithoutShell skips a test whose fake binary is a POSIX shell script.
+func skipWithoutShell(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a POSIX shell script")
 	}
 }

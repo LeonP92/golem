@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -106,7 +107,7 @@ func TestNewAgentWritesAReadableBackendDocument(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat the backend document: %v", err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 { // no Unix modes on Windows
 		t.Errorf("backend.yaml mode = %v, want 0644", info.Mode().Perm())
 	}
 	dirInfo, err := os.Stat(filepath.Dir(agent.ConfigPath))
@@ -114,7 +115,7 @@ func TestNewAgentWritesAReadableBackendDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The agent account runs the nested subcommands and has to enter this.
-	if dirInfo.Mode().Perm() != 0o755 {
+	if runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0o755 {
 		t.Errorf("run directory mode = %v, want 0755", dirInfo.Mode().Perm())
 	}
 	back, err := agentrunner.LoadBackendConfig(agent.ConfigPath)

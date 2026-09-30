@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -14,6 +15,9 @@ import (
 // stream and exits non-zero, so the test exercises the real RunAgent.
 func fakeClaude(t *testing.T, stdout, stderr string) string {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a POSIX shell script")
+	}
 	dir := t.TempDir()
 	script := "#!/bin/sh\n" +
 		"cat > /dev/null\n" + // consume the prompt on stdin

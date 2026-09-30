@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -142,6 +143,9 @@ func failingGolemOnPath(t *testing.T) {
 
 func writeFakeGolem(t *testing.T, dir, script string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake golem is a POSIX shell script")
+	}
 	if err := os.WriteFile(filepath.Join(dir, "golem"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake golem: %v", err)
 	}

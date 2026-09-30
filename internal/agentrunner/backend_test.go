@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -33,7 +34,7 @@ func TestWriteThenLoadRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o644 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o644 { // no Unix modes on Windows
 		t.Errorf("mode = %v, want 0644", info.Mode().Perm())
 	}
 	got, err := LoadBackendConfig(path)

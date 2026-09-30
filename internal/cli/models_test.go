@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -199,7 +200,7 @@ func TestModelsProbeSessionDirectoryIsTemporaryAndAgentReadable(t *testing.T) {
 		}
 		// DropPrivileges runs the vendor CLI as the agent account, which has
 		// to be able to enter this directory.
-		if s.mode != 0o755 {
+		if runtime.GOOS != "windows" && s.mode != 0o755 {
 			t.Errorf("session directory mode = %v, want 0755", s.mode)
 		}
 		if _, err := os.Stat(s.dir); err == nil {
