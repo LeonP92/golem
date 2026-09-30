@@ -460,3 +460,37 @@ func TestATierOnlySubmissionBindsNoBackend(t *testing.T) {
 		}
 	})
 }
+
+// A revision runs on the assigned shem, so its model is checked against that
+// shem's own catalog, not the fleet's.
+func TestRequestChangesChecksTheAssignedShemsCatalog(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+	seedShemWithCatalog(t, h.DB, "node-a", "key1", "claude-code", modelCatalog("haiku"))
+	seedShemWithCatalog(t, h.DB, "node-b", "key2", "claude-code", modelCatalog("haiku", "opus"))
+	shemID := uint(1)
+	ticket := db.Ticket{RepoRemote: "r", BaseBranch: "main", Branch: "b", Title: "t",
+		Description: "d", Phase: "ready-for-review", AssignedShem: &shemID}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatalf("seed ticket: %v", err)
+	}
+	for _, tt := range []struct {
+		name    string
+		backend string
+		model   string
+		want    int
+	}{
+		{"a model only another shem has", "claude-code", "opus", http.StatusBadRequest},
+		{"a backend the assigned shem does not run", "codex", "haiku", http.StatusBadRequest},
+		{"a model the assigned shem has", "claude-code", "haiku", http.StatusNoContent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			w := postModelAction(t, mux, cookie, ticket.ID, url.Values{
+				"action": {"request-changes"}, "feedback": {"please fix"},
+				"model_backend": {tt.backend}, "model_revise": {tt.model},
+			})
+			if w.Code != tt.want {
+				t.Errorf("status = %d, want %d: %s", w.Code, tt.want, w.Body.String())
+			}
+		})
+	}
+}

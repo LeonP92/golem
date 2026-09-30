@@ -82,6 +82,10 @@ func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 	updates := map[string]any{"repos": string(reposJSON), "status": "online", "last_heartbeat": now}
 	// A nil Backend leaves both columns alone: an older shem must not blank them.
 	if body.Backend != nil {
+		if err := body.Backend.Catalog.Validate(); err != nil {
+			http.Error(w, "backend catalog: "+err.Error(), http.StatusBadRequest)
+			return
+		}
 		catalogJSON, _ := json.Marshal(body.Backend.Catalog)
 		updates["backend"], updates["catalog"] = body.Backend.Name, string(catalogJSON)
 	}

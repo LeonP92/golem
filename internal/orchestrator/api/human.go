@@ -257,7 +257,7 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 	// reconcile does not run at all (finding I4). The WHERE clause is
 	// unchanged.
 	// The submitted default replaces the stored set, so merge is false.
-	cols, ok := h.selectionColumns(w, ticket, raw, backend, false)
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, false, nil)
 	if !ok {
 		return
 	}
@@ -506,8 +506,18 @@ func (h *Handlers) requestChangesFromReview(w http.ResponseWriter, r *http.Reque
 	// As in actionApprove and actionRequeue, the phase change and its GitHub
 	// label write commit together (finding I4, round 1c). The WHERE clause is
 	// unchanged.
-	// merge: a revise-stage override leaves the other stages alone.
-	cols, ok := h.selectionColumns(w, ticket, raw, backend, true)
+	// merge: a revise-stage override leaves the other stages alone. Pinned to
+	// the assigned shem, which is the one that runs the revision.
+	var pinned *db.Shem
+	if len(raw) > 0 {
+		shem, err := h.shemRow(*ticket.AssignedShem)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		pinned = &shem
+	}
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, true, pinned)
 	if !ok {
 		return
 	}

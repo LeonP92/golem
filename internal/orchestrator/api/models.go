@@ -33,20 +33,20 @@ func (h *Handlers) listModels(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(out) //nolint:errcheck
 }
 
-// resolveForShem resolves a ticket's selections against one shem's catalog
-// and logs whatever it dropped.
+// resolveForShem resolves a ticket's selections against one shem's catalog.
+// It logs a WARNING for anything it had to drop, once per distinct message.
 func (h *Handlers) resolveForShem(t db.Ticket, shem db.Shem) (string, map[string]string) {
 	sel := t.ModelSelections()
 	if t.ModelBackend != "" && t.ModelBackend != shem.Backend {
 		// The ids belong to another vendor, so none of them can be used.
-		_ = h.appendLog(t.ID, "WARNING", "orchestrator", "", fmt.Sprintf(
+		h.warnOnce(t.ID, fmt.Sprintf(
 			"ticket is bound to backend %s but shem %s runs %s; using vendor defaults",
 			t.ModelBackend, shem.Name, shem.Backend))
 		sel = models.Selections{}
 	}
 	resolved, dropped := models.Resolve(shem.ModelCatalog(), sel)
 	if len(dropped) > 0 {
-		_ = h.appendLog(t.ID, "WARNING", "orchestrator", "", fmt.Sprintf(
+		h.warnOnce(t.ID, fmt.Sprintf(
 			"dropped model selection %s: not in shem %s's catalog (%s); using stage defaults",
 			strings.Join(dropped, ", "), shem.Name, shem.Backend))
 	}
@@ -89,4 +89,14 @@ func (h *Handlers) shemRow(id uint) (db.Shem, error) {
 		return db.Shem{}, fmt.Errorf("shem %d not found: %w", id, err)
 	}
 	return s, nil
+}
+
+// warnOnce appends a WARNING unless the ticket already carries the same one.
+// The resumable poll resolves a running ticket every few seconds.
+func (h *Handlers) warnOnce(ticketID, msg string) {
+	var n int64
+	h.DB.Model(&db.LogEntry{}).Where("ticket_id = ? AND entry_type = ? AND message = ?", ticketID, "WARNING", msg).Count(&n)
+	if n == 0 {
+		_ = h.appendLog(ticketID, "WARNING", "orchestrator", "", msg)
+	}
 }

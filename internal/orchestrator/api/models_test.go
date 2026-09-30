@@ -354,10 +354,15 @@ func TestAResumedTicketBoundToAnotherBackendWarnsAndFallsBack(t *testing.T) {
 		t.Errorf("brainstorm = %q, want the stage default opus", claims[0].Models["brainstorm"])
 	}
 
+	// The shem polls resumable every few seconds; later polls add nothing.
+	for i := 0; i < 3; i++ {
+		mux.ServeHTTP(httptest.NewRecorder(), req.Clone(req.Context()))
+	}
+
 	var warnings []db.LogEntry
 	gdb.Where("ticket_id = ? AND entry_type = ?", ticket.ID, "WARNING").Find(&warnings)
 	if len(warnings) != 1 {
-		t.Fatalf("got %d WARNING entries, want 1: %+v", len(warnings), warnings)
+		t.Fatalf("got %d WARNING entries after repeated polls, want 1: %+v", len(warnings), warnings)
 	}
 	for _, want := range []string{"codex", "claude-code"} {
 		if !strings.Contains(warnings[0].Message, want) {

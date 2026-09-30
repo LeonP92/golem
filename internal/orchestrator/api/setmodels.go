@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/leonp92/golem/internal/models"
@@ -24,7 +25,17 @@ func (h *Handlers) actionSetModels(w http.ResponseWriter, r *http.Request, id st
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND assigned_shem IS NULL AND phase != 'closed'", id).
 		Updates(map[string]any{"models": string(selJSON), "model_backend": bound})
+	if result.Error != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	if result.RowsAffected == 0 {
+		var n int64
+		h.DB.Model(&db.Ticket{}).Where("id = ?", id).Count(&n)
+		if n == 0 {
+			http.Error(w, "ticket not found", http.StatusNotFound)
+			return
+		}
 		http.Error(w, "ticket is claimed or closed", http.StatusConflict)
 		return
 	}
@@ -41,8 +52,10 @@ func (h *Handlers) actionSetModels(w http.ResponseWriter, r *http.Request, id st
 
 // selectionColumns validates raw and returns the models and model_backend
 // values to write, or ok=false with the response already written. An empty
-// raw returns a nil map, leaving the stored selections alone.
-func (h *Handlers) selectionColumns(w http.ResponseWriter, t db.Ticket, raw map[string]string, backend string, merge bool) (map[string]any, bool) {
+// raw returns a nil map, leaving the stored selections alone. A non-nil
+// pinned validates against that shem's own catalog only: the one that will
+// run the ticket.
+func (h *Handlers) selectionColumns(w http.ResponseWriter, t db.Ticket, raw map[string]string, backend string, merge bool, pinned *db.Shem) (map[string]any, bool) {
 	if len(raw) == 0 {
 		return nil, true
 	}
@@ -59,12 +72,23 @@ func (h *Handlers) selectionColumns(w http.ResponseWriter, t db.Ticket, raw map[
 	if backend == "" {
 		backend = t.ModelBackend
 	}
-	fleet, err := db.LoadFleet(h.DB)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return nil, false
+	var catalogs map[string]models.Catalog
+	if pinned != nil {
+		if backend != "" && backend != pinned.Backend {
+			http.Error(w, fmt.Sprintf("ticket runs on shem %s (%s), not %s", pinned.Name, pinned.Backend, backend), http.StatusBadRequest)
+			return nil, false
+		}
+		backend = pinned.Backend
+		catalogs = map[string]models.Catalog{pinned.Backend: pinned.ModelCatalog()}
+	} else {
+		fleet, err := db.LoadFleet(h.DB)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return nil, false
+		}
+		catalogs = fleet.Catalogs()
 	}
-	out, bound, err := models.ValidateSelections(fleet.Catalogs(), backend, sel)
+	out, bound, err := models.ValidateSelections(catalogs, backend, sel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return nil, false

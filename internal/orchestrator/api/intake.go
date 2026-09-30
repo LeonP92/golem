@@ -56,7 +56,7 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, revie
 		return
 	}
 
-	cols, ok := h.selectionColumns(w, ticket, raw, backend, false)
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, false, nil)
 	if !ok {
 		return
 	}
