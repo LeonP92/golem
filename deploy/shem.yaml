@@ -51,3 +51,34 @@ repos:
   # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.
   - path: /repos/golem
     remote: https://github.com/LeonP92/golem
+
+# backend: declares the adapter this shem runs, how to invoke it, and the model
+# catalog it reports to the orchestrator. Absent, as here, it means the built-in
+# claude-code block: the three aliases (haiku, sonnet, opus) and a per-stage
+# default tier for each.
+#
+# This container installs and authenticates only `claude`, so naming another
+# adapter here needs a different image.
+#
+# `golem models list --config /etc/golem/shem.yaml` prints what this shem will
+# report. `golem models probe --config /etc/golem/shem.yaml` runs one trivial
+# session per catalog model and prints a block containing only the models that
+# answered — paste that in to pin the catalog to what this host can actually
+# reach. probe prints; it never edits this file.
+#
+# backend:
+#   adapter: claude-code        # registered adapter name
+#   command: claude             # binary; the adapter's default when empty
+#   extra_args: ["--add-dir", "/opt/toolchains"]   # after the adapter's own args
+#   env:                        # extra env for the agent process
+#     ANTHROPIC_BASE_URL: "..."
+#   supports_selection: true    # whether the backend accepts a per-call model
+#   tiers: [small, medium, large]   # operator labels, cheapest first
+#   models:
+#     - {id: haiku,  label: "Haiku",  tier: small}
+#     - {id: sonnet, label: "Sonnet", tier: medium}
+#     - {id: opus,   label: "Opus",   tier: large}
+#   stage_defaults:             # the tier each stage falls back to
+#     brainstorm: large
+#     plan: large
+#     implement: medium

@@ -398,7 +398,33 @@ no_push: true   # for local testing; see below
 repos:
   - path: /path/to/local/repo
     remote: https://github.com/your-org/your-repo
+
+backend:
+  adapter: claude-code        # registered adapter name
+  command: claude             # binary; the adapter's default when empty
+  extra_args: ["--add-dir", "/opt/toolchains"]   # appended after the adapter's own args
+  env:                        # extra env for the agent process
+    ANTHROPIC_BASE_URL: "..."
+  supports_selection: true    # whether the backend accepts a per-call model
+  tiers: [small, medium, large]   # operator labels, cheapest first
+  models:                     # selectable models, in display order
+    - {id: haiku, label: "Haiku", tier: small}
+  stage_defaults:             # the tier each stage falls back to
+    brainstorm: large
 ```
+
+To see the catalog a shem will report, and to check each model against the
+vendor CLI:
+
+```bash
+docker compose exec shem golem models list  --config /etc/golem/shem.yaml
+docker compose exec shem golem models probe --config /etc/golem/shem.yaml   # paste the printed block into shem.yaml
+```
+
+An absent `backend:` block means the built-in `claude-code` defaults. The
+shipped container installs and authenticates only `claude`, so another adapter
+needs a different image. `--backend <name>` runs an agent-invoking subcommand
+against a registered adapter with no backend document.
 
 `no_push: true` routes `git push` to the local repository instead of a remote, which is ideal for trying Golem out — but it also means **no branch reaches GitHub and no pull request is ever opened**. The shipped `deploy/shem.yaml` keeps it on, because the compose stack's default repositories are a throwaway local one and whatever `GOLEM_REPO_PATH` points at. To get the pull request, set `no_push: false` and give the shem a push credential: `GOLEM_SHEM_GITHUB_TOKEN` in `.env` (the container's entrypoint installs it as an HTTPS credential helper for github.com) or an SSH key. Without one the push fails and the pull request is silently never opened — the ticket still reaches `ready-for-review`.
 
