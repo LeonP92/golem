@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -307,5 +308,40 @@ func TestWithoutTheBackendDocumentTheOperatorEnvIsAbsent(t *testing.T) {
 	}
 	if strings.Contains(string(raw), "ANTHROPIC_PROBE_MARKER") {
 		t.Error("the marker reached a run with no backend document")
+	}
+}
+
+// A bad backend or model flag fails the command instead of degrading to stub
+// narratives or an early "nothing to review" exit.
+func TestBadBackendFlagsFailFast(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".golem"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmds := []struct {
+		name string
+		run  func([]string, io.Writer, io.Writer) int
+		args []string
+	}{
+		{"graph build", GraphBuild, []string{"--repo", repo}},
+		{"graph update", GraphUpdate, []string{"--repo", repo}},
+		{"observer dispatch", ObserverDispatch, []string{"--repo", repo, "--ticket", "t-1", "--role", "reviewer", "--commit", "HEAD"}},
+		{"ticket close", TicketClose, []string{"--repo", repo, "--ticket", "t-1"}},
+	}
+	bad := map[string][]string{
+		"unknown backend adapter": {"--backend", "nonesuch"},
+		"invalid model id":        {"--model", "-p"},
+	}
+	for _, c := range cmds {
+		for want, flags := range bad {
+			var stderr bytes.Buffer
+			code := c.run(append(append([]string{}, c.args...), flags...), io.Discard, &stderr)
+			if code == 0 || !strings.Contains(stderr.String(), want) {
+				t.Errorf("%s %v: exit %d, stderr %q; want non-zero naming %q", c.name, flags, code, stderr.String(), want)
+			}
+		}
 	}
 }

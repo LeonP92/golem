@@ -29,6 +29,10 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
 		return 1
 	}
+	if err := mf.validate(cfg); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	model, err := mf.resolve(cfg, "graph-builder", models.StageGraph)
 	if err != nil {
 		fmt.Fprintln(stderr, err)

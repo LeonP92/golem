@@ -76,3 +76,17 @@ func (m modelFlags) resolve(cfg *config.Config, role string, stage models.Stage)
 	}
 	return id, nil
 }
+
+// validate fails fast on a bad --model, --backend or --backend-config, before
+// a command reaches a path that would otherwise skip or soften the check.
+func (m modelFlags) validate(cfg *config.Config) error {
+	if _, err := m.resolve(cfg, "", ""); err != nil {
+		return err
+	}
+	if *m.backendConfig != "" || *m.backend != "" {
+		if _, err := m.runner(cfg, ""); err != nil {
+			return fmt.Errorf("selecting backend: %w", err)
+		}
+	}
+	return nil
+}
