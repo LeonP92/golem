@@ -12,6 +12,7 @@ import (
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/roles"
 	"github.com/leonp92/golem/internal/ticket"
 )
@@ -38,6 +39,7 @@ func TicketPRDescription(args []string, stdout, stderr io.Writer) int {
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("ticket", "", "ticket id (required)")
 	issue := fs.Int("issue", 0, "GitHub issue number this closes (0 for none)")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -94,15 +96,20 @@ func TicketPRDescription(args []string, stdout, stderr io.Writer) int {
 			"added by the caller when there is an issue to close.\n"
 	}
 
-	runner, err := NewRunner(cfg, s.WorktreePath)
+	runner, err := mf.runner(cfg, s.WorktreePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
+		return 1
+	}
+	model, err := mf.resolve(cfg, "pr-description", models.StagePRDescription)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	result, err := runner.RunAgent(context.Background(), "pr-description", agentrunner.Context{
 		LogSlice:   entries,
 		RolePrompt: prompt,
-	}, "")
+	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running pr-description: %v\n", err)
 		return 1

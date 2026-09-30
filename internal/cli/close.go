@@ -13,6 +13,7 @@ import (
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
 	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/soul"
 	"github.com/leonp92/golem/internal/ticket"
 	"github.com/leonp92/golem/internal/workspace"
@@ -46,6 +47,7 @@ func TicketClose(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("ticket", "", "ticket id (required)")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -74,7 +76,7 @@ func TicketClose(args []string, stdout, stderr io.Writer) int {
 	}
 
 	if candidates := soul.ExtractCandidates(entries); len(candidates) > 0 {
-		if err := proposeAndPromoteSoulEntries(cfg, golemDir, s.WorktreePath, logPath, candidates); err != nil {
+		if err := proposeAndPromoteSoulEntries(mf, cfg, golemDir, s.WorktreePath, logPath, candidates); err != nil {
 			fmt.Fprintf(stderr, "proposing soul entries: %v\n", err)
 			return 1
 		}
@@ -154,12 +156,16 @@ func promoteReviewerSoulEntries(entries []blog.Entry, soulDir, logPath string) (
 	return nil
 }
 
-func proposeAndPromoteSoulEntries(cfg *config.Config, golemDir, worktreePath, logPath string, candidates []soul.Candidate) (err error) {
+func proposeAndPromoteSoulEntries(mf modelFlags, cfg *config.Config, golemDir, worktreePath, logPath string, candidates []soul.Candidate) (err error) {
 	rolePrompt, err := os.ReadFile(filepath.Join(golemDir, "roles", "reviewer.md"))
 	if err != nil {
 		return err
 	}
-	runner, err := NewRunner(cfg, worktreePath)
+	runner, err := mf.runner(cfg, worktreePath)
+	if err != nil {
+		return err
+	}
+	model, err := mf.resolve(cfg, "reviewer", models.StageReview)
 	if err != nil {
 		return err
 	}
@@ -170,7 +176,7 @@ func proposeAndPromoteSoulEntries(cfg *config.Config, golemDir, worktreePath, lo
 	}
 	prompt := string(rolePrompt) + "\n\n## Divergences to consider from this ticket\n" + divergences.String()
 
-	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{RolePrompt: prompt}, "")
+	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{RolePrompt: prompt}, model)
 	if err != nil {
 		return err
 	}

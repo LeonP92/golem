@@ -13,6 +13,7 @@ import (
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/config"
 	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/roles"
 )
 
@@ -21,6 +22,7 @@ func GraphBuild(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
 	concurrency := fs.Int("concurrency", 4, "max parallel module extractions and narrative calls")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -29,6 +31,11 @@ func GraphBuild(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(filepath.Join(golemDir, "config.yaml"))
 	if err != nil {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
+		return 1
+	}
+	model, err := mf.resolve(cfg, "graph-builder", models.StageGraph)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
@@ -55,7 +62,7 @@ func GraphBuild(args []string, stdout, stderr io.Writer) int {
 	graphs = graph.CoarsenSubsystems(graphs, graph.DefaultCoarsenClusterSize)
 
 	// One LLM call per subsystem cluster; cached; parallel.
-	narratives := runSubsystemNarratives(cfg, *repo, graphs, *concurrency, true, stdout, stderr)
+	narratives := runSubsystemNarratives(mf, model, cfg, *repo, graphs, *concurrency, true, stdout, stderr)
 
 	if err := writeGraphs(golemDir, graphs, narratives); err != nil {
 		fmt.Fprintf(stderr, "writing graph: %v\n", err)
@@ -178,7 +185,7 @@ func dedupeStrings(ss []string) []string {
 // whose last narrative was rejected (graph build); graph update keeps
 // the cached rejection so an unrelated edit never re-bills it. Failures
 // render as a visible stub and never block the build.
-func runSubsystemNarratives(cfg *config.Config, repoRoot string, graphs []graph.ModuleGraph, concurrency int, retryFailed bool, stdout, stderr io.Writer) graph.SubsystemNarratives {
+func runSubsystemNarratives(mf modelFlags, model string, cfg *config.Config, repoRoot string, graphs []graph.ModuleGraph, concurrency int, retryFailed bool, stdout, stderr io.Writer) graph.SubsystemNarratives {
 	golemDir := filepath.Join(repoRoot, ".golem")
 	cache, err := graph.LoadNarrativeCache(filepath.Join(golemDir, "index", "subsystem-narratives.json"))
 	if err != nil {
@@ -187,7 +194,8 @@ func runSubsystemNarratives(cfg *config.Config, repoRoot string, graphs []graph.
 	n := narrator{
 		rolePrompt:  loadNarrativeRole(golemDir, stderr),
 		cache:       cache,
-		newRunner:   func() (agentrunner.Runner, error) { return NewRunner(cfg, repoRoot) },
+		newRunner:   func() (agentrunner.Runner, error) { return mf.runner(cfg, repoRoot) },
+		model:       model,
 		concurrency: concurrency,
 		retryFailed: retryFailed,
 		stdout:      stdout,
@@ -219,6 +227,7 @@ type narrator struct {
 	rolePrompt  string
 	cache       *graph.SubsystemNarrativeCache
 	newRunner   func() (agentrunner.Runner, error)
+	model       string
 	concurrency int
 	retryFailed bool
 	stdout      io.Writer
@@ -286,7 +295,7 @@ func (n narrator) narrate(clusters map[string][]graph.ModuleGraph) graph.Subsyst
 func (n narrator) narrateOne(runner agentrunner.Runner, t narrationTask) string {
 	fmt.Fprintf(n.stdout, "narrating subsystem %q (%d modules)...\n", t.sub, len(t.cluster))
 	ctx := agentrunner.Context{RolePrompt: n.rolePrompt + "\n\n" + graph.BuildClusterPrompt(t.sub, t.cluster)}
-	res, err := runner.RunAgent(context.Background(), "graph-builder", ctx, "")
+	res, err := runner.RunAgent(context.Background(), "graph-builder", ctx, n.model)
 	if err != nil {
 		fmt.Fprintf(n.stderr, "warning: narrative call for %q failed: %v\n", t.sub, err)
 		return graph.StubNarrative(t.sub)

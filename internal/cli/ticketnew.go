@@ -22,6 +22,8 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	branch := fs.String("branch", "", "working branch name (optional; defaults to ticket/<id> for standalone use)")
 	trivial := fs.Bool("trivial", false, "skip brainstorm, go straight to plan with developer+reviewer only")
 	fromIssue := fs.Int("from-issue", 0, "create the ticket from GitHub issue <n>, using its title and body as the description")
+	backendConfig := fs.String("backend-config", "", "path to a backend config document")
+	backend := fs.String("backend", "", "registered adapter name")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -65,7 +67,9 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	runner, err := NewRunner(cfg, *repo)
+	runner, err := NewRunner(RunnerSource{
+		Config: cfg, WorktreeRoot: *repo, BackendConfig: *backendConfig, Backend: *backend,
+	})
 	if err != nil {
 		fmt.Fprintf(stderr, "initialising runner: %v\n", err)
 		return 1

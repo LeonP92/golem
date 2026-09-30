@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/observer"
 	"github.com/leonp92/golem/internal/ticket"
 )
@@ -23,6 +24,7 @@ func ObserverDispatch(args []string, stdout, stderr io.Writer) int {
 	role := fs.String("role", "", "watcher role to dispatch (required)")
 	commit := fs.String("commit", "", "commit SHA to review (required)")
 	base := fs.String("base", "", "review everything from the merge-base with this ref up to --commit, not --commit alone")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -61,13 +63,18 @@ func ObserverDispatch(args []string, stdout, stderr io.Writer) int {
 		return 0
 	}
 
-	runner, err := NewRunner(cfg, s.WorktreePath)
+	runner, err := mf.runner(cfg, s.WorktreePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
 		return 1
 	}
+	model, err := mf.resolve(cfg, *role, models.StageObserve)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 
-	obs := observer.New(filepath.Join(ticketDir, "log.jsonl"), runner, "")
+	obs := observer.New(filepath.Join(ticketDir, "log.jsonl"), runner, model)
 	if err := obs.DispatchForCommit(*role, *commit, diff, string(rolePrompt)); err != nil {
 		fmt.Fprintf(stderr, "dispatch: %v\n", err)
 		return 1
