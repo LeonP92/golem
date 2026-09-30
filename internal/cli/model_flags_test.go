@@ -259,10 +259,10 @@ func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
 	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// ANTHROPIC_-prefixed so agentenv's allow-list passes it; GOLEM_ is denied
-	// there and must not arrive.
+	// A name outside agentenv's allow-list: the operator declared it, so it
+	// passes. GOLEM_ names are refused when the document loads.
 	doc := writeBackendDoc(t, "backend:\n  adapter: claude-code\n  command: "+script+
-		"\n  env:\n    ANTHROPIC_PROBE_MARKER: operator-set\n    GOLEM_SECRET: smuggled\n")
+		"\n  env:\n    MY_TOOL_MARKER: operator-set\n")
 
 	var stdout, stderr bytes.Buffer
 	code := ObserverDispatch([]string{"--repo", repo, "--ticket", ticketID,
@@ -275,7 +275,7 @@ func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
 		t.Fatalf("the document's command was never run: %v", err)
 	}
 	got := string(raw)
-	if !strings.Contains(got, "ANTHROPIC_PROBE_MARKER=operator-set") {
+	if !strings.Contains(got, "MY_TOOL_MARKER=operator-set") {
 		t.Errorf("the operator's env entry did not reach the agent:\n%s", got)
 	}
 	if strings.Contains(got, "GOLEM_SECRET") {
@@ -306,7 +306,7 @@ func TestWithoutTheBackendDocumentTheOperatorEnvIsAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the agent was never run: %v", err)
 	}
-	if strings.Contains(string(raw), "ANTHROPIC_PROBE_MARKER") {
+	if strings.Contains(string(raw), "MY_TOOL_MARKER") {
 		t.Error("the marker reached a run with no backend document")
 	}
 }
