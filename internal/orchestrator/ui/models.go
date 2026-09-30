@@ -16,14 +16,17 @@ type modelSelect struct {
 // modelPickerData is the view-model for the model selects.
 type modelPickerData struct {
 	Backends []db.BackendCatalog
-	Backend  string         // the selected backend, "" when none is reported
-	Catalog  models.Catalog // the selected backend's catalog
-	Default  modelSelect
-	Stages   []modelSelect
+	Backend  string // the selected backend, "" when none is reported
+	// Unreported is set when Backend is the ticket's own and no shem reports
+	// it: no selects render, so nothing on the page can rewrite its selections.
+	Unreported bool
+	Catalog    models.Catalog // the selected backend's catalog
+	Default    modelSelect
+	Stages     []modelSelect
 }
 
 // modelPicker builds the selects for one backend; an empty backend picks the
-// first reported one.
+// first reported one, and an unreported one is kept as is.
 func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPickerData {
 	out := modelPickerData{Backends: fleet.Backends()}
 	if len(out.Backends) == 0 {
@@ -31,6 +34,10 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 	}
 	out.Backend = backend
 	cat, ok := fleet.Catalog(backend)
+	if !ok && backend != "" {
+		out.Unreported = true
+		return out
+	}
 	if !ok {
 		out.Backend = out.Backends[0].Name
 		cat = out.Backends[0].Catalog
@@ -94,4 +101,38 @@ func (h *Handlers) modelSelects(w http.ResponseWriter, r *http.Request) {
 	if err := h.tmpls["ticket_new"].ExecuteTemplate(w, "model_selects", picker); err != nil {
 		http.Error(w, "template error", http.StatusInternalServerError)
 	}
+}
+
+// ticketModels is what each stage runs on: resolved against the assigned
+// shem's own catalog once claimed, else the bound backend's, else the first
+// reported backend's.
+func ticketModels(fleet db.Fleet, t db.Ticket, assigned *db.Shem) map[models.Stage]string {
+	sel := t.ModelSelections()
+	if assigned != nil {
+		if t.ModelBackend != "" && t.ModelBackend != assigned.Backend {
+			sel = nil
+		}
+		out, _ := models.Resolve(assigned.ModelCatalog(), sel)
+		return out
+	}
+	cat, ok := fleet.Catalog(t.ModelBackend)
+	if !ok && t.ModelBackend == "" {
+		if b := fleet.Backends(); len(b) > 0 {
+			cat = b[0].Catalog
+		}
+	}
+	out, _ := models.Resolve(cat, sel)
+	return out
+}
+
+// stageModel is one row of a ticket's resolved models.
+type stageModel struct{ Stage, Model string }
+
+// inStageOrder lists m in models.Stages order.
+func inStageOrder(m map[models.Stage]string) []stageModel {
+	out := make([]stageModel, 0, len(models.Stages))
+	for _, st := range models.Stages {
+		out = append(out, stageModel{Stage: string(st), Model: m[st]})
+	}
+	return out
 }

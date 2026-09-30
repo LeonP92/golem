@@ -666,14 +666,23 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	cat, _ := fleet.Catalog(ticket.ModelBackend)
-	resolved, _ := models.Resolve(cat, ticket.ModelSelections())
+	// A claimed ticket runs on its shem's catalog, so both the read-only models
+	// and the requeue/revise selects come from that shem's backend.
+	var assigned *db.Shem
+	pickerBackend := ticket.ModelBackend
+	if ticket.AssignedShem != nil {
+		var s db.Shem
+		if err := h.DB.First(&s, "id = ?", *ticket.AssignedShem).Error; err == nil {
+			assigned = &s
+			pickerBackend = s.Backend
+		}
+	}
 
 	data := h.base(r, "")
 	data["Ticket"] = ticket
-	data["ResolvedModels"] = resolved
+	data["ResolvedModels"] = inStageOrder(ticketModels(fleet, ticket, assigned))
 	data["Selections"] = ticket.ModelSelections()
-	picker := modelPicker(fleet, ticket.ModelBackend, ticket.ModelSelections())
+	picker := modelPicker(fleet, pickerBackend, ticket.ModelSelections())
 	data["ModelPicker"] = picker
 	data["RequeueSelect"] = singleModelSelect(picker, models.FieldPrefix+models.DefaultKey, "Model")
 	data["ReviseSelect"] = singleModelSelect(picker, models.FieldPrefix+string(models.StageRevise), "Revision model")

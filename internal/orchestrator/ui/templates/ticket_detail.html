@@ -235,11 +235,11 @@
         <h3 class="font-semibold text-xs text-base-content/50 mt-3 mb-1">Models</h3>
         <dl class="grid gap-x-6 gap-y-1 text-sm" style="grid-template-columns:auto 1fr">
           {{$sel := .Selections}}
-          {{range $stage, $model := .ResolvedModels}}
-          <dt class="text-base-content/50">{{$stage}}</dt>
+          {{range .ResolvedModels}}
+          <dt class="text-base-content/50">{{.Stage}}</dt>
           <dd class="font-mono text-xs">
-            {{if $model}}{{$model}}{{else}}vendor default{{end}}
-            {{if index $sel (printf "%s" $stage)}}<span class="badge badge-ghost badge-xs ml-1">overridden</span>{{end}}
+            {{if .Model}}{{.Model}}{{else}}vendor default{{end}}
+            {{if index $sel .Stage}}<span class="badge badge-ghost badge-xs ml-1">overridden</span>{{end}}
           </dd>
           {{end}}
         </dl>
@@ -248,7 +248,7 @@
              conditions set-models itself enforces, so the page never offers a
              control that can only 409. */}}
         {{if and (not .Ticket.AssignedShem) (ne .Ticket.Phase "closed")}}
-        <form id="ticket-models" class="mt-4">
+        <div id="ticket-models" class="mt-4">
           {{template "model_selects" .ModelPicker}}
           <div class="flex gap-2 mt-2">
             <button type="button" class="btn btn-sm"
@@ -256,14 +256,14 @@
                     hx-vals='{"action":"set-models"}'
                     hx-include="#ticket-models .model-selects"
                     hx-on::after-request="if(event.detail.successful) window.location.reload()">Save models</button>
-            {{/* No hx-include: it posts action and nothing else, which is an
-                 empty selection set — what clears both columns. */}}
+            {{/* A div, not a form: htmx adds an enclosing form's fields to any POST,
+                 so Clear would re-save the selects instead of clearing them. */}}
             <button type="button" class="btn btn-sm btn-ghost"
                     hx-post="/api/tickets/{{.Ticket.ID}}/actions"
                     hx-vals='{"action":"set-models"}'
                     hx-on::after-request="if(event.detail.successful) window.location.reload()">Clear model selections</button>
           </div>
-        </form>
+        </div>
         {{end}}
       </div>
     </details>

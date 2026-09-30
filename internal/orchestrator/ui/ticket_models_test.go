@@ -278,12 +278,21 @@ func TestTicketPagePanelShapeAndActionField(t *testing.T) {
 	// hx-vals, so the body can never hold two action values.
 	panelStart := strings.Index(body, `id="ticket-models"`)
 	if panelStart < 0 {
-		t.Fatal("the ticket page renders no #ticket-models form")
+		t.Fatal("the ticket page renders no #ticket-models panel")
 	}
-	panelEnd := strings.Index(body[panelStart:], "</form>") + panelStart
-	panel := body[panelStart:panelEnd]
+	clear := strings.Index(body, "Clear model selections")
+	if clear < panelStart {
+		t.Fatal("the panel renders no Clear control")
+	}
+	panel := body[panelStart:clear]
 	if strings.Contains(panel, `name="action"`) {
 		t.Errorf("the panel carries an action input:\n%s", panel)
+	}
+	// htmx adds an enclosing form's fields to a POST, so Clear inside a form
+	// would re-save the current selects instead of clearing them.
+	before := body[:clear]
+	if strings.Count(before, "<form") != strings.Count(before, "</form>") {
+		t.Error("the Clear control sits inside a <form>")
 	}
 	if got := strings.Count(body, `class="model-selects`); got != 1 {
 		t.Errorf("the page renders %d model-selects elements, want exactly 1", got)
@@ -541,5 +550,45 @@ func TestALogEntryWithAModelShowsTheBadge(t *testing.T) {
 	body := f.get(t, "/tickets/"+ticket.ID).Body.String()
 	if !strings.Contains(body, "claude-code/opus") {
 		t.Errorf("the log entry shows no backend/model badge:\n%s", body)
+	}
+}
+
+// A ticket bound to a backend no shem reports keeps its selections: the page
+// renders no selects, so Save and Start cannot overwrite them with another
+// backend's options.
+func TestTicketPageKeepsAnUnreportedBackend(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	ticket := f.ticket(t, "t-gone", models.Selections{"plan": "gpt-big"}, "codex", "unassigned")
+
+	body := f.get(t, "/tickets/"+ticket.ID).Body.String()
+	if !strings.Contains(body, "No shem currently reports codex") {
+		t.Error("the page does not say the ticket's backend is unreported")
+	}
+	for _, field := range []string{`name="model_default"`, `name="model_plan"`, `name="model_backend"`} {
+		if strings.Contains(body, field) {
+			t.Errorf("the page renders %s for an unreported backend", field)
+		}
+	}
+}
+
+// Stages are listed in pipeline order and, with no backend bound, resolve
+// against the reported catalog rather than reading as vendor defaults.
+func TestTicketPageModelsInStageOrder(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	ticket := f.ticket(t, "t-order", models.Selections{}, "", "unassigned")
+
+	body := f.get(t, "/tickets/"+ticket.ID).Body.String()
+	prev := -1
+	for _, st := range models.Stages {
+		i := strings.Index(body, `<dt class="text-base-content/50">`+string(st)+`</dt>`)
+		if i < prev {
+			t.Fatalf("stage %s is out of order", st)
+		}
+		prev = i
+	}
+	if strings.Count(body, "vendor default") == len(models.Stages) {
+		t.Error("every stage reads vendor default although a catalog is reported")
 	}
 }

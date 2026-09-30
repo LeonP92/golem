@@ -1,5 +1,9 @@
 {{define "model_selects"}}
-{{if .Backends}}
+{{if .Unreported}}
+<div class="model-selects">
+  <p class="text-sm text-base-content/50">No shem currently reports {{.Backend}}; this ticket's model selections are kept as they are.</p>
+</div>
+{{else if .Backends}}
 <div class="model-selects form-control">
   <label class="label"><span class="label-text font-medium">Model</span>
     <span class="label-text-alt text-base-content/50">Larger models for reasoning, smaller for mechanical work</span></label>
