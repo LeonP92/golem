@@ -286,16 +286,15 @@ func TestSubcommandsCarryTheBackendDocument(t *testing.T) {
 	e := testExecutor(t)
 	repo := t.TempDir()
 	calls, _ := fakeGolemOnPath(t)
-	c, _ := logCapture(t)
 	ctx := context.Background()
 
-	if err := e.runGolemValidate(ctx, c, repo, "t-1", "spec"); err != nil {
+	if err := e.runGolemValidate(ctx, repo, "t-1", "spec", "picked-validate"); err != nil {
 		t.Logf("validate: %v", err)
 	}
-	if err := e.runGolemReview(ctx, c, repo, "t-1"); err != nil {
+	if err := e.runGolemReview(ctx, repo, "t-1", "picked-review"); err != nil {
 		t.Logf("review: %v", err)
 	}
-	if _, err := e.generatePRDescription(ctx, repo, "t-1"); err != nil {
+	if _, err := e.generatePRDescription(ctx, repo, "t-1", "picked-pr"); err != nil {
 		t.Logf("pr-description: %v", err)
 	}
 	if err := e.runGolemTicketNew(ctx, repo, "t-1", "b", "a description"); err != nil {
@@ -307,9 +306,9 @@ func TestSubcommandsCarryTheBackendDocument(t *testing.T) {
 
 	lines := readLines(t, calls)
 	want := map[string]string{
-		"ticket validate":       "--model mid-model",
-		"ticket review":         "--model big-model",
-		"ticket pr-description": "--model small-model",
+		"ticket validate":       "--model picked-validate",
+		"ticket review":         "--model picked-review",
+		"ticket pr-description": "--model picked-pr",
 		"ticket new":            "",
 	}
 	for prefix, model := range want {
@@ -380,5 +379,23 @@ func TestGraphSubcommandsCarryTheBackendDocument(t *testing.T) {
 		if !strings.Contains(l, "--model small-model") {
 			t.Errorf("%q does not carry the graph stage's model", l)
 		}
+	}
+}
+
+// Subcommand stages run on the model the claim resolved for the ticket, not
+// on this shem's own defaults; a claim with no models falls back to them.
+func TestClaimModelPrefersTheClaim(t *testing.T) {
+	e := testExecutor(t)
+	c, _ := logCapture(t)
+	claim := &client.ClaimResponse{TicketID: "ticket-1", Models: map[string]string{"review": "small-model"}}
+	if got := e.claimModel(c, claim, models.StageReview); got != "small-model" {
+		t.Errorf("claimModel(review) = %q, want the claim's small-model", got)
+	}
+	if got := e.claimModel(c, claim, models.StageValidate); got != "" {
+		t.Errorf("claimModel(validate) = %q, want \"\" (the claim resolved the vendor default)", got)
+	}
+	old := &client.ClaimResponse{TicketID: "ticket-1"}
+	if got := e.claimModel(c, old, models.StageReview); got != "big-model" {
+		t.Errorf("claimModel with no claim models = %q, want the shem default big-model", got)
 	}
 }

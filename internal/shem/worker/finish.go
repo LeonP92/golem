@@ -7,6 +7,7 @@ import (
 	"log"
 	"path/filepath"
 
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 )
@@ -84,7 +85,7 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			// anyway: the orchestrator falls back to a minimal body, so a
 			// missing description costs a good write-up, not the pull
 			// request.
-			prBody, bodyErr := e.generatePRDescription(ctx, repoPath, ticketID)
+			prBody, bodyErr := e.generatePRDescription(ctx, repoPath, ticketID, e.claimModel(c, claim, models.StagePRDescription))
 			if bodyErr != nil {
 				postStatus(c, ticketID, "Could not generate the pull request description: "+
 					firstLineOf(bodyErr.Error()))
