@@ -49,6 +49,19 @@ func (h *Hub) Unregister(shemID uint) {
 	}
 }
 
+// UnregisterConn closes and removes conn only if it is still the shem's
+// registered connection. A connection's own read loop uses this on exit: by
+// then the shem may have reconnected, and Unregister by ID would close the
+// replacement.
+func (h *Hub) UnregisterConn(shemID uint, conn *websocket.Conn) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	_ = conn.Close() // this connection is finished either way
+	if e, ok := h.conns[shemID]; ok && e.conn == conn {
+		delete(h.conns, shemID)
+	}
+}
+
 // Push sends a message to the shem with the given ID.
 // Returns an error if the shem is not connected.
 func (h *Hub) Push(shemID uint, msg WSMessage) error {
