@@ -173,8 +173,9 @@ graph:
     - ".graphql"
     - ".proto"
 
-role_models:
+role_models:          # keyed by role, or by stage; the role key wins
   reviewer: claude-opus-4-7
+  graph: claude-haiku-4-5
 
 github:
   repo: your-org/your-repo
@@ -208,7 +209,13 @@ golem ticket new --from-issue <n>              create a ticket from a GitHub iss
 
 golem observer dispatch --ticket <id> --role <role> --commit <sha>
 golem log emit --ticket <id> --role <role> --type <type> <message>
+
+golem models list  --config <shem.yaml>        a backend's tiers, models and per-stage defaults
+golem models probe --config <shem.yaml>        check each catalog model and print the verified block
 ```
+
+Every agent-invoking subcommand takes `--model <id>` for one invocation, and
+`--backend <name>` or `--backend-config <path>` to pick the adapter.
 
 ---
 
