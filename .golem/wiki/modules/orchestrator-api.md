@@ -38,3 +38,25 @@ Every "(session auth)" route below is additionally wrapped in `rbac.Require(...)
 ## Why it exists
 
 Provides the full REST surface that shem workers and the UI consume. Atomic claim prevents two shems from grabbing the same ticket under concurrent requests. Log append uses upsert semantics for SPEC/PLAN so re-runs replace the prior doc rather than accumulating duplicates. Human-input rows decouple blocking questions from normal log flow; the `request-changes` action closes the approval input and injects a `feedback` input that the shem picks up on its next iteration.
+
+## Model selection
+
+`models.go` — `GET /api/models` (`listModels`) returns every backend's union
+catalog and the stage list. `claimResponse` is the only place a `ClaimResponse`
+is built, so `ClaimTicket`, `ReviseClaim` and `resumableTickets` all ship a
+resolved `Backend` and one `Models` entry per stage. `resolveForShem` resolves a
+ticket's selections against one shem's catalog and logs a WARNING for anything
+it dropped or for a ticket bound to another vendor. `shemRow` loads a shem by
+id and errors when there is none — a zero row would read as "matches every
+ticket, resolves everything to the vendor default".
+
+The claim gates are the SQL predicate `model_backend = '' OR model_backend = ?`
+plus a catalog-containment check: a shem whose catalog lacks a selected id
+cannot claim, and `availableTickets` omits the ticket, because another shem of
+that backend may have it.
+
+`setmodels.go` — `actionSetModels` replaces a ticket's selections on unclaimed,
+non-closed tickets only (409 otherwise). `selectionColumns` validates a
+submission and returns the two columns for a caller to fold into its own
+`Updates`, so `start`, `requeue` and `request-changes` write selections in the
+same statement as their own transition and roll them back together.

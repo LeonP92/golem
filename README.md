@@ -426,6 +426,24 @@ shipped container installs and authenticates only `claude`, so another adapter
 needs a different image. `--backend <name>` runs an agent-invoking subcommand
 against a registered adapter with no backend document.
 
+#### Selecting a model
+
+The new-ticket form offers one model select per stage plus a ticket-wide
+default, drawn from the catalogs registered shems have reported. The same panel
+is on the ticket page while the ticket is unclaimed and not closed, with Save
+models and Clear model selections. Re-queue carries a `model_default` select
+and Request changes a `model_revise` one, both usable while a shem is working
+the ticket.
+
+A selection naming a concrete model id binds the ticket to that backend, so
+only a shem running it can claim the ticket. A `tier:<label>` selection binds
+nothing — every backend resolves the tier against its own catalog, so
+`tier:large` means "whatever this machine calls large".
+
+A ticket bound to a backend no shem runs shows a `waiting for a <backend> shem`
+badge on the dashboard and a banner on its own page, and waits. Clearing its
+model selections releases it.
+
 `no_push: true` routes `git push` to the local repository instead of a remote, which is ideal for trying Golem out — but it also means **no branch reaches GitHub and no pull request is ever opened**. The shipped `deploy/shem.yaml` keeps it on, because the compose stack's default repositories are a throwaway local one and whatever `GOLEM_REPO_PATH` points at. To get the pull request, set `no_push: false` and give the shem a push credential: `GOLEM_SHEM_GITHUB_TOKEN` in `.env` (the container's entrypoint installs it as an HTTPS credential helper for github.com) or an SSH key. Without one the push fails and the pull request is silently never opened — the ticket still reaches `ready-for-review`.
 
 The shem also needs that credential to **clone** a private repository, which it does the first time it works a ticket for one — so a private repo needs `GOLEM_SHEM_GITHUB_TOKEN` set even while `no_push` stays `true`. `Contents: Read` is enough to clone; pushing needs `Contents: Read and write`. A fine-grained token that is not scoped to the repository fails the clone with `remote: Write access to repository not granted` and a 403, which is GitHub's wording for a missing permission rather than a literal statement about writing. Organisation repositories may also require the org to approve the token. If you would rather the shem container held no credential at all, clone the repository onto the host and mount it at the path `deploy/shem.yaml` names — Golem only clones when nothing is there.

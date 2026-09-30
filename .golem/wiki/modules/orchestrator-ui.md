@@ -61,3 +61,23 @@ The ticket-new form requires a `Title` field (used server-side to compute the br
 ## Why
 
 Provides human oversight of agent work: operators can monitor ticket progress, answer agent questions, approve plan/implement phase transitions, acknowledge blockers, and create new tickets without using the JSON API directly.
+
+## Model selection
+
+`models.go` — `modelPickerData` is the view-model for the model selects: the
+reported backends, the selected one, its catalog, a ticket-wide default select
+and one per stage. `modelPicker` builds it from a `db.Fleet` the handler has
+already loaded, always from the selected backend's own catalog, so the
+`model_backend` field and the options can never name different backends.
+`singleModelSelect` builds one standalone select for the requeue and
+request-changes controls. `formModelSelections` reads the `model_backend` and
+`model_<stage>` fields out of a parsed form.
+
+The `model_selects` partial (`templates/partials/model_selects.html`) renders
+the panel, targeted by class so the ticket page can carry it inside a form;
+`one_model_select` renders a standalone select. `GET /tickets/model-selects`
+(`modelSelects`) re-renders the panel for a chosen backend over htmx, carrying
+the current choices through `hx-include`.
+
+`TicketRow.WaitingFor` carries `db.Fleet.WaitingFor` for the dashboard's
+waiting badge, filled from one fleet load per page.
