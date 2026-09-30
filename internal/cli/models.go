@@ -61,7 +61,11 @@ func ModelsList(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintln(stdout, "stage defaults:")
 	w = tabwriter.NewWriter(stdout, 2, 8, 2, ' ', 0)
 	for _, st := range models.Stages {
-		fmt.Fprintf(w, "  %s\t%s\n", st, resolved[st])
+		id := resolved[st]
+		if id == "" {
+			id = "(vendor default)"
+		}
+		fmt.Fprintf(w, "  %s\t%s\n", st, id)
 	}
 	if err := w.Flush(); err != nil {
 		fmt.Fprintln(stderr, err)

@@ -224,3 +224,14 @@ func TestModelsProbeWithNoWorkingModelPrintsNothing(t *testing.T) {
 		}
 	}
 }
+
+func TestModelsListNamesTheVendorDefault(t *testing.T) {
+	doc := writeBackendDoc(t, "backend:\n  tiers: [small]\n  models:\n    - {id: only, tier: small}\n  stage_defaults: {review: small}\n")
+	var stdout, stderr bytes.Buffer
+	if code := ModelsList([]string{"--backend-config", doc}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if !strings.Contains(stdout.String(), "(vendor default)") {
+		t.Errorf("a stage with no default is not labelled:\n%s", stdout.String())
+	}
+}
