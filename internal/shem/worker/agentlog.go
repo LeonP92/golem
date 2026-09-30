@@ -45,9 +45,8 @@ func postPhaseStart(c *client.Client, ticketID, backend, model, phase string) {
 }
 
 // sanitizeModel returns model, or "" with a WARNING if it isn't a safe
-// argv token. The shem is downstream of an orchestrator that may be newer
-// than it, so an unusable value is an event to report rather than a reason
-// to strand the ticket.
+// argv token: a bad value degrades to the vendor default rather than
+// failing the ticket.
 func sanitizeModel(c *client.Client, ticketID, model string) string {
 	if model == "" || models.ValidModelID(model) {
 		return model

@@ -83,8 +83,7 @@ func init() {
 	Register("claude-code", func(o Options) Adapter { return ClaudeCode{opts: o} })
 }
 
-// ClaudeCode runs the `claude` CLI, authenticated on the host. It stores no
-// credentials — it relies entirely on the host's own CLI authentication.
+// ClaudeCode runs the `claude` CLI with the host's own authentication.
 type ClaudeCode struct{ opts Options }
 
 func (c ClaudeCode) Name() string { return "claude-code" }

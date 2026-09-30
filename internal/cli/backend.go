@@ -57,9 +57,8 @@ func (m modelFlags) runner(cfg *config.Config, worktreeRoot string) (agentrunner
 }
 
 // resolve returns the --model value, else role_models[role], else
-// role_models[stage], else "". role_models is ignored when --backend-config
-// is set: that document comes from the shem, and .golem/config.yaml is
-// agent-writable.
+// role_models[stage], else "". role_models is ignored with --backend-config
+// because .golem/config.yaml is agent-writable.
 func (m modelFlags) resolve(cfg *config.Config, role string, stage models.Stage) (string, error) {
 	id := *m.model
 	switch {
@@ -77,8 +76,7 @@ func (m modelFlags) resolve(cfg *config.Config, role string, stage models.Stage)
 	return id, nil
 }
 
-// validate fails fast on a bad --model, --backend or --backend-config, before
-// a command reaches a path that would otherwise skip or soften the check.
+// validate reports a bad --model, --backend or --backend-config.
 func (m modelFlags) validate(cfg *config.Config) error {
 	if _, err := m.resolve(cfg, "", ""); err != nil {
 		return err

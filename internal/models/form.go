@@ -10,8 +10,7 @@ const FieldPrefix = "model_"
 const BackendField = FieldPrefix + "backend"
 
 // FromValues reads a selection out of submitted values, dropping empties, and
-// returns it with the backend named alongside it. revise is a stage, so
-// model_revise needs no special case.
+// returns it with the backend named alongside it.
 func FromValues(v url.Values) (map[string]string, string) {
 	sel := map[string]string{}
 	if got := v.Get(FieldPrefix + DefaultKey); got != "" {

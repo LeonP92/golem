@@ -91,8 +91,8 @@ func (h *Handlers) shemRow(id uint) (db.Shem, error) {
 	return s, nil
 }
 
-// warnOnce appends a WARNING unless the ticket already carries the same one.
-// The resumable poll resolves a running ticket every few seconds.
+// warnOnce appends a WARNING unless the ticket already carries the same one,
+// since a running ticket is resolved again every few seconds.
 func (h *Handlers) warnOnce(ticketID, msg string) {
 	var n int64
 	h.DB.Model(&db.LogEntry{}).Where("ticket_id = ? AND entry_type = ? AND message = ?", ticketID, "WARNING", msg).Count(&n)

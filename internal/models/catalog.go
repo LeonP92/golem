@@ -136,7 +136,8 @@ func sortedKeys(s Selections) []string {
 	return keys
 }
 
-// Union merges catalogs reported for one backend name.
+// Union merges catalogs; the first declaration of a tier, model or stage
+// default wins.
 func Union(cs []Catalog) Catalog {
 	out := Catalog{StageDefaults: map[Stage]Tier{}}
 	seenTier := map[Tier]bool{}
