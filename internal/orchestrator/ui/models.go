@@ -53,9 +53,9 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 		Chosen: sel[models.DefaultKey],
 	}
 	for _, st := range models.Stages {
-		empty := "default"
+		empty := "Default (vendor)"
 		if id := fallback[st]; id != "" {
-			empty = id
+			empty = "Default (" + id + ")"
 		}
 		out.Stages = append(out.Stages, modelSelect{
 			Field:  models.FieldPrefix + string(st),

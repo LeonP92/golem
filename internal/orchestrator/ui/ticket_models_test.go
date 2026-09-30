@@ -592,3 +592,14 @@ func TestTicketPageModelsInStageOrder(t *testing.T) {
 		t.Error("every stage reads vendor default although a catalog is reported")
 	}
 }
+
+// The no-override option names the default it falls back to, so it cannot be
+// mistaken for choosing that model.
+func TestStageSelectEmptyOptionSaysDefault(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	body := f.get(t, "/tickets/new").Body.String()
+	if !strings.Contains(body, `<option value="">Default (`) {
+		t.Errorf("the per-stage empty option does not say it is the default:\n%s", body)
+	}
+}
