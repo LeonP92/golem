@@ -28,8 +28,8 @@ type Config struct {
 	// MaxConcurrent is the maximum number of tickets to run in parallel.
 	// Defaults to 1 if unset or zero.
 	MaxConcurrent int `yaml:"max_concurrent"`
-	// Backend is the single backend this shem runs; absent means the
-	// embedded claude-code block.
+	// Backend is the single backend this shem runs; absent means the default
+	// adapter with its default catalog.
 	Backend *agentrunner.BackendConfig `yaml:"backend"`
 }
 

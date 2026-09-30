@@ -25,7 +25,7 @@ api_key: secret
 name: node-a
 `
 
-func TestLoadWithNoBackendBlockGivesTheSeed(t *testing.T) {
+func TestLoadWithNoBackendBlockGivesTheDefault(t *testing.T) {
 	cfg, err := config.Load(writeConfig(t, minimalConfig))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -36,8 +36,8 @@ func TestLoadWithNoBackendBlockGivesTheSeed(t *testing.T) {
 	if cfg.Backend.Adapter != "claude-code" {
 		t.Errorf("adapter = %q, want claude-code", cfg.Backend.Adapter)
 	}
-	if !reflect.DeepEqual(cfg.Backend.Catalog, agentrunner.SeedClaudeCode().Catalog) {
-		t.Errorf("catalog = %+v, want the seed's", cfg.Backend.Catalog)
+	if !reflect.DeepEqual(cfg.Backend.Catalog, agentrunner.ResolveBackend(nil).Catalog) {
+		t.Errorf("catalog = %+v, want the default", cfg.Backend.Catalog)
 	}
 }
 

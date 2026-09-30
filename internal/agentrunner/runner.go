@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/promptfence"
 )
 
@@ -53,6 +54,10 @@ type Adapter interface {
 	// ReservedArgs are argv tokens the adapter sets itself; extra_args may
 	// not contain them.
 	ReservedArgs() []string
+
+	// DefaultCatalog is the model catalog used when a backend block declares
+	// no models.
+	DefaultCatalog() models.Catalog
 }
 
 const (

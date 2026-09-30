@@ -31,8 +31,9 @@ type probeAdapter struct {
 	failing map[string]bool
 }
 
-func (probeAdapter) Name() string           { return "probe-test" }
-func (probeAdapter) ReservedArgs() []string { return nil }
+func (probeAdapter) Name() string                   { return "probe-test" }
+func (probeAdapter) ReservedArgs() []string         { return nil }
+func (probeAdapter) DefaultCatalog() models.Catalog { return models.Catalog{} }
 
 func (p probeAdapter) RunPhase(_ context.Context, dir, _ string, _ io.Writer, model string) error {
 	rec := probeSession{dir: dir}
@@ -84,7 +85,7 @@ func TestModelsListPrintsTheCatalogAndStageDefaults(t *testing.T) {
 		t.Fatalf("ModelsList: exit %d, stderr=%s", code, stderr.String())
 	}
 	out := stdout.String()
-	seed := agentrunner.SeedClaudeCode()
+	seed := agentrunner.ResolveBackend(nil)
 	for _, m := range seed.Models {
 		if !strings.Contains(out, m.ID) {
 			t.Errorf("output does not list model %q:\n%s", m.ID, out)

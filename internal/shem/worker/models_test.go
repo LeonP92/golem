@@ -31,8 +31,9 @@ type recordingAdapter struct {
 	phases *[]recordedPhase
 }
 
-func (recordingAdapter) Name() string           { return "recording" }
-func (recordingAdapter) ReservedArgs() []string { return nil }
+func (recordingAdapter) Name() string                   { return "recording" }
+func (recordingAdapter) ReservedArgs() []string         { return nil }
+func (recordingAdapter) DefaultCatalog() models.Catalog { return models.Catalog{} }
 
 func (r recordingAdapter) RunPhase(_ context.Context, dir, prompt string, out io.Writer, model string) error {
 	*r.phases = append(*r.phases, recordedPhase{dir: dir, prompt: prompt, model: model})
@@ -95,7 +96,7 @@ func testExecutor(t *testing.T) *GolemExecutor {
 }
 
 func TestNewAgentWritesAReadableBackendDocument(t *testing.T) {
-	backend := agentrunner.SeedClaudeCode()
+	backend := agentrunner.ResolveBackend(nil)
 	agent, cleanup, err := NewAgent(&config.Config{Backend: &backend})
 	if err != nil {
 		t.Fatalf("NewAgent: %v", err)

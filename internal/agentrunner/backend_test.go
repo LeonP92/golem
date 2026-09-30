@@ -21,7 +21,7 @@ func writeDoc(t *testing.T, body string) string {
 }
 
 func TestWriteThenLoadRoundTrips(t *testing.T) {
-	b := SeedClaudeCode()
+	b := ResolveBackend(nil)
 	b.Command = "my-claude"
 	b.ExtraArgs = []string{"--add-dir", "/opt/toolchains"}
 	b.Env = map[string]string{"ANTHROPIC_BASE_URL": "https://proxy.example"}
@@ -57,56 +57,81 @@ func TestWriteThenLoadRoundTrips(t *testing.T) {
 	}
 }
 
-func TestSeedClaudeCode(t *testing.T) {
-	seed := SeedClaudeCode()
-	if err := seed.Validate(); err != nil {
-		t.Fatalf("the seed does not validate: %v", err)
+func TestClaudeCodeDefaultCatalog(t *testing.T) {
+	def := ResolveBackend(nil)
+	if err := def.Validate(); err != nil {
+		t.Fatalf("the default catalog does not validate: %v", err)
 	}
-	if len(seed.Models) != 3 {
-		t.Errorf("seed has %d models, want 3", len(seed.Models))
+	if len(def.Models) != 3 {
+		t.Errorf("the default catalog has %d models, want 3", len(def.Models))
 	}
 	for _, st := range models.Stages {
-		if _, ok := seed.StageDefaults[st]; !ok {
-			t.Errorf("the seed has no stage_defaults entry for %q", st)
+		if _, ok := def.StageDefaults[st]; !ok {
+			t.Errorf("the default catalog has no stage_defaults entry for %q", st)
 		}
 	}
-	if len(seed.StageDefaults) != len(models.Stages) {
-		t.Errorf("seed has %d stage_defaults, want %d", len(seed.StageDefaults), len(models.Stages))
+	if len(def.StageDefaults) != len(models.Stages) {
+		t.Errorf("the default catalog has %d stage_defaults, want %d", len(def.StageDefaults), len(models.Stages))
 	}
 }
 
 func TestResolveBackend(t *testing.T) {
-	seed := SeedClaudeCode()
-
-	if got := ResolveBackend(nil); !reflect.DeepEqual(got, seed) {
-		t.Error("a nil block did not resolve to the seed")
+	def := ClaudeCode{}.DefaultCatalog()
+	load := func(t *testing.T, block string) BackendConfig {
+		t.Helper()
+		got, err := LoadBackendConfig(writeDoc(t, "backend:\n"+block))
+		if err != nil {
+			t.Fatalf("LoadBackendConfig: %v", err)
+		}
+		return got
 	}
 
-	t.Run("no models gets the seed catalog whole", func(t *testing.T) {
-		got := ResolveBackend(&BackendConfig{Command: "my-claude"})
-		if !reflect.DeepEqual(got.Catalog, seed.Catalog) {
-			t.Errorf("catalog = %+v, want the seed's", got.Catalog)
-		}
-		if got.Adapter != "claude-code" {
-			t.Errorf("adapter = %q, want claude-code", got.Adapter)
+	t.Run("nil is the default adapter with its catalog", func(t *testing.T) {
+		got := ResolveBackend(nil)
+		if got.Adapter != DefaultAdapter || !reflect.DeepEqual(got.Catalog, def) {
+			t.Errorf("got %+v, want %s with its default catalog", got, DefaultAdapter)
 		}
 	})
 
-	t.Run("a declared catalog is kept as written", func(t *testing.T) {
-		in := &BackendConfig{Catalog: models.Catalog{Models: []models.Model{{ID: "only"}}}}
-		got := ResolveBackend(in)
-		if len(got.Models) != 1 || got.Models[0].ID != "only" {
-			t.Errorf("models = %+v, want just 'only'", got.Models)
-		}
-		if len(got.StageDefaults) != 0 {
-			t.Errorf("StageDefaults = %v, want empty", got.StageDefaults)
+	t.Run("no catalog keys gets the default catalog", func(t *testing.T) {
+		got := load(t, "  command: my-claude\n")
+		if !reflect.DeepEqual(got.Catalog, def) {
+			t.Errorf("catalog = %+v, want the default", got.Catalog)
 		}
 	})
 
-	t.Run("another adapter with no models keeps none", func(t *testing.T) {
-		got := ResolveBackend(&BackendConfig{Adapter: "codex"})
-		if len(got.Models) != 0 {
-			t.Errorf("models = %+v, want none", got.Models)
+	t.Run("declared models are used as written", func(t *testing.T) {
+		got := load(t, "  tiers: [fast]\n  models:\n    - {id: only, tier: fast}\n")
+		if len(got.Models) != 1 || got.Models[0].ID != "only" || len(got.StageDefaults) != 0 {
+			t.Errorf("catalog = %+v, want just 'only' and no stage defaults", got.Catalog)
+		}
+	})
+
+	t.Run("an explicit supports_selection false is kept", func(t *testing.T) {
+		got := load(t, "  supports_selection: false\n")
+		if got.SupportsSelection || !reflect.DeepEqual(got.Models, def.Models) {
+			t.Errorf("got selection=%v models=%v, want false over the default models", got.SupportsSelection, got.Models)
+		}
+	})
+
+	t.Run("declared stage defaults override the default ones", func(t *testing.T) {
+		got := load(t, "  stage_defaults: {review: small}\n")
+		if got.StageDefaults["review"] != "small" || len(got.StageDefaults) != 1 {
+			t.Errorf("stage defaults = %v, want only review: small", got.StageDefaults)
+		}
+	})
+
+	t.Run("tiers the default models do not use fail validation", func(t *testing.T) {
+		_, err := LoadBackendConfig(writeDoc(t, "backend:\n  tiers: [fast, deep]\n"))
+		if err == nil {
+			t.Error("custom tiers over the default models loaded without error")
+		}
+	})
+
+	t.Run("an unknown key fails to load", func(t *testing.T) {
+		_, err := LoadBackendConfig(writeDoc(t, "backend:\n  extra-args: [--x]\n"))
+		if err == nil || !strings.Contains(err.Error(), "extra-args") {
+			t.Errorf("err = %v, want one naming extra-args", err)
 		}
 	})
 }
@@ -128,14 +153,14 @@ backend:
 		}
 	})
 
-	t.Run("no backend key gives the seed", func(t *testing.T) {
+	t.Run("no backend key gives the default", func(t *testing.T) {
 		path := writeDoc(t, "orchestrator: https://golem.example.com\n")
 		got, err := LoadBackendConfig(path)
 		if err != nil {
 			t.Fatalf("LoadBackendConfig: %v", err)
 		}
-		if !reflect.DeepEqual(got, SeedClaudeCode()) {
-			t.Errorf("got %+v, want the seed", got)
+		if !reflect.DeepEqual(got, ResolveBackend(nil)) {
+			t.Errorf("got %+v, want the default", got)
 		}
 	})
 }
@@ -175,7 +200,7 @@ func TestBackendConfigValidate(t *testing.T) {
 // The operator's env reaches the agent as declared, except golem's own
 // variables, which are refused at startup rather than silently dropped.
 func TestBackendEnvRefusesGolemOwnNames(t *testing.T) {
-	b := SeedClaudeCode()
+	b := ResolveBackend(nil)
 	b.Env = map[string]string{"MY_TOOL_TOKEN": "x"}
 	if err := b.Validate(); err != nil {
 		t.Errorf("Validate with an operator variable: %v", err)

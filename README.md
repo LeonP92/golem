@@ -410,7 +410,7 @@ backend:
   adapter: claude-code        # registered adapter name
   command: claude             # binary; the adapter's default when empty
   extra_args: ["--add-dir", "/opt/toolchains"]   # appended after the adapter's own args
-  env:                        # extra env for the agent process
+  env:                        # extra env for the agent process (not GOLEM_*)
     ANTHROPIC_BASE_URL: "..."
   supports_selection: true    # whether the backend accepts a per-call model
   tiers: [small, medium, large]   # operator labels, cheapest first
@@ -428,10 +428,13 @@ docker compose exec shem golem models list  --config /etc/golem/shem.yaml
 docker compose exec shem golem models probe --config /etc/golem/shem.yaml   # paste the printed block into shem.yaml
 ```
 
-An absent `backend:` block means the built-in `claude-code` defaults. The
-shipped container installs and authenticates only `claude`, so another adapter
-needs a different image. `--backend <name>` runs an agent-invoking subcommand
-against a registered adapter with no backend document.
+An absent `backend:` block means `claude-code` with its default catalog. A
+block without `models:` keeps the adapter's default models and overrides only
+the catalog keys it sets, so `supports_selection: false` alone turns selection
+off. Unknown keys are an error. The shipped container installs and
+authenticates only `claude`, so another adapter needs a different image.
+`--backend <name>` runs an agent-invoking subcommand against a registered
+adapter with no backend document.
 
 #### Selecting a model
 

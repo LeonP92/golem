@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+
+	"github.com/leonp92/golem/internal/models"
 )
 
 // Mock is a scripted Runner used in tests so the ticket lifecycle can be
@@ -23,6 +25,7 @@ func (m *Mock) ScriptResponse(role string, result Result) {
 
 func (m *Mock) Name() string                                      { return "mock" }
 func (m *Mock) ReservedArgs() []string                            { return nil }
+func (m *Mock) DefaultCatalog() models.Catalog                    { return models.Catalog{} }
 func (m *Mock) WorktreeSetup(string) error                        { return nil }
 func (m *Mock) PrepareHost(string) error                          { return nil }
 func (m *Mock) GenerateArtifacts(string, map[string]string) error { return nil }

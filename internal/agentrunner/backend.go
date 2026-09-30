@@ -1,9 +1,9 @@
 package agentrunner
 
 import (
-	_ "embed"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/leonp92/golem/internal/agentenv"
@@ -11,26 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-//go:embed claudecode_catalog.yaml
-var claudeCodeSeedYAML []byte
-
-// claudeCodeSeed is the embedded claude-code block, parsed once.
-var claudeCodeSeed = mustParseSeed()
-
-// mustParseSeed checks Catalog.Validate rather than BackendConfig.Validate:
-// the latter builds the adapter through the registry, which claudecode.go's
-// init has not necessarily filled at package-variable initialisation.
-func mustParseSeed() BackendConfig {
-	var b BackendConfig
-	if err := yaml.Unmarshal(claudeCodeSeedYAML, &b); err != nil {
-		panic("agentrunner: claudecode_catalog.yaml: " + err.Error())
-	}
-	b.Adapter = "claude-code"
-	if err := b.Catalog.Validate(); err != nil {
-		panic("agentrunner: claudecode_catalog.yaml: " + err.Error())
-	}
-	return b
-}
+// DefaultAdapter is the adapter a backend block with none named runs.
+const DefaultAdapter = "claude-code"
 
 // BackendConfig is a shem.yaml `backend:` block.
 type BackendConfig struct {
@@ -39,6 +21,42 @@ type BackendConfig struct {
 	ExtraArgs      []string          `yaml:"extra_args"`
 	Env            map[string]string `yaml:"env"`
 	models.Catalog `yaml:",inline"`
+
+	// set holds the keys the block declared, so an explicit
+	// `supports_selection: false` differs from an absent one.
+	set map[string]bool
+}
+
+var backendKeys = map[string]bool{
+	"adapter": true, "command": true, "extra_args": true, "env": true,
+	"supports_selection": true, "tiers": true, "models": true, "stage_defaults": true,
+}
+
+// UnmarshalYAML decodes the block, rejecting unknown keys so a misspelling
+// fails at startup instead of silently taking the default.
+func (b *BackendConfig) UnmarshalYAML(n *yaml.Node) error {
+	type plain BackendConfig
+	if err := n.Decode((*plain)(b)); err != nil {
+		return err
+	}
+	b.set = map[string]bool{}
+	for i := 0; i+1 < len(n.Content); i += 2 {
+		key := n.Content[i]
+		if !backendKeys[key.Value] {
+			return fmt.Errorf("line %d: unknown backend key %q (known: %s)", key.Line, key.Value, knownKeys())
+		}
+		b.set[key.Value] = true
+	}
+	return nil
+}
+
+func knownKeys() string {
+	keys := make([]string, 0, len(backendKeys))
+	for k := range backendKeys {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ", ")
 }
 
 type backendDoc struct {
@@ -80,27 +98,43 @@ func (b BackendConfig) Write(path string) error {
 	return os.Chmod(path, 0o644)
 }
 
-// SeedClaudeCode returns the embedded claude-code backend block.
-func SeedClaudeCode() BackendConfig { return claudeCodeSeed }
-
-// ResolveBackend fills an absent or catalog-less block from the claude-code
-// seed. A block declaring models is returned as written.
+// ResolveBackend fills b from its adapter's default catalog. A block that
+// declares models is used as written; otherwise only the catalog keys it
+// declares override the defaults. A nil block is the default adapter's.
 func ResolveBackend(b *BackendConfig) BackendConfig {
-	if b == nil {
-		return claudeCodeSeed
+	var out BackendConfig
+	var set map[string]bool
+	if b != nil {
+		out, set = *b, b.set
 	}
-	out := *b
+	out.set = nil
 	if out.Adapter == "" {
-		out.Adapter = "claude-code"
+		out.Adapter = DefaultAdapter
 	}
-	if len(out.Models) == 0 && out.Adapter == "claude-code" {
-		out.Catalog = claudeCodeSeed.Catalog
+	if len(out.Models) > 0 {
+		return out
 	}
+	a, err := New(out.Adapter, Options{})
+	if err != nil {
+		return out // Validate reports the unknown adapter.
+	}
+	def := a.DefaultCatalog()
+	if !set["supports_selection"] {
+		out.SupportsSelection = def.SupportsSelection
+	}
+	if !set["tiers"] {
+		out.Tiers = def.Tiers
+	}
+	if !set["stage_defaults"] {
+		out.StageDefaults = def.StageDefaults
+	}
+	out.Models = def.Models
 	return out
 }
 
 // Validate reports the first problem in b: an unknown adapter, an extra_args
-// token the adapter sets itself, or a structural fault in the catalog.
+// token the adapter sets itself, an env name golem owns, or a structural
+// fault in the catalog.
 func (b BackendConfig) Validate() error {
 	a, err := New(b.Adapter, b.Options(""))
 	if err != nil {
