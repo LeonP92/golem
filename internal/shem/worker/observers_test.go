@@ -24,7 +24,7 @@ func TestRunObserversDispatchesEachRoleOverTheWholeBranch(t *testing.T) {
 	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_observer")
 
 	e := testExecutor(t)
-	if err := e.runObservers(context.Background(), repo, worktree, "t-1", "main", ""); err != nil {
+	if err := e.runObservers(context.Background(), repo, worktree, "t-1", "main", "small-model"); err != nil {
 		t.Fatalf("runObservers: %v", err)
 	}
 
