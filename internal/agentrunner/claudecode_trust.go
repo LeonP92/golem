@@ -1,7 +1,8 @@
-package worker
+package agentrunner
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -16,7 +17,7 @@ import (
 // cannot be guarded by repoMutex.
 var claudeJSONMu sync.Mutex
 
-// trustWorkspace pre-accepts Claude Code's workspace trust dialog for
+// PrepareHost pre-accepts Claude Code's workspace trust dialog for
 // repoPath, so the agent honours the repository's own .claude/settings.json
 // instead of reporting
 //
@@ -28,25 +29,21 @@ var claudeJSONMu sync.Mutex
 // time it works a ticket for it, so the path does not exist yet at that
 // point and the entrypoint cannot see it — every on-demand clone ran with
 // its permissions ignored.
-//
-// Failure is logged and not returned: an untrusted workspace degrades (the
-// agent warns and falls back to asking) rather than breaking, so it is not
-// worth failing a ticket that would otherwise run.
-func trustWorkspace(repoPath string) {
+func (c ClaudeCode) PrepareHost(repoPath string) error {
 	home, err := os.UserHomeDir()
 	if err != nil {
-		log.Printf("executor: cannot locate the home directory to trust %s: %v", repoPath, err)
-		return
+		return fmt.Errorf("cannot locate the home directory to trust %s: %w", repoPath, err)
 	}
 	homes := []string{home}
 	acct := agentenv.User()
 	if acct != nil {
 		homes = append(homes, acct.Home) // the agent reads its own config
 	}
+	var errs []error
 	for _, h := range homes {
 		configPath := filepath.Join(h, ".claude.json")
 		if err := setWorkspaceTrusted(configPath, repoPath); err != nil {
-			log.Printf("executor: could not trust workspace %s: %v", repoPath, err)
+			errs = append(errs, err)
 			continue
 		}
 		// This process is root and has just rewritten a file the AGENT has
@@ -58,10 +55,11 @@ func trustWorkspace(repoPath string) {
 		// not cover a repository cloned later.
 		if acct != nil && h == acct.Home {
 			if err := os.Chown(configPath, int(acct.UID), int(acct.GID)); err != nil {
-				log.Printf("executor: could not hand %s back to %s: %v", configPath, acct.Name, err)
+				errs = append(errs, fmt.Errorf("could not hand %s back to %s: %w", configPath, acct.Name, err))
 			}
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // setWorkspaceTrusted marks repoPath trusted in the Claude Code config at

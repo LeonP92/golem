@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -285,7 +286,7 @@ func (n narrator) narrate(clusters map[string][]graph.ModuleGraph) graph.Subsyst
 func (n narrator) narrateOne(runner agentrunner.Runner, t narrationTask) string {
 	fmt.Fprintf(n.stdout, "narrating subsystem %q (%d modules)...\n", t.sub, len(t.cluster))
 	ctx := agentrunner.Context{RolePrompt: n.rolePrompt + "\n\n" + graph.BuildClusterPrompt(t.sub, t.cluster)}
-	res, err := runner.RunAgent("graph-builder", ctx)
+	res, err := runner.RunAgent(context.Background(), "graph-builder", ctx, "")
 	if err != nil {
 		fmt.Fprintf(n.stderr, "warning: narrative call for %q failed: %v\n", t.sub, err)
 		return graph.StubNarrative(t.sub)

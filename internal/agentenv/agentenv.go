@@ -3,6 +3,7 @@ package agentenv
 import (
 	"log"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -192,3 +193,13 @@ func passthroughNames(parent []string) map[string]bool {
 // Environ is Filter over this process's own environment. It is what every
 // agent exec site passes to cmd.Env.
 func Environ() []string { return Filter(os.Environ()) }
+
+// FilterPairs returns m as KEY=VALUE pairs, minus the variables Filter strips.
+func FilterPairs(m map[string]string) []string {
+	pairs := make([]string, 0, len(m))
+	for k, v := range m {
+		pairs = append(pairs, k+"="+v)
+	}
+	sort.Strings(pairs)
+	return Filter(pairs)
+}

@@ -67,7 +67,7 @@ func ObserverDispatch(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	obs := observer.New(filepath.Join(ticketDir, "log.jsonl"), runner)
+	obs := observer.New(filepath.Join(ticketDir, "log.jsonl"), runner, "")
 	if err := obs.DispatchForCommit(*role, *commit, diff, string(rolePrompt)); err != nil {
 		fmt.Fprintf(stderr, "dispatch: %v\n", err)
 		return 1

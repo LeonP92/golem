@@ -1,6 +1,7 @@
 package agentrunner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,8 +44,8 @@ func TestRunAgentGivesTheAgentAScopedEnvironment(t *testing.T) {
 	t.Setenv("ORCHESTRATOR_DB", "/data/orchestrator.db")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-the-agent-needs-this")
 
-	runner := ClaudeCode{RepoRoot: t.TempDir()}
-	if _, err := runner.RunAgent("developer", Context{RolePrompt: "do the thing"}); err != nil {
+	runner := ClaudeCode{opts: Options{RepoRoot: t.TempDir()}}
+	if _, err := runner.RunAgent(context.Background(), "developer", Context{RolePrompt: "do the thing"}, ""); err != nil {
 		t.Fatalf("RunAgent: %v", err)
 	}
 

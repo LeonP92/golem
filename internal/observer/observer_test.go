@@ -17,7 +17,7 @@ func TestDispatchForCommitAppendsFindingFromResult(t *testing.T) {
 	mock := agentrunner.NewMock()
 	mock.ScriptResponse("convention-enforcer", agentrunner.Result{Output: "FINDING: missing error check", Model: "mock"})
 
-	o := New(logPath, mock)
+	o := New(logPath, mock, "")
 	err := o.DispatchForCommit("convention-enforcer", "abc123", "diff content", "role prompt")
 	if err != nil {
 		t.Fatalf("DispatchForCommit: %v", err)
@@ -41,7 +41,7 @@ func TestDispatchForCommitSkipsAlreadyClaimedSignal(t *testing.T) {
 	mock := agentrunner.NewMock()
 	mock.ScriptResponse("reviewer", agentrunner.Result{Output: "FINDING: ok", Model: "mock"})
 
-	o := New(logPath, mock)
+	o := New(logPath, mock, "")
 
 	var wg sync.WaitGroup
 	results := make([]error, 2)
@@ -83,7 +83,7 @@ func TestDispatchForCommitSkipsIfAlreadyLoggedFromPriorRun(t *testing.T) {
 	// A brand-new Observer has an empty in-memory claim map — it must
 	// consult the log, not just memory, to avoid re-dispatching.
 	mock := agentrunner.NewMock() // no scripted response: RunAgent would error if called
-	o := New(logPath, mock)
+	o := New(logPath, mock, "")
 
 	if err := o.DispatchForCommit("convention-enforcer", "sha1", "diff", "prompt"); err != nil {
 		t.Fatalf("DispatchForCommit: %v", err)

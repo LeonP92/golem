@@ -110,24 +110,23 @@ func Init(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	if *backend == "claude-code" {
-		roleContent := make(map[string]string)
-		for _, name := range roles.RoleNames {
-			data, err := os.ReadFile(filepath.Join(golemDir, "roles", name+".md"))
-			if err != nil {
-				fmt.Fprintf(stderr, "reading role file %s: %v\n", name, err)
-				return 1
-			}
-			roleContent[name] = string(data)
-		}
-		if err := agentrunner.GenerateClaudeCodeArtifacts(*repo, roleContent); err != nil {
-			fmt.Fprintf(stderr, "generating claude-code artifacts: %v\n", err)
+	runner, err := agentrunner.New(*backend, agentrunner.Options{RepoRoot: *repo})
+	if err != nil {
+		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
+		return 1
+	}
+	roleContent := make(map[string]string)
+	for _, name := range roles.RoleNames {
+		data, err := os.ReadFile(filepath.Join(golemDir, "roles", name+".md"))
+		if err != nil {
+			fmt.Fprintf(stderr, "reading role file %s: %v\n", name, err)
 			return 1
 		}
-		if err := agentrunner.GenerateClaudeCodeCommands(*repo); err != nil {
-			fmt.Fprintf(stderr, "generating claude-code commands: %v\n", err)
-			return 1
-		}
+		roleContent[name] = string(data)
+	}
+	if err := runner.GenerateArtifacts(*repo, roleContent); err != nil {
+		fmt.Fprintf(stderr, "generating %s artifacts: %v\n", runner.Name(), err)
+		return 1
 	}
 
 	fmt.Fprintf(stdout, "initialized .golem with backend %q\n", *backend)

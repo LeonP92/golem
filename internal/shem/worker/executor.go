@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"gopkg.in/yaml.v3"
@@ -89,7 +90,17 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	// Before initRepo, which runs `golem graph build` and therefore invokes
 	// the agent: an untrusted workspace makes Claude Code ignore the
 	// repository's own permission allow-list.
-	trustWorkspace(repoPath)
+	//
+	// Interim: the shem has no configured adapter until the backend block is
+	// wired.
+	if a, err := agentrunner.New("claude-code", agentrunner.Options{}); err == nil {
+		// Failure is logged and not returned: an untrusted workspace degrades
+		// (the agent warns and falls back to asking) rather than breaking, so
+		// it is not worth failing a ticket that would otherwise run.
+		if err := a.PrepareHost(repoPath); err != nil {
+			log.Printf("executor: could not prepare the host for %s: %v", repoPath, err)
+		}
+	}
 
 	if err := e.initRepo(ctx, repoPath); err != nil {
 		log.Printf("executor: repo pre-flight warning: %v", err)

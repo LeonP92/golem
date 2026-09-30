@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -124,10 +125,10 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
 		return 1
 	}
-	result, err := runner.RunAgent("spec-adherence", agentrunner.Context{
+	result, err := runner.RunAgent(context.Background(), "spec-adherence", agentrunner.Context{
 		LogSlice:   before,
 		RolePrompt: string(rolePrompt) + "\n\n" + validationInstruction(*stage, *id, artifactName, string(artifact)),
-	})
+	}, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "running spec-adherence: %v\n", err)
 		return 1

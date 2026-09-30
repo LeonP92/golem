@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -169,7 +170,7 @@ func proposeAndPromoteSoulEntries(cfg *config.Config, golemDir, worktreePath, lo
 	}
 	prompt := string(rolePrompt) + "\n\n## Divergences to consider from this ticket\n" + divergences.String()
 
-	result, err := runner.RunAgent("reviewer", agentrunner.Context{RolePrompt: prompt})
+	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{RolePrompt: prompt}, "")
 	if err != nil {
 		return err
 	}

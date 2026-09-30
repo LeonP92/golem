@@ -1,12 +1,15 @@
 package agentrunner
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestMockReturnsScriptedResponse(t *testing.T) {
 	m := NewMock()
 	m.ScriptResponse("reviewer", Result{Output: "LGTM", Model: "mock-model"})
 
-	result, err := m.RunAgent("reviewer", Context{})
+	result, err := m.RunAgent(context.Background(), "reviewer", Context{}, "")
 	if err != nil {
 		t.Fatalf("RunAgent: %v", err)
 	}
@@ -17,7 +20,7 @@ func TestMockReturnsScriptedResponse(t *testing.T) {
 
 func TestMockErrorsOnUnscriptedRole(t *testing.T) {
 	m := NewMock()
-	_, err := m.RunAgent("developer", Context{})
+	_, err := m.RunAgent(context.Background(), "developer", Context{}, "")
 	if err == nil {
 		t.Fatal("expected error for a role with no scripted response")
 	}
@@ -28,8 +31,8 @@ func TestMockPopsQueuedResponsesInOrder(t *testing.T) {
 	m.ScriptResponse("developer", Result{Output: "first"})
 	m.ScriptResponse("developer", Result{Output: "second"})
 
-	r1, _ := m.RunAgent("developer", Context{})
-	r2, _ := m.RunAgent("developer", Context{})
+	r1, _ := m.RunAgent(context.Background(), "developer", Context{}, "")
+	r2, _ := m.RunAgent(context.Background(), "developer", Context{}, "")
 	if r1.Output != "first" || r2.Output != "second" {
 		t.Errorf("got %q then %q, want first then second", r1.Output, r2.Output)
 	}

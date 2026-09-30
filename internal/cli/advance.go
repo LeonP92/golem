@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -101,10 +102,10 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
 		return 1
 	}
-	result, err := runner.RunAgent("reviewer", agentrunner.Context{
+	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
 		RolePrompt: string(rolePrompt),
-	})
+	}, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "running reviewer: %v\n", err)
 		return 1

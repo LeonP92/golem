@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -98,10 +99,10 @@ func TicketPRDescription(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
 		return 1
 	}
-	result, err := runner.RunAgent("pr-description", agentrunner.Context{
+	result, err := runner.RunAgent(context.Background(), "pr-description", agentrunner.Context{
 		LogSlice:   entries,
 		RolePrompt: prompt,
-	})
+	}, "")
 	if err != nil {
 		fmt.Fprintf(stderr, "running pr-description: %v\n", err)
 		return 1

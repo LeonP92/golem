@@ -1,7 +1,9 @@
 package agentrunner
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/leonp92/golem/internal/blog"
@@ -22,12 +24,35 @@ type Result struct {
 	Model  string
 }
 
-// Runner is implemented once per backend (claude-code today; gemini,
-// codex later) against the same signature, so the orchestration core
-// never depends on which backend is configured.
+// Runner invokes an agent.
 type Runner interface {
-	RunAgent(role string, ctx Context) (Result, error)
+	// Name is the adapter name.
+	Name() string
+
+	// RunAgent invokes one role; model may be "" for the vendor default.
+	RunAgent(ctx context.Context, role string, in Context, model string) (Result, error)
+
+	// RunPhase runs a long-form session with prompt on stdin and output
+	// streamed to out.
+	RunPhase(ctx context.Context, dir, prompt string, out io.Writer, model string) error
+}
+
+// Adapter is one vendor CLI, including its on-disk setup hooks.
+type Adapter interface {
+	Runner
+
+	// WorktreeSetup writes what the vendor needs inside a fresh worktree.
 	WorktreeSetup(worktreePath string) error
+
+	// PrepareHost is the per-host hook run before a repo is worked.
+	PrepareHost(repoPath string) error
+
+	// GenerateArtifacts projects role content into the vendor's on-disk format.
+	GenerateArtifacts(repoRoot string, roleContent map[string]string) error
+
+	// ReservedArgs are argv tokens the adapter sets itself; extra_args may
+	// not contain them.
+	ReservedArgs() []string
 }
 
 const (

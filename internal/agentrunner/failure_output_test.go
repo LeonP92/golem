@@ -1,6 +1,7 @@
 package agentrunner_test
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -37,7 +38,8 @@ func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''
 func TestFailedAgentRunReportsBothStreams(t *testing.T) {
 	t.Run("stdout reaches the error", func(t *testing.T) {
 		dir := fakeClaude(t, "Not logged in · Please run /login", "SessionEnd hook failed: not found")
-		_, err := agentrunner.ClaudeCode{RepoRoot: dir}.RunAgent("graph-builder", agentrunner.Context{})
+		cc, _ := agentrunner.New("claude-code", agentrunner.Options{RepoRoot: dir})
+		_, err := cc.RunAgent(context.Background(), "graph-builder", agentrunner.Context{}, "")
 		if err == nil {
 			t.Fatal("a non-zero exit was reported as success")
 		}
@@ -55,7 +57,8 @@ func TestFailedAgentRunReportsBothStreams(t *testing.T) {
 
 	t.Run("an empty stream contributes no heading", func(t *testing.T) {
 		dir := fakeClaude(t, "only on stdout", "")
-		_, err := agentrunner.ClaudeCode{RepoRoot: dir}.RunAgent("graph-builder", agentrunner.Context{})
+		cc, _ := agentrunner.New("claude-code", agentrunner.Options{RepoRoot: dir})
+		_, err := cc.RunAgent(context.Background(), "graph-builder", agentrunner.Context{}, "")
 		if err == nil {
 			t.Fatal("expected an error")
 		}
@@ -72,7 +75,8 @@ func TestFailedAgentRunReportsBothStreams(t *testing.T) {
 		// not worth putting in an error.
 		long := strings.Repeat("a", 3000) + "THE-ACTUAL-FAILURE"
 		dir := fakeClaude(t, long, "")
-		_, err := agentrunner.ClaudeCode{RepoRoot: dir}.RunAgent("graph-builder", agentrunner.Context{})
+		cc, _ := agentrunner.New("claude-code", agentrunner.Options{RepoRoot: dir})
+		_, err := cc.RunAgent(context.Background(), "graph-builder", agentrunner.Context{}, "")
 		if err == nil {
 			t.Fatal("expected an error")
 		}
