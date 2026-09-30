@@ -255,3 +255,92 @@ func TestBackendConfigKeepsTheRepoConfigOutOfTheShemPath(t *testing.T) {
 		t.Errorf("the repo config's role_models reached the shem path: %q", argv)
 	}
 }
+
+// An operator's own command and env reach the agent process end to end, which
+// is what makes a different vendor binary usable without a code change.
+func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
+	repo, worktree, ticketID := setUpTicketForStepTest(t)
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"),
+		[]byte("backend: claude-code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"),
+		[]byte("# role\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+
+	// A recording script standing in for the vendor CLI, named by `command`.
+	dir := t.TempDir()
+	envDump := filepath.Join(dir, "env.txt")
+	script := filepath.Join(dir, "my-agent")
+	body := "#!/bin/sh\nenv > " + envDump + "\ncat > /dev/null\necho 'FINDING: noted'\n"
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// ANTHROPIC_-prefixed so agentenv's allow-list passes it; GOLEM_ is denied
+	// there and must not arrive.
+	doc := writeBackendDoc(t, "backend:\n  adapter: claude-code\n  command: "+script+
+		"\n  env:\n    ANTHROPIC_PROBE_MARKER: operator-set\n    GOLEM_SECRET: smuggled\n")
+
+	var stdout, stderr bytes.Buffer
+	code := ObserverDispatch([]string{"--repo", repo, "--ticket", ticketID,
+		"--role", "convention-enforcer", "--commit", sha, "--backend-config", doc}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ObserverDispatch: exit %d, stderr=%s", code, stderr.String())
+	}
+	raw, err := os.ReadFile(envDump)
+	if err != nil {
+		t.Fatalf("the document's command was never run: %v", err)
+	}
+	got := string(raw)
+	if !strings.Contains(got, "ANTHROPIC_PROBE_MARKER=operator-set") {
+		t.Errorf("the operator's env entry did not reach the agent:\n%s", got)
+	}
+	if strings.Contains(got, "GOLEM_SECRET") {
+		t.Errorf("a GOLEM_-prefixed env entry reached the agent:\n%s", got)
+	}
+}
+
+// The marker is absent from a run without the flag, so it comes from the
+// document rather than the ambient environment.
+func TestWithoutTheBackendDocumentTheOperatorEnvIsAbsent(t *testing.T) {
+	repo, worktree, ticketID := setUpTicketForStepTest(t)
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"),
+		[]byte("backend: claude-code\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"),
+		[]byte("# role\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+
+	dir := t.TempDir()
+	envDump := filepath.Join(dir, "env.txt")
+	body := "#!/bin/sh\nenv > " + envDump + "\ncat > /dev/null\necho 'FINDING: noted'\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	var stdout, stderr bytes.Buffer
+	code := ObserverDispatch([]string{"--repo", repo, "--ticket", ticketID,
+		"--role", "convention-enforcer", "--commit", sha}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("ObserverDispatch: exit %d, stderr=%s", code, stderr.String())
+	}
+	raw, err := os.ReadFile(envDump)
+	if err != nil {
+		t.Fatalf("the agent was never run: %v", err)
+	}
+	if strings.Contains(string(raw), "ANTHROPIC_PROBE_MARKER") {
+		t.Error("the marker reached a run with no backend document")
+	}
+}
