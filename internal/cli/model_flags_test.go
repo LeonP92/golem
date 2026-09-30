@@ -12,6 +12,25 @@ import (
 	"github.com/leonp92/golem/internal/models"
 )
 
+// observerFixtureRepo is a repo with a ticket, one committed change, the
+// convention-enforcer role file, and the given .golem/config.yaml.
+func observerFixtureRepo(t *testing.T, config string) (repo, ticketID, sha string) {
+	t.Helper()
+	repo, worktree, ticketID := setUpTicketForStepTest(t)
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"),
+		[]byte("# role\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sha = gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+	return repo, ticketID, sha
+}
+
 func parseModelFlags(t *testing.T, args ...string) modelFlags {
 	t.Helper()
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
@@ -143,17 +162,7 @@ func TestModelReachesTheAgentProcess(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, worktree, ticketID := setUpTicketForStepTest(t)
-			if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte(tt.config), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"), []byte("# role\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+			repo, ticketID, sha := observerFixtureRepo(t, tt.config)
 			argvPath := fakeClaudeRecordingArgv(t, "FINDING: noted")
 
 			var stdout, stderr bytes.Buffer
@@ -196,17 +205,7 @@ func TestAnInvalidModelExitsNonZeroWithNoAgentRun(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			repo, worktree, ticketID := setUpTicketForStepTest(t)
-			if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte(tt.config), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"), []byte("# role\n"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+			repo, ticketID, sha := observerFixtureRepo(t, tt.config)
 			argvPath := fakeClaudeRecordingArgv(t, "FINDING: noted")
 
 			var stdout, stderr bytes.Buffer
@@ -226,19 +225,9 @@ func TestAnInvalidModelExitsNonZeroWithNoAgentRun(t *testing.T) {
 }
 
 func TestBackendConfigKeepsTheRepoConfigOutOfTheShemPath(t *testing.T) {
-	repo, worktree, ticketID := setUpTicketForStepTest(t)
-	cfgBody := "backend: claude-code\nrole_models:\n  convention-enforcer: sonnet\n"
-	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte(cfgBody), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"), []byte("# role\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	repo, ticketID, sha := observerFixtureRepo(t,
+		"backend: claude-code\nrole_models:\n  convention-enforcer: sonnet\n")
 	doc := writeBackendDoc(t, "backend:\n  adapter: claude-code\n")
-	sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
 	argvPath := fakeClaudeRecordingArgv(t, "FINDING: noted")
 
 	var stdout, stderr bytes.Buffer
@@ -259,19 +248,7 @@ func TestBackendConfigKeepsTheRepoConfigOutOfTheShemPath(t *testing.T) {
 // An operator's own command and env reach the agent process end to end, which
 // is what makes a different vendor binary usable without a code change.
 func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
-	repo, worktree, ticketID := setUpTicketForStepTest(t)
-	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"),
-		[]byte("backend: claude-code\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"),
-		[]byte("# role\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+	repo, ticketID, sha := observerFixtureRepo(t, "backend: claude-code\n")
 
 	// A recording script standing in for the vendor CLI, named by `command`.
 	dir := t.TempDir()
@@ -308,19 +285,7 @@ func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
 // The marker is absent from a run without the flag, so it comes from the
 // document rather than the ambient environment.
 func TestWithoutTheBackendDocumentTheOperatorEnvIsAbsent(t *testing.T) {
-	repo, worktree, ticketID := setUpTicketForStepTest(t)
-	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"),
-		[]byte("backend: claude-code\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(repo, ".golem", "roles", "convention-enforcer.md"),
-		[]byte("# role\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	sha := gitCommit(t, worktree, "feature.go", "package main\n", "add feature")
+	repo, ticketID, sha := observerFixtureRepo(t, "backend: claude-code\n")
 
 	dir := t.TempDir()
 	envDump := filepath.Join(dir, "env.txt")

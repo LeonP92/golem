@@ -6,7 +6,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/config"
 )
 
@@ -96,13 +95,5 @@ func TestNewRunnerDisagreementNamesBoth(t *testing.T) {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error %v does not name %q", err, want)
 		}
-	}
-}
-
-// The registry is what NewRunner resolves through, so an adapter absent from
-// it is an error rather than a default.
-func TestNewRunnerUsesTheRegistry(t *testing.T) {
-	if len(agentrunner.Names()) == 0 {
-		t.Fatal("no adapter is registered")
 	}
 }

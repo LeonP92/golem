@@ -310,7 +310,7 @@ func TestClaimWithNoShemRowFails(t *testing.T) {
 }
 
 func TestAnOfflineShemsCatalogStillCounts(t *testing.T) {
-	h, gdb := modelsTestDB(t)
+	_, gdb := modelsTestDB(t)
 	shem := seedShemWithCatalog(t, gdb, "node-a", "key1", "claude-code", modelCatalog("opus"))
 	gdb.Model(&shem).Update("status", "offline")
 
@@ -326,7 +326,6 @@ func TestAnOfflineShemsCatalogStillCounts(t *testing.T) {
 	if bound != "claude-code" || sel["brainstorm"] != "opus" {
 		t.Errorf("sel = %v, bound = %q", sel, bound)
 	}
-	_ = h
 }
 
 func TestAResumedTicketBoundToAnotherBackendWarnsAndFallsBack(t *testing.T) {
