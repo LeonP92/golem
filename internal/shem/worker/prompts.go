@@ -55,7 +55,7 @@ const (
 //     A zero-width Unicode character was considered for this substitution
 //     and rejected. It depends on an invisible codepoint surviving,
 //     byte-for-byte, an entire pipeline this code does not control (Go
-//     string -> exec.Cmd stdin -> the claude CLI -> model input
+//     string -> exec.Cmd stdin -> the vendor CLI -> model input
 //     processing). Zero-width space is itself a known steganography and
 //     prompt-injection vector, so any layer in that pipeline may normalize
 //     or strip it as input hygiene — which would silently revert the
@@ -152,8 +152,8 @@ var descriptionFenceMarkers = []promptfence.Marker{
 	},
 }
 
-// buildBrainstormPrompt returns the prompt for the brainstorm Claude session.
-// Claude writes a spec and stops — it does NOT advance the phase.
+// buildBrainstormPrompt returns the prompt for the brainstorm session.
+// The agent writes a spec and stops — it does NOT advance the phase.
 // If feedback is non-empty the spec must address that feedback.
 func buildBrainstormPrompt(ticketID, description, feedback string) string {
 	feedbackSection := ""
@@ -187,8 +187,8 @@ A human will review your spec in the orchestrator UI and approve before planning
 		ticketID, fenceDescription(description), ticketID, feedbackSection, ticketID, ticketID)
 }
 
-// buildPlanPrompt returns the prompt for the plan Claude session.
-// Claude writes an implementation plan and stops — it does NOT advance the phase.
+// buildPlanPrompt returns the prompt for the plan session.
+// The agent writes an implementation plan and stops — it does NOT advance the phase.
 // If feedback is non-empty the plan must address that feedback.
 func buildPlanPrompt(ticketID, description, feedback string) string {
 	feedbackSection := ""
@@ -225,8 +225,8 @@ A human will review your plan in the orchestrator UI and approve before implemen
 		ticketID, fenceDescription(description), ticketID, feedbackSection, ticketID, ticketID, ticketID)
 }
 
-// buildImplementPrompt returns the prompt for the implement Claude session.
-// Claude implements the plan and runs review — it does NOT close the ticket.
+// buildImplementPrompt returns the prompt for the implement session.
+// The agent implements the plan and runs review — it does NOT close the ticket.
 // branch is passed in rather than rebuilt from ticketID: the real name is
 // slug.Branch(title, id) — ticket/<slug>-<id[:8]> — and "ticket/"+ticketID
 // names a branch that does not exist.

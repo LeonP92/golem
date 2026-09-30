@@ -23,9 +23,15 @@ func main() {
 		log.Fatalf("failed to load config: %v", err)
 	}
 
+	agent, cleanupAgent, err := worker.NewAgent(cfg)
+	if err != nil {
+		log.Fatalf("failed to configure the agent backend: %v", err)
+	}
+	defer cleanupAgent()
+
 	httpClient := client.New(cfg.Orchestrator, cfg.APIKey, cfg.Name)
-	exec := &worker.GolemExecutor{}
-	w := worker.New(cfg, httpClient, exec)
+	exec := &worker.GolemExecutor{Agent: agent}
+	w := worker.New(cfg, httpClient, exec, agent)
 
 	// Connect WebSocket (non-fatal: falls back to polling if unavailable).
 	wsURL := cfg.Orchestrator

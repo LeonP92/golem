@@ -28,7 +28,7 @@ func TestGolemTicketNewArgs_SeparatesDescription(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			args := golemTicketNewArgs("t1", "golem/branch", tc.description)
+			args := golemTicketNewArgs("t1", "golem/branch", tc.description, "/run/backend.yaml")
 
 			sep := slices.Index(args, "--")
 			if sep == -1 {
@@ -40,6 +40,11 @@ func TestGolemTicketNewArgs_SeparatesDescription(t *testing.T) {
 			}
 			if got := args[len(args)-1]; got != tc.description {
 				t.Errorf("description = %q, want %q", got, tc.description)
+			}
+			// The backend document is a flag, so it has to precede the separator.
+			cfg := slices.Index(args, "--backend-config")
+			if cfg == -1 || cfg > sep {
+				t.Errorf("--backend-config is missing or after the separator: %q", args)
 			}
 			// Nothing before the separator may be attacker-controlled.
 			for _, a := range args[:sep] {

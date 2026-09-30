@@ -79,7 +79,7 @@ func TestWorker_PicksUpRevisingTicketsWithoutAPush(t *testing.T) {
 	}
 	w := worker.New(cfg, client.New(srv.URL, "k", "test-shem"), &recordingExecutor{
 		claims: make(chan *client.ClaimResponse, 4),
-	})
+	}, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 
@@ -143,7 +143,7 @@ func TestWorker_PicksUpAResumedTicketWithoutRestarting(t *testing.T) {
 		Orchestrator: srv.URL, APIKey: "k", Name: "n",
 		Repos: []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
-	w := worker.New(cfg, client.New(srv.URL, "k", "test-shem"), exec)
+	w := worker.New(cfg, client.New(srv.URL, "k", "test-shem"), exec, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 

@@ -2,6 +2,9 @@ package agentrunner
 
 import (
 	"context"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -33,5 +36,46 @@ func TestAgentCmdStripsGolemSecretsFromEveryAdapterProcess(t *testing.T) {
 	}
 	if !sawOperatorVar {
 		t.Error("the operator's own env entry did not reach the agent")
+	}
+}
+
+// The end-to-end form of the same claim, and the one that would have caught
+// the original state: it puts a fake vendor CLI on PATH, runs the real
+// RunPhase through it, and reads back the environment the agent received.
+func TestRunPhaseGivesTheAgentAScopedEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	dump := filepath.Join(dir, "env.txt")
+	script := "#!/bin/sh\nenv > " + dump + "\ncat > /dev/null\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake claude: %v", err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_agent")
+	t.Setenv("GOLEM_SHEM_API_KEY", "must-not-reach-the-agent")
+	t.Setenv("ANTHROPIC_API_KEY", "sk-the-agent-needs-this")
+
+	cc := ClaudeCode{}
+	if err := cc.RunPhase(context.Background(), dir, "a prompt", io.Discard, ""); err != nil {
+		t.Fatalf("RunPhase: %v", err)
+	}
+	raw, err := os.ReadFile(dump)
+	if err != nil {
+		t.Fatalf("read the agent's environment: %v", err)
+	}
+	seen := strings.Split(strings.TrimRight(string(raw), "\n"), "\n")
+
+	for _, kv := range seen {
+		if strings.HasPrefix(kv, "GOLEM_") || strings.HasPrefix(kv, "ORCHESTRATOR_DB=") {
+			t.Errorf("the agent process received %q", kv)
+		}
+	}
+	var sawKey bool
+	for _, kv := range seen {
+		if kv == "ANTHROPIC_API_KEY=sk-the-agent-needs-this" {
+			sawKey = true
+		}
+	}
+	if !sawKey {
+		t.Errorf("the agent process did not receive ANTHROPIC_API_KEY; it cannot reach a model\ngot: %v", seen)
 	}
 }

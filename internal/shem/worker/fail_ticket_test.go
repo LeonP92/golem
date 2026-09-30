@@ -79,7 +79,7 @@ func TestFailedTicketRecordsWhyBeforeNeedsAttention(t *testing.T) {
 		Repos: []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
 	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, failingExecutor{err: errShemSetup})
+	w := worker.New(cfg, c, failingExecutor{err: errShemSetup}, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 

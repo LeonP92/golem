@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -17,7 +16,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
-	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"gopkg.in/yaml.v3"
@@ -26,19 +25,7 @@ import (
 // GolemExecutor runs tickets phase by phase with human approval gates.
 type GolemExecutor struct {
 	repoMu sync.Map // keyed by repoPath, value *sync.Mutex
-}
-
-// postStatus sends a STATUS log entry to the orchestrator and prints locally.
-// Errors posting to the orchestrator are logged and ignored — best-effort.
-func postStatus(c *client.Client, ticketID, msg string) {
-	log.Printf("executor [%s]: %s", ticketID[:8], msg)
-	if _, err := c.PostLog(ticketID, client.LogPayload{
-		EntryType: "STATUS",
-		FromRole:  "shem",
-		Message:   msg,
-	}); err != nil {
-		log.Printf("executor [%s]: postStatus error: %v", ticketID[:8], err)
-	}
+	Agent  *Agent
 }
 
 func (e *GolemExecutor) repoMutex(repoPath string) *sync.Mutex {
@@ -52,13 +39,13 @@ func (e *GolemExecutor) initRepo(ctx context.Context, repoPath string) error {
 	mu := e.repoMutex(repoPath)
 	mu.Lock()
 	defer mu.Unlock()
-	return ensureRepoReady(ctx, repoPath)
+	return e.ensureRepoReady(ctx, repoPath)
 }
 
 // RunTicket executes a claimed ticket:
-//  1. Pre-creates the local ticket with `golem ticket new` (scaffolding only, no Claude).
+//  1. Pre-creates the local ticket with `golem ticket new` (scaffolding only, no agent).
 //  2. Ensures the repo is initialized and the code graph is current.
-//  3. Runs three separate `claude --print` sessions — brainstorm, plan, implement —
+//  3. Runs three separate agent sessions — brainstorm, plan, implement —
 //     pausing between brainstorm→plan and plan→implement for human approval via the
 //     orchestrator UI.  Tickets are NOT closed automatically; humans close via the UI.
 func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *client.Client, claim *client.ClaimResponse) error {
@@ -91,15 +78,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	// the agent: an untrusted workspace makes Claude Code ignore the
 	// repository's own permission allow-list.
 	//
-	// Interim: the shem has no configured adapter until the backend block is
-	// wired.
-	if a, err := agentrunner.New("claude-code", agentrunner.Options{}); err == nil {
-		// Failure is logged and not returned: an untrusted workspace degrades
-		// (the agent warns and falls back to asking) rather than breaking, so
-		// it is not worth failing a ticket that would otherwise run.
-		if err := a.PrepareHost(repoPath); err != nil {
-			log.Printf("executor: could not prepare the host for %s: %v", repoPath, err)
-		}
+	// Failure is logged and not returned: an untrusted workspace degrades (the
+	// agent warns and falls back to asking) rather than breaking, so it is not
+	// worth failing a ticket that would otherwise run.
+	if err := e.Agent.Adapter.PrepareHost(repoPath); err != nil {
+		log.Printf("executor: could not prepare the host for %s: %v", repoPath, err)
 	}
 
 	if err := e.initRepo(ctx, repoPath); err != nil {
@@ -142,7 +125,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		// existing worktree instead of trying to create it again.
 		postStatus(c, ticketID, "Initializing repository…")
 		if _, statErr := os.Stat(ticketDir); os.IsNotExist(statErr) {
-			if err := runGolemTicketNew(ctx, repoPath, ticketID, claim.Branch, claim.Description); err != nil {
+			if err := e.runGolemTicketNew(ctx, repoPath, ticketID, claim.Branch, claim.Description); err != nil {
 				return fmt.Errorf("golem ticket new: %w", err)
 			}
 		}
@@ -155,7 +138,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		}
 	}
 
-	// Start log-tail before any Claude invocations so we capture all entries.
+	// Start log-tail before any agent invocations so we capture all entries.
 	stopTail := make(chan struct{})
 	tailDone := make(chan struct{})
 	go func() {
@@ -177,14 +160,15 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			// validation, so the validation is the gate and a failure
 			// parks the ticket in needs-attention rather than waiting.
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
-			postStatus(c, ticketID, "Starting agent (claude) — brainstorm phase")
+			model := sanitizeModel(c, ticketID, claim.Models[string(models.StageBrainstorm)])
+			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "brainstorm")
 			prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
-			if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-brainstorm.log")); err != nil {
+			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
 				return err
 			}
 			postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
 			postStatus(c, ticketID, "Brainstorm complete — validating the spec")
-			if err := runGolemValidate(ctx, repoPath, ticketID, "spec"); err != nil {
+			if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", c); err != nil {
 				return fmt.Errorf("spec validation: %w", err)
 			}
 			postStatus(c, ticketID, "Spec validated — advancing to planning")
@@ -207,14 +191,15 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "plan":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
-			postStatus(c, ticketID, "Starting agent (claude) — planning phase")
+			model := sanitizeModel(c, ticketID, claim.Models[string(models.StagePlan)])
+			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "plan")
 			prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
-			if err := runClaudePhase(ctx, repoPath, prompt, filepath.Join(ticketDir, "claude-plan.log")); err != nil {
+			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
 				return err
 			}
 			postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
 			postStatus(c, ticketID, "Plan complete — validating the plan")
-			if err := runGolemValidate(ctx, repoPath, ticketID, "plan"); err != nil {
+			if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", c); err != nil {
 				return fmt.Errorf("plan validation: %w", err)
 			}
 			postStatus(c, ticketID, "Plan validated — starting implementation")
@@ -232,16 +217,17 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			phase = "implement"
 
 		case "implement":
-			postStatus(c, ticketID, "Starting agent (claude) — implementation phase")
-			if err := runClaudePhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), filepath.Join(ticketDir, "claude-implement.log")); err != nil {
+			model := sanitizeModel(c, ticketID, claim.Models[string(models.StageImplement)])
+			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "implement")
+			if err := e.runPhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), ticketDir, "implement", model); err != nil {
 				return err
 			}
-			observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
-			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
+			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
+			if revErr := e.runGolemReview(ctx, repoPath, ticketID, c); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
-			return finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Implementation", claim.Branch)
+			return e.finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Implementation", claim.Branch)
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
@@ -263,18 +249,19 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 					log.Printf("executor: refresh origin/%s for %s: %v", claim.BaseBranch, ticketID, err)
 				}
 			}
-			postStatus(c, ticketID, "Starting agent (claude) — revision phase")
-			if err := runClaudePhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Branch, claim.Description, feedback), filepath.Join(ticketDir, "claude-revise.log")); err != nil {
+			model := sanitizeModel(c, ticketID, claim.Models[string(models.StageRevise)])
+			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "revise")
+			if err := e.runPhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Branch, claim.Description, feedback), ticketDir, "revise", model); err != nil {
 				return err
 			}
-			observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
-			if revErr := runGolemReview(ctx, repoPath, ticketID); revErr != nil {
+			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch)
+			if revErr := e.runGolemReview(ctx, repoPath, ticketID, c); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
 			// Previously defaulted an unreadable state to "ready-for-review",
 			// so a revise run that left no state reported success outright.
-			return finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Revision", claim.Branch)
+			return e.finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Revision", claim.Branch)
 
 		default:
 			log.Printf("executor: unknown start phase %q, falling through to implement", phase)
@@ -305,14 +292,16 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 // both cases. See TestGolemTicketNewArgs_SeparatesDescription here and
 // TestTicketNew_DescriptionStartingWithDash in internal/cli, which proves
 // the real FlagSet honours it.
-func golemTicketNewArgs(ticketID, branch, description string) []string {
-	return []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch, "--", description}
+func golemTicketNewArgs(ticketID, branch, description, backendConfig string) []string {
+	return []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch,
+		"--backend-config", backendConfig, "--", description}
 }
 
 // runGolemTicketNew creates the local ticket scaffold (worktree + branch) without
-// invoking Claude. Claude's role starts at brainstorm, after the scaffold exists.
-func runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", golemTicketNewArgs(ticketID, branch, description)...))
+// invoking an agent. The agent's role starts at brainstorm, after the scaffold exists.
+func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
+	cmd := asAgent(exec.CommandContext(ctx, "golem",
+		golemTicketNewArgs(ticketID, branch, description, e.Agent.ConfigPath)...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -341,7 +330,7 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 //
 // It could not work from the agent. Claude Code runs the agent's shell
 // commands in a sandbox that does not expose the environment, so `golem`
-// started from there has no model credential, and the nested `claude` the
+// started from there has no model credential, and the nested agent the
 // reviewer needs reports "Not logged in · Please run /login". The shem runs it
 // via asAgent, which keeps the model credential but not the push token.
 //
@@ -357,9 +346,11 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 // are returned as errors, and both park the ticket in needs-attention — a
 // gate that cannot run must not be treated as a pass, or the failure mode of
 // the validator is "everything is approved".
-func runGolemValidate(ctx context.Context, repoPath, ticketID, stage string) error {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "validate",
-		"--ticket", ticketID, "--stage", stage))
+func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID, stage string, c *client.Client) error {
+	model := sanitizeModel(c, ticketID, e.Agent.StageModel(models.StageValidate))
+	args := e.Agent.subcommandArgs([]string{"ticket", "validate",
+		"--ticket", ticketID, "--stage", stage}, model)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -368,35 +359,16 @@ func runGolemValidate(ctx context.Context, repoPath, ticketID, stage string) err
 	return nil
 }
 
-func runGolemReview(ctx context.Context, repoPath, ticketID string) error {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "review", "--ticket", ticketID))
+func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID string, c *client.Client) error {
+	model := sanitizeModel(c, ticketID, e.Agent.StageModel(models.StageReview))
+	args := e.Agent.subcommandArgs([]string{"ticket", "review", "--ticket", ticketID}, model)
+	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, out)
 	}
 	return nil
-}
-
-// claudePhaseCmd builds the agent subprocess. It is separate from
-// runClaudePhase only so a test can inspect what is handed to the agent
-// without executing it — see TestClaudePhaseCmdDoesNotLeakGolemSecrets.
-func claudePhaseCmd(ctx context.Context, repoPath, prompt string) *exec.Cmd {
-	cmd := exec.CommandContext(ctx, "claude", "--print")
-	cmd.Dir = repoPath
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	// The prompt carries untrusted issue text, so this process must not
-	// carry golem's credentials — see internal/agentenv and asAgent.
-	cmd.Env = agentenv.Environ()
-	// Drop to an unprivileged account where one is configured. Environment
-	// filtering keeps the token out of the agent's OWN environment, but an
-	// agent running as root simply reads it out of /proc/1/environ instead —
-	// verified in the deployed container. Filtering is only meaningful once
-	// the agent cannot read the shem's memory.
-	agentenv.DropPrivileges(cmd)
-	return cmd
 }
 
 // asAgent runs a repository command as the agent account without golem's
@@ -407,30 +379,6 @@ func asAgent(cmd *exec.Cmd) *exec.Cmd {
 	cmd.Env = agentenv.Environ()
 	agentenv.DropPrivileges(cmd)
 	return cmd
-}
-
-// runClaudePhase runs a single `claude --print` session with the given prompt.
-// Output is written to os.Stdout and also teed to logPath for post-mortem inspection.
-func runClaudePhase(ctx context.Context, repoPath, prompt, logPath string) error {
-	cmd := claudePhaseCmd(ctx, repoPath, prompt)
-
-	f, err := os.Create(logPath) //nolint:gosec
-	if err != nil {
-		log.Printf("executor: could not create phase log %s: %v", logPath, err)
-	} else {
-		defer func() {
-			if cerr := f.Close(); cerr != nil {
-				log.Printf("executor: closing phase log %s: %v", logPath, cerr)
-			}
-		}()
-		cmd.Stdout = io.MultiWriter(os.Stdout, f)
-		cmd.Stderr = io.MultiWriter(os.Stderr, f)
-	}
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("claude --print: %w", err)
-	}
-	return nil
 }
 
 // consumeFeedback retrieves the pending feedback for a ticket and acks it so
@@ -461,101 +409,6 @@ func postDocumentEntry(c *client.Client, ticketID string, entryType, filePath st
 // toOrchestratorPhase maps the local golem state.json phase to the orchestrator
 // phase name. "review" and "closed" both become "ready-for-review" because humans
 // close tickets via the UI — the shem never auto-closes.
-// finishWorkPhase closes out an implement or revise run: it works out what the
-// agent actually left behind, reports that, and only then moves the ticket.
-//
-// The order matters and used to be wrong. Both branches posted
-// "… complete — ready for review" BEFORE reading the local state, then derived
-// the orchestrator phase from that state and posted it — and
-// toOrchestratorPhase passes anything that is not "review" or "closed"
-// straight through. So an agent that stopped without running
-// `golem ticket review` left state.json at, say, "plan", and the shem posted
-// phase "plan": the ticket moved BACKWARDS while the log above it claimed it
-// was ready for review.
-//
-// That combination also looped. "plan" is in the resumable set, so every shem
-// restart resumed the ticket, nextPhaseAfterCheckpoint sent it to implement
-// again, and the whole pass re-ran and re-appended its entries indefinitely.
-//
-// An agent that did not advance the local ticket has not finished, whatever
-// the reason — a question for a human, a refusal, a crash after the last
-// commit. That is for a human to look at, so this returns an error and lets
-// the worker park the ticket in needs-attention with the reason attached,
-// rather than inventing a phase for it.
-func finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
-	claim *client.ClaimResponse, repoPath, ticketDir, what, branch string,
-) error {
-	ticketID := claim.TicketID
-
-	localPhase, sha, stateErr := readState(ticketDir)
-	orchPhase := toOrchestratorPhase(localPhase)
-
-	// Written either way, and before the early return: the checkpoint is what
-	// lets a requeue resume this phase instead of starting the ticket over
-	// from brainstorm.
-	if sha != "" {
-		PostCheckpointWithRetry(c, ticketID, localPhase, sha, 5) //nolint:errcheck
-	}
-
-	if orchPhase != "ready-for-review" {
-		// A failed gate is a real verdict, not a missing step. `golem ticket
-		// review` writes needs-attention itself when the gate commands do not
-		// pass, and reporting that as "did not complete" would blame the
-		// agent for work the gate deliberately rejected.
-		if localPhase == "needs-attention" {
-			return fmt.Errorf("%s finished but the review gate did not pass — "+
-				"see the reviewer attestation in the log above", what)
-		}
-		// The local phase is named because it is the whole diagnosis: "plan"
-		// means the agent stopped at the planning gate, "implement" means the
-		// review gate did not run or did not reach a verdict.
-		if stateErr != nil {
-			return fmt.Errorf("%s did not complete: no readable ticket state in %s (%v), "+
-				"so there is nothing to review", what, ticketDir, stateErr)
-		}
-		return fmt.Errorf("%s did not complete: the agent left the local ticket at phase %q "+
-			"instead of advancing it, so it is not ready for review — see the log above for "+
-			"what it was waiting on", what, localPhase)
-	}
-
-	postStatus(c, ticketID, what+" complete — ready for review")
-
-	if !cfg.NoPush {
-		worktree := filepath.Join(ticketDir, "worktree")
-		if pushErr := pushTicketBranch(ctx, repoPath, worktree, branch, claim.RepoRemote); pushErr != nil {
-			// A failed push must not block the lifecycle: the ticket still
-			// reaches ready-for-review, just without a pull request.
-			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
-		} else {
-			postStatus(c, ticketID, "Pushed "+branch+" to origin")
-			// Generated here, after the push and before the report, because
-			// the description is written from the branch's own diff and only
-			// this host has it. A failure is logged and the report goes out
-			// anyway: the orchestrator falls back to a minimal body, so a
-			// missing description costs a good write-up, not the pull
-			// request.
-			prBody, bodyErr := generatePRDescription(ctx, repoPath, ticketID)
-			if bodyErr != nil {
-				postStatus(c, ticketID, "Could not generate the pull request description: "+
-					firstLineOf(bodyErr.Error()))
-				log.Printf("executor: pr description for %s: %v", ticketID, bodyErr)
-			}
-			if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
-				log.Printf("executor: post branch-pushed: %v", pErr)
-			}
-		}
-	}
-
-	if phErr := c.PostPhase(ticketID, orchPhase); phErr != nil {
-		if errors.Is(phErr, client.ErrNotOwner) {
-			log.Printf("executor: ticket %s was requeued, stopping", ticketID)
-			return nil
-		}
-		log.Printf("executor: post phase error: %v", phErr)
-	}
-	return nil
-}
-
 func toOrchestratorPhase(localPhase string) string {
 	switch localPhase {
 	case "review", "closed":
@@ -580,10 +433,15 @@ func nextPhaseAfterCheckpoint(phase string) string {
 }
 
 // ensureRepoReady verifies the repo has a .golem setup and a code graph.
-func ensureRepoReady(ctx context.Context, repoPath string) error {
+func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath string) error {
+	graphModel := e.Agent.StageModel(models.StageGraph)
+	graphArgs := func(sub string) []string {
+		return e.Agent.subcommandArgs([]string{"graph", sub, "--repo", repoPath}, graphModel)
+	}
 	configPath := filepath.Join(repoPath, ".golem", "config.yaml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", "init", "--backend", "claude-code", "--repo", repoPath)).CombinedOutput()
+		out, err := asAgent(exec.CommandContext(ctx, "golem", "init",
+			"--backend", e.Agent.Adapter.Name(), "--repo", repoPath)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem init: %w\n%s", err, out)
 		}
@@ -601,16 +459,16 @@ func ensureRepoReady(ctx context.Context, repoPath string) error {
 
 	indexPath := filepath.Join(repoPath, ".golem", "index")
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath)).CombinedOutput()
+		out, err := asAgent(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem graph build: %w\n%s", err, out)
 		}
 		log.Printf("executor: built graph in %s", repoPath)
 	} else {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", "graph", "update", "--repo", repoPath)).CombinedOutput()
+		out, err := asAgent(exec.CommandContext(ctx, "golem", graphArgs("update")...)).CombinedOutput()
 		if err != nil {
 			log.Printf("executor: graph update failed, rebuilding: %v\n%s", err, out)
-			out, err = asAgent(exec.CommandContext(ctx, "golem", "graph", "build", "--repo", repoPath)).CombinedOutput()
+			out, err = asAgent(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("golem graph build: %w\n%s", err, out)
 			}
@@ -898,8 +756,10 @@ func firstLineOf(s string) string {
 // The issue number is deliberately not passed: the claim does not carry one,
 // and the orchestrator appends the closing reference itself from the ticket
 // row — the one place that actually knows it.
-func generatePRDescription(ctx context.Context, repoPath, ticketID string) (string, error) {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "pr-description", "--ticket", ticketID))
+func (e *GolemExecutor) generatePRDescription(ctx context.Context, repoPath, ticketID string) (string, error) {
+	args := e.Agent.subcommandArgs([]string{"ticket", "pr-description", "--ticket", ticketID},
+		e.Agent.StageModel(models.StagePRDescription))
+	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

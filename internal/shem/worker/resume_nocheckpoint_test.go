@@ -66,7 +66,7 @@ func TestWorker_ResumesTicketWithNoCheckpoint(t *testing.T) {
 			{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"},
 		},
 	}
-	w := worker.New(cfg, client.New(srv.URL, "k", "test-shem"), exec)
+	w := worker.New(cfg, client.New(srv.URL, "k", "test-shem"), exec, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 
