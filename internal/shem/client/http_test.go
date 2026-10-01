@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -217,5 +218,54 @@ func TestPostBranchPushed_NotOwner(t *testing.T) {
 	c.RetryInitial = 10 * time.Millisecond
 	if err := c.PostBranchPushed("t1", ""); !errors.Is(err, client.ErrNotOwner) {
 		t.Errorf("expected ErrNotOwner, got %v", err)
+	}
+}
+
+// The orchestrator refuses a write to someone else's ticket with a plain-text
+// 409. PostLog decoded that body as JSON and failed with
+// "invalid character 'i' in literal true" — the "ti" of "ticket not owned" —
+// which hid the real cause in the shem log.
+func TestPostLog_NotOwner(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "ticket not owned by this shem", http.StatusConflict)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	c.RetryInitial = 10 * time.Millisecond
+	if _, err := c.PostLog("t1", client.LogPayload{EntryType: "STATUS", Message: "m"}); !errors.Is(err, client.ErrNotOwner) {
+		t.Errorf("expected ErrNotOwner, got %v", err)
+	}
+}
+
+func TestPostLog_OtherErrorNamesTheStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "bad request", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	c.RetryInitial = 10 * time.Millisecond
+	_, err := c.PostLog("t1", client.LogPayload{EntryType: "STATUS", Message: "m"})
+	if err == nil || !strings.Contains(err.Error(), "400") {
+		t.Errorf("expected an error naming status 400, got %v", err)
+	}
+}
+
+// PostCheckpoint ignored the status entirely, so a checkpoint the
+// orchestrator refused was reported as saved. The checkpoint endpoint answers
+// a non-owner with 404 ("not found or not owner"); 409 is accepted too, the
+// convention the other ownership-scoped writes use.
+func TestPostCheckpoint_NotOwner(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusConflict} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "not found or not owner", code)
+		}))
+		c := client.New(srv.URL, "key", "shem-a")
+		c.RetryInitial = 10 * time.Millisecond
+		if err := c.PostCheckpoint("t1", "plan", ""); !errors.Is(err, client.ErrNotOwner) {
+			t.Errorf("status %d: expected ErrNotOwner, got %v", code, err)
+		}
+		srv.Close()
 	}
 }

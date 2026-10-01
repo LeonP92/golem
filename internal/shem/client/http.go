@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
@@ -308,8 +309,14 @@ func (c *Client) PostCheckpoint(ticketID string, phase, sha string) error {
 	if err != nil {
 		return err
 	}
-	_ = resp.Body.Close() // response consumed; a close error changes nothing
-	return nil
+	defer func() { _ = resp.Body.Close() }()
+	// The checkpoint endpoint answers a non-owner with 404 ("not found or
+	// not owner"); 409 is the convention the other ownership-scoped writes
+	// use, so both mean the same here.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	return statusError(resp)
 }
 
 // PostLog logs a message to a ticket.
@@ -319,6 +326,15 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// Refusals are plain text. Decoding one as JSON reported
+	// "invalid character 'i' in literal true" — the "ti" of "ticket not
+	// owned" — instead of the refusal itself.
+	if resp.StatusCode == http.StatusConflict {
+		return 0, ErrNotOwner
+	}
+	if err := statusError(resp); err != nil {
+		return 0, err
+	}
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -330,6 +346,16 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 		return 0, errors.New("missing sequence_num in response")
 	}
 	return seqNum, nil
+}
+
+// statusError returns nil for a 2xx response and otherwise an error naming
+// the status and the start of the body, which is plain text for refusals.
+func statusError(resp *http.Response) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
 // PostDocumentFile streams a file to the orchestrator as a document log entry.
