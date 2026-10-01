@@ -16,8 +16,8 @@ import (
 
 func strPtr(v string) *string { return &v }
 
-// testAgentFor builds the agent Worker.Start reports to the orchestrator. An
-// absent backend block resolves to the built-in claude-code one.
+// testAgentFor builds an Agent from cfg; an absent backend block resolves to
+// the default adapter.
 func testAgentFor(t *testing.T, cfg *config.Config) *worker.Agent {
 	t.Helper()
 	agent, cleanup, err := worker.NewAgent(cfg)

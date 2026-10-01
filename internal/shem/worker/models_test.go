@@ -182,7 +182,7 @@ func TestRunPhaseUsesTheAdapterAndNamesTheLogAfterThePhase(t *testing.T) {
 	if got.dir != "/repo" || got.prompt != "a prompt" || got.model != "big-model" {
 		t.Errorf("the adapter saw %+v", got)
 	}
-	// The log is vendor-neutral now, not claude-<phase>.log.
+	// Phase logs are named agent-<phase>.log.
 	data, err := os.ReadFile(filepath.Join(dir, "agent-brainstorm.log"))
 	if err != nil {
 		t.Fatalf("read the phase log: %v", err)
@@ -218,8 +218,8 @@ func TestSanitizeModelPassesWhatTheAdapterCanUse(t *testing.T) {
 	}
 }
 
-// The shem is downstream of an orchestrator that may be newer than it, so a
-// value it cannot use is reported rather than a reason to strand the ticket.
+// A model the adapter cannot use is reported, and the stage runs on the vendor
+// default.
 func TestARejectedModelWarnsAndFallsBack(t *testing.T) {
 	for _, model := range []string{"--model", "a b", "-p"} {
 		c, posted := logCapture(t)
@@ -274,7 +274,7 @@ func TestGolemInitUsesTheShemsOwnAdapter(t *testing.T) {
 	}
 	repo := t.TempDir()
 	calls, _ := fakeGolemOnPath(t)
-	_ = e.ensureRepoReady(context.Background(), repo)
+	_ = e.ensureRepoReady(context.Background(), repo, "")
 
 	lines := strings.Join(readLines(t, calls), "\n")
 	if !strings.Contains(lines, "init --backend recording") {
@@ -361,7 +361,7 @@ func TestGraphSubcommandsCarryTheBackendDocument(t *testing.T) {
 	dir := t.TempDir()
 	calls := filepath.Join(dir, "calls.txt")
 	writeFakeGolem(t, dir, "#!/bin/sh\necho \"$@\" >> "+calls+"\nexit 1\n")
-	_ = e.ensureRepoReady(context.Background(), repo)
+	_ = e.ensureRepoReady(context.Background(), repo, "picked-graph")
 
 	lines := readLines(t, calls)
 	var graphCalls []string
@@ -378,8 +378,8 @@ func TestGraphSubcommandsCarryTheBackendDocument(t *testing.T) {
 		if !strings.Contains(l, "--backend-config "+e.Agent.ConfigPath) {
 			t.Errorf("%q does not carry the backend document", l)
 		}
-		if !strings.Contains(l, "--model small-model") {
-			t.Errorf("%q does not carry the graph stage's model", l)
+		if !strings.Contains(l, "--model picked-graph") {
+			t.Errorf("%q does not carry the ticket's graph model", l)
 		}
 	}
 }

@@ -494,3 +494,27 @@ func TestRequestChangesChecksTheAssignedShemsCatalog(t *testing.T) {
 		})
 	}
 }
+
+// A stored size the assigned shem lacks does not block choosing a revision
+// model it has.
+func TestRequestChangesKeepsAStoredSizeTheShemLacks(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+	seedShemWithCatalog(t, h.DB, "node-a", "key1", "claude-code", modelCatalog("haiku"))
+	shemID := uint(1)
+	ticket := db.Ticket{RepoRemote: "r", BaseBranch: "main", Branch: "b", Title: "t",
+		Description: "d", Phase: "ready-for-review", AssignedShem: &shemID, Models: `{"default":"tier:huge"}`}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatalf("seed ticket: %v", err)
+	}
+	w := postModelAction(t, mux, cookie, ticket.ID, url.Values{
+		"action": {"request-changes"}, "feedback": {"please fix"},
+		"model_backend": {"claude-code"}, "model_revise": {"haiku"},
+	})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	sel := reload(t, h, ticket.ID).ModelSelections()
+	if sel["revise"] != "haiku" || sel["default"] != "tier:huge" {
+		t.Errorf("selections = %v, want revise=haiku over the kept default", sel)
+	}
+}

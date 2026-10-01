@@ -492,7 +492,7 @@ func (w *Worker) Shutdown() {
 // outcome, which is what the repos view displays.
 //
 // The error text is the agent's own — agentrunner reports both of the vendor
-// CLI's streams now — so a failure an operator can act on ("Failed to
+// CLI's streams — so a failure an operator can act on ("Failed to
 // authenticate", a missing permission) reaches the page rather than an exit
 // status.
 func (w *Worker) runGraphBuild(remote string) {

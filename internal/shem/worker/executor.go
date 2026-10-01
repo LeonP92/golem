@@ -35,11 +35,11 @@ func (e *GolemExecutor) repoMutex(repoPath string) *sync.Mutex {
 
 // initRepo acquires the per-repo mutex, runs ensureRepoReady, and releases the
 // mutex before returning. Using a helper keeps the defer scope tight.
-func (e *GolemExecutor) initRepo(ctx context.Context, repoPath string) error {
+func (e *GolemExecutor) initRepo(ctx context.Context, repoPath, graphModel string) error {
 	mu := e.repoMutex(repoPath)
 	mu.Lock()
 	defer mu.Unlock()
-	return e.ensureRepoReady(ctx, repoPath)
+	return e.ensureRepoReady(ctx, repoPath, graphModel)
 }
 
 // RunTicket executes a claimed ticket:
@@ -85,7 +85,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		log.Printf("executor: could not prepare the host for %s: %v", repoPath, err)
 	}
 
-	if err := e.initRepo(ctx, repoPath); err != nil {
+	if err := e.initRepo(ctx, repoPath, e.claimModel(c, claim, models.StageGraph)); err != nil {
 		log.Printf("executor: repo pre-flight warning: %v", err)
 	}
 
@@ -160,7 +160,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			// validation, so the validation is the gate and a failure
 			// parks the ticket in needs-attention rather than waiting.
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
-			model := sanitizeModel(c, ticketID, claim.Models[string(models.StageBrainstorm)])
+			model := e.claimModel(c, claim, models.StageBrainstorm)
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "brainstorm")
 			prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
 			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
@@ -191,7 +191,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "plan":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
-			model := sanitizeModel(c, ticketID, claim.Models[string(models.StagePlan)])
+			model := e.claimModel(c, claim, models.StagePlan)
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "plan")
 			prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
 			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
@@ -217,7 +217,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			phase = "implement"
 
 		case "implement":
-			model := sanitizeModel(c, ticketID, claim.Models[string(models.StageImplement)])
+			model := e.claimModel(c, claim, models.StageImplement)
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "implement")
 			if err := e.runPhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), ticketDir, "implement", model); err != nil {
 				return err
@@ -249,7 +249,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 					log.Printf("executor: refresh origin/%s for %s: %v", claim.BaseBranch, ticketID, err)
 				}
 			}
-			model := sanitizeModel(c, ticketID, claim.Models[string(models.StageRevise)])
+			model := e.claimModel(c, claim, models.StageRevise)
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "revise")
 			if err := e.runPhase(ctx, repoPath, buildRevisePrompt(ticketID, claim.Branch, claim.Description, feedback), ticketDir, "revise", model); err != nil {
 				return err
@@ -431,8 +431,7 @@ func nextPhaseAfterCheckpoint(phase string) string {
 }
 
 // ensureRepoReady verifies the repo has a .golem setup and a code graph.
-func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath string) error {
-	graphModel := e.Agent.StageModel(models.StageGraph)
+func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath, graphModel string) error {
 	graphArgs := func(sub string) []string {
 		return e.Agent.subcommandArgs([]string{"graph", sub, "--repo", repoPath}, graphModel)
 	}

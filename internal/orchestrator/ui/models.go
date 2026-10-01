@@ -156,10 +156,15 @@ func modelGroups(fleet []db.BackendCatalog, backend string, cat models.Catalog, 
 	multi := len(fleet) > 1
 	chosenTier, chosenIsTier := models.TierRef(chosen)
 	var sizes []option
+	listed := false
 	for _, t := range cat.Tiers {
 		if multi || (chosenIsTier && t == chosenTier) {
 			sizes = append(sizes, option{Value: models.TierValue(t), Label: sizeLabel(fleet, t)})
+			listed = listed || t == chosenTier
 		}
+	}
+	if chosenIsTier && !listed {
+		sizes = append(sizes, option{Value: chosen, Label: sizeLabel(fleet, chosenTier)})
 	}
 	var groups []optionGroup
 	if len(sizes) > 0 {
@@ -188,4 +193,18 @@ func sizeLabel(fleet []db.BackendCatalog, t models.Tier) string {
 		return string(t)
 	}
 	return string(t) + " — " + strings.Join(on, ", ")
+}
+
+// revisePicker narrows p to the assigned shem's own catalog, the one that runs
+// a revision. A shem that reported no backend gets no revise select.
+func revisePicker(p modelPickerData, assigned *db.Shem) modelPickerData {
+	if assigned == nil {
+		return p
+	}
+	cat := assigned.ModelCatalog()
+	p.Backend, p.Catalog, p.Backends = assigned.Backend, cat, nil
+	if assigned.Backend != "" {
+		p.Backends = []db.BackendCatalog{{Name: assigned.Backend, Catalog: cat}}
+	}
+	return p
 }

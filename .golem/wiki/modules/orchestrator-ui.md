@@ -66,18 +66,20 @@ Provides human oversight of agent work: operators can monitor ticket progress, a
 
 `models.go` — `modelPickerData` is the view-model for the model selects: the
 reported backends, the selected one, its catalog, a ticket-wide default select
-and one per stage. `modelPicker` builds it from a `db.Fleet` the handler has
-already loaded, always from the selected backend's own catalog, so the
-`model_backend` field and the options can never name different backends.
-`singleModelSelect` builds one standalone select for the requeue and
-request-changes controls. `formModelSelections` reads the `model_backend` and
-`model_<stage>` fields out of a parsed form.
+and one per stage, always built from the selected backend's own catalog. A
+ticket bound to a backend no shem reports is `Unreported`: no selects render,
+so the page cannot rewrite its selections. `modelGroups` builds each select's
+options: the backend's models and, only when several backends are reported,
+sizes labelled with what each resolves to. A size already chosen stays listed.
+`singleModelSelect` builds the standalone requeue and request-changes selects;
+`revisePicker` narrows the revise one to the assigned shem's own catalog.
+`ticketModels` resolves what each stage will run on (the assigned shem's
+catalog once claimed), listed by `inStageOrder`.
 
-The `model_selects` partial (`templates/partials/model_selects.html`) renders
-the panel, targeted by class so the ticket page can carry it inside a form;
-`one_model_select` renders a standalone select. `GET /tickets/model-selects`
-(`modelSelects`) re-renders the panel for a chosen backend over htmx, carrying
-the current choices through `hx-include`.
+The `model_selects` partial renders the panel inside `<div id="ticket-models">`
+(a div, so Clear posts no selects); `one_model_select` renders a standalone
+select with its label. `GET /tickets/model-selects` (`modelSelects`)
+re-renders the panel for a chosen backend over htmx.
 
 `TicketRow.WaitingFor` carries `db.Fleet.WaitingFor` for the dashboard's
 waiting badge, filled from one fleet load per page.

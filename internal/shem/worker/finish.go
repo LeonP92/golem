@@ -12,27 +12,14 @@ import (
 	"github.com/leonp92/golem/internal/shem/config"
 )
 
-// finishWorkPhase closes out an implement or revise run: it works out what the
+// finishWorkPhase closes out an implement or revise run: it reads what the
 // agent actually left behind, reports that, and only then moves the ticket.
 //
-// The order matters and used to be wrong. Both branches posted
-// "… complete — ready for review" BEFORE reading the local state, then derived
-// the orchestrator phase from that state and posted it — and
-// toOrchestratorPhase passes anything that is not "review" or "closed"
-// straight through. So an agent that stopped without running
-// `golem ticket review` left state.json at, say, "plan", and the shem posted
-// phase "plan": the ticket moved BACKWARDS while the log above it claimed it
-// was ready for review.
-//
-// That combination also looped. "plan" is in the resumable set, so every shem
-// restart resumed the ticket, nextPhaseAfterCheckpoint sent it to implement
-// again, and the whole pass re-ran and re-appended its entries indefinitely.
-//
-// An agent that did not advance the local ticket has not finished, whatever
-// the reason — a question for a human, a refusal, a crash after the last
-// commit. That is for a human to look at, so this returns an error and lets
-// the worker park the ticket in needs-attention with the reason attached,
-// rather than inventing a phase for it.
+// Reading the local state first matters: an agent that stopped before
+// `golem ticket review` leaves an earlier phase there, and posting that would
+// move the ticket backwards. An agent that did not advance the local ticket has
+// not finished, so this returns an error and the ticket parks in
+// needs-attention with the reason attached.
 func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config, c *client.Client,
 	claim *client.ClaimResponse, repoPath, ticketDir, what, branch string,
 ) error {

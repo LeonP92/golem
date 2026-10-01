@@ -684,8 +684,10 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	data["Selections"] = ticket.ModelSelections()
 	picker := modelPicker(fleet, pickerBackend, ticket.ModelSelections())
 	data["ModelPicker"] = picker
-	data["RequeueSelect"] = singleModelSelect(picker, models.FieldPrefix+models.DefaultKey, "Model")
-	data["ReviseSelect"] = singleModelSelect(picker, models.FieldPrefix+string(models.StageRevise), "Revision model")
+	requeue := singleModelSelect(picker, models.FieldPrefix+models.DefaultKey, "Model for every stage")
+	requeue.Select.Empty = "keep current"
+	data["RequeueSelect"] = requeue
+	data["ReviseSelect"] = singleModelSelect(revisePicker(picker, assigned), models.FieldPrefix+string(models.StageRevise), "Revision model")
 	data["WaitingFor"] = fleet.WaitingFor(ticket)
 	data["CreatedByName"] = createdBy
 	data["LogEntries"] = logEntries

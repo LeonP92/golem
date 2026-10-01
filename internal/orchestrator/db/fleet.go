@@ -74,7 +74,7 @@ func (f Fleet) Catalogs() map[string]models.Catalog {
 
 // WaitingFor returns why no shem can claim t, else "".
 func (f Fleet) WaitingFor(t Ticket) string {
-	if t.ModelBackend == "" || t.AssignedShem != nil {
+	if t.ModelBackend == "" || t.AssignedShem != nil || t.Phase != "unassigned" {
 		return ""
 	}
 	cats := f.byBackend[t.ModelBackend]

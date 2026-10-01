@@ -635,3 +635,40 @@ func TestStageSelectEmptyOptionSaysDefault(t *testing.T) {
 		t.Errorf("the per-stage empty option does not say it is the default:\n%s", body)
 	}
 }
+
+// A size stored from another backend's tiers stays listed and selected.
+func TestAStoredSizeFromAnotherBackendStaysSelected(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	f.singleShem(t, "node-b", "codex", models.Catalog{SupportsSelection: true, Tiers: []models.Tier{"smart"},
+		Models: []models.Model{{ID: "gpt-max", Label: "gpt-max", Tier: "smart"}}})
+	ticket := f.ticket(t, "t-smart", models.Selections{"default": "tier:smart"}, "", "unassigned")
+
+	body := f.get(t, "/tickets/"+ticket.ID).Body.String()
+	if !strings.Contains(body, `value="tier:smart" selected`) {
+		t.Error("the stored size is not offered and selected")
+	}
+}
+
+// The revise select lists the assigned shem's own models, and is hidden for a
+// shem that reported no backend.
+func TestReviseSelectFollowsTheAssignedShem(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	f.shem(t, "node-b", "claude-code", "haiku")
+	assigned := uint(2)
+	ticket := f.ticket(t, "t-rev", models.Selections{}, "", "ready-for-review")
+	f.gdb.Model(&ticket).Update("assigned_shem", assigned)
+
+	body := f.get(t, "/tickets/"+ticket.ID).Body.String()
+	revise := body[strings.Index(body, `name="model_revise"`):]
+	revise = revise[:strings.Index(revise, "</select>")]
+	if !strings.Contains(revise, `value="haiku"`) || strings.Contains(revise, `value="opus"`) {
+		t.Errorf("the revise select does not list just node-b's models:\n%s", revise)
+	}
+
+	f.gdb.Model(&db.Shem{}).Where("id = ?", assigned).Update("backend", "")
+	if strings.Contains(f.get(t, "/tickets/"+ticket.ID).Body.String(), `name="model_revise"`) {
+		t.Error("a revise select is offered for a shem that reported no backend")
+	}
+}

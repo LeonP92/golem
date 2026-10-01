@@ -6,16 +6,8 @@ import (
 	"testing"
 )
 
-// The allow-list itself lives in internal/agentenv and is tested there. What
-// this file asserts is that THIS package's exec sites are actually built with
-// it — which was the original defect: `grep -rn "cmd.Env" internal/ cmd/`
-// returned nothing at all, so the allow-list could be perfect and still reach
-// nothing. internal/agentrunner has the mirror of this for the adapter's own
-// agent process, and internal/gate/env_test.go covers the third executor of
-// instructions Golem did not write: gate commands out of .golem/config.yaml.
-
-// asAgent is what every nested `golem` and repository command in this package
-// runs through, and those commands invoke an agent in turn.
+// asAgent runs every nested `golem` and repository command, and those invoke
+// an agent in turn, so their environment must not carry golem's secrets.
 func TestAsAgentDoesNotLeakGolemSecrets(t *testing.T) {
 	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_agent")
 	t.Setenv("GOLEM_SHEM_API_KEY", "must-not-reach-the-agent")

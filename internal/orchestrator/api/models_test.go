@@ -165,7 +165,7 @@ func TestClaimPathsAlwaysCarryABackendAndEveryStage(t *testing.T) {
 			if resp.Models["brainstorm"] != "opus" {
 				t.Errorf("brainstorm = %q, want opus", resp.Models["brainstorm"])
 			}
-			// ReviseClaim's hand-built literal used to omit the title.
+			// ReviseClaim's response carries the title too.
 			if resp.Title != "t" {
 				t.Errorf("Title = %q, want t", resp.Title)
 			}
@@ -354,7 +354,7 @@ func TestAResumedTicketBoundToAnotherBackendWarnsAndFallsBack(t *testing.T) {
 		t.Errorf("brainstorm = %q, want the stage default opus", claims[0].Models["brainstorm"])
 	}
 
-	// The shem polls resumable every few seconds; later polls add nothing.
+	// Repeated resumable calls add no further WARNING.
 	for i := 0; i < 3; i++ {
 		mux.ServeHTTP(httptest.NewRecorder(), req.Clone(req.Context()))
 	}

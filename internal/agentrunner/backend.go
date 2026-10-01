@@ -40,8 +40,31 @@ func (b *BackendConfig) UnmarshalYAML(n *yaml.Node) error {
 		return err
 	}
 	b.set = map[string]bool{}
+	return b.markKeys(n)
+}
+
+// markKeys records n's mapping keys, following `<<:` merges, and rejects
+// unknown ones.
+func (b *BackendConfig) markKeys(n *yaml.Node) error {
+	if n.Kind == yaml.AliasNode {
+		n = n.Alias
+	}
+	if n.Kind == yaml.SequenceNode {
+		for _, m := range n.Content {
+			if err := b.markKeys(m); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	for i := 0; i+1 < len(n.Content); i += 2 {
 		key := n.Content[i]
+		if key.Tag == "!!merge" {
+			if err := b.markKeys(n.Content[i+1]); err != nil {
+				return err
+			}
+			continue
+		}
 		if !backendKeys[key.Value] {
 			return fmt.Errorf("line %d: unknown backend key %q (known: %s)", key.Line, key.Value, knownKeys())
 		}

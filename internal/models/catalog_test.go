@@ -196,6 +196,7 @@ func TestCatalogValidate(t *testing.T) {
 			StageDefaults: map[Stage]Tier{StagePlan: "small"}}, false},
 		{"duplicate id", Catalog{Models: []Model{{ID: "a"}, {ID: "a"}}}, true},
 		{"invalid id token", Catalog{Models: []Model{{ID: "--model"}}}, true},
+		{"id reads as a tier", Catalog{Models: []Model{{ID: "tier:large"}}}, true},
 		{"model tier not declared", Catalog{Models: []Model{{ID: "a", Tier: "huge"}}}, true},
 		{"stage_defaults key not a stage", Catalog{Tiers: []Tier{"small"},
 			StageDefaults: map[Stage]Tier{"nope": "small"}}, true},

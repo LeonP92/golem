@@ -176,9 +176,16 @@ func TestFleetWaitingFor(t *testing.T) {
 			db.Ticket{ModelBackend: "claude-code", Models: `{"plan":"opus"}`},
 			"waiting for a claude-code shem whose catalog has plan=opus",
 		},
+		{
+			"closed, not waiting",
+			db.Ticket{ModelBackend: "codex", Models: `{"plan":"gpt-big"}`, Phase: "closed"}, "",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.ticket.Phase == "" {
+				tt.ticket.Phase = "unassigned"
+			}
 			if got := f.WaitingFor(tt.ticket); got != tt.want {
 				t.Errorf("WaitingFor = %q, want %q", got, tt.want)
 			}

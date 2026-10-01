@@ -269,7 +269,7 @@ func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := runAgentCmd(cmd); err != nil {
 		// BOTH streams. Claude Code reports most of what goes wrong on
 		// stdout — "Not logged in · Please run /login", an unreadable
 		// setting, a refused tool — and this used to report only stderr, so
@@ -291,7 +291,7 @@ func (c ClaudeCode) RunPhase(ctx context.Context, dir, prompt string, out io.Wri
 	cmd := agentCmd(ctx, c.opts, dir, argv...)
 	cmd.Stdin = strings.NewReader(prompt)
 	cmd.Stdout, cmd.Stderr = out, out
-	if err := cmd.Run(); err != nil {
+	if err := runAgentCmd(cmd); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 	}
 	return nil

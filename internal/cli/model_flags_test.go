@@ -78,8 +78,7 @@ func TestModelFlagsResolvePrecedence(t *testing.T) {
 			want: "",
 		},
 		{
-			// The document comes from the shem; .golem/config.yaml is
-			// agent-writable, so it must not reach that path.
+			// .golem/config.yaml is agent-writable, so role_models is ignored here.
 			name: "backend-config ignores role_models",
 			args: []string{"--backend-config", "/tmp/backend.yaml"},
 			cfg:  &config.Config{RoleModels: map[string]string{"reviewer": "haiku"}},
@@ -247,8 +246,7 @@ func TestBackendConfigKeepsTheRepoConfigOutOfTheShemPath(t *testing.T) {
 	}
 }
 
-// An operator's own command and env reach the agent process end to end, which
-// is what makes a different vendor binary usable without a code change.
+// A backend document's command and env reach the agent process.
 func TestBackendDocumentCommandAndEnvReachTheAgent(t *testing.T) {
 	skipWithoutShell(t)
 	repo, ticketID, sha := observerFixtureRepo(t, "backend: claude-code\n")
@@ -333,6 +331,7 @@ func TestBadBackendFlagsFailFast(t *testing.T) {
 		{"graph update", GraphUpdate, []string{"--repo", repo}},
 		{"observer dispatch", ObserverDispatch, []string{"--repo", repo, "--ticket", "t-1", "--role", "reviewer", "--commit", "HEAD"}},
 		{"ticket close", TicketClose, []string{"--repo", repo, "--ticket", "t-1"}},
+		{"ticket validate", TicketValidate, []string{"--repo", repo, "--ticket", "t-1", "--stage", "spec"}},
 	}
 	bad := map[string][]string{
 		"unknown backend adapter": {"--backend", "nonesuch"},

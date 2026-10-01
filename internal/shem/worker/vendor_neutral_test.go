@@ -8,11 +8,8 @@ import (
 	"testing"
 )
 
-// The shem dispatches through the configured adapter, so no code path here may
-// name a vendor. A literal would reappear as a hard-coded binary or backend
-// name and make a non-claude shem run the wrong thing — which is what
-// `golem init --backend claude-code` and `exec.Command("claude", ...)` both
-// did. Comments and test data are exempt; a string literal is not.
+// The shem runs whichever adapter it is configured with, so no string literal
+// in this package may name a vendor. Comments and test data are exempt.
 func TestNoVendorNameInShemCode(t *testing.T) {
 	// A Go string literal on a line that is not a comment.
 	literal := regexp.MustCompile(`"[^"]*(?i:claude|anthropic|codex|gemini)[^"]*"`)

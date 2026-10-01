@@ -66,29 +66,39 @@ func (h *Handlers) selectionColumns(w http.ResponseWriter, t db.Ticket, raw map[
 			sel[k] = v
 		}
 		for k, v := range raw {
-			sel[k] = v
+			if v != "" {
+				sel[k] = v
+			}
 		}
 	}
 	if backend == "" {
 		backend = t.ModelBackend
 	}
-	var catalogs map[string]models.Catalog
 	if pinned != nil {
 		if backend != "" && backend != pinned.Backend {
 			http.Error(w, fmt.Sprintf("ticket runs on shem %s (%s), not %s", pinned.Name, pinned.Backend, backend), http.StatusBadRequest)
 			return nil, false
 		}
-		backend = pinned.Backend
-		catalogs = map[string]models.Catalog{pinned.Backend: pinned.ModelCatalog()}
-	} else {
-		fleet, err := db.LoadFleet(h.DB)
+		// Only the submitted values must suit this shem: stored ones it lacks
+		// are already dropped when it resolves the ticket.
+		catalogs := map[string]models.Catalog{pinned.Backend: pinned.ModelCatalog()}
+		_, bound, err := models.ValidateSelections(catalogs, pinned.Backend, raw)
 		if err != nil {
-			http.Error(w, "internal error", http.StatusInternalServerError)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return nil, false
 		}
-		catalogs = fleet.Catalogs()
+		if bound == "" {
+			bound = t.ModelBackend
+		}
+		selJSON, _ := json.Marshal(sel)
+		return map[string]any{"models": string(selJSON), "model_backend": bound}, true
 	}
-	out, bound, err := models.ValidateSelections(catalogs, backend, sel)
+	fleet, err := db.LoadFleet(h.DB)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return nil, false
+	}
+	out, bound, err := models.ValidateSelections(fleet.Catalogs(), backend, sel)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return nil, false

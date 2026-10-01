@@ -20,6 +20,9 @@ func (c Catalog) Validate() error {
 		if !ValidModelID(m.ID) {
 			return fmt.Errorf("model id %q is not a valid argv token", m.ID)
 		}
+		if _, isTier := TierRef(m.ID); isTier {
+			return fmt.Errorf("model id %q reads as a tier reference", m.ID)
+		}
 		if m.Tier != "" && !tiers[m.Tier] {
 			return fmt.Errorf("model %q declares tier %q, which is not in tiers %v", m.ID, m.Tier, c.Tiers)
 		}

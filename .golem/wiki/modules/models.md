@@ -16,7 +16,7 @@ resolution. Stdlib only, no catalog data as a runtime source of truth.
 
 ## Functions
 
-- `TierRef` splits a `tier:<label>` value.
+- `TierRef` splits a `tier:<label>` value; `TierValue` builds one.
 - `ValidModelID` reports whether an id is safe as a single argv token.
 - `Catalog.Validate` reports the first structural fault in a catalog.
 - `Catalog.Has` and `Catalog.ValidateSelections`.

@@ -211,3 +211,14 @@ func TestBackendEnvRefusesGolemOwnNames(t *testing.T) {
 		t.Errorf("Validate = %v, want an error naming GOLEM_SHEM_API_KEY", err)
 	}
 }
+
+// A YAML merge key is read through, and its keys count as declared.
+func TestBackendBlockFollowsMergeKeys(t *testing.T) {
+	got, err := LoadBackendConfig(writeDoc(t, "base: &base\n  supports_selection: false\nbackend:\n  <<: *base\n  command: my-claude\n"))
+	if err != nil {
+		t.Fatalf("LoadBackendConfig: %v", err)
+	}
+	if got.SupportsSelection || got.Command != "my-claude" {
+		t.Errorf("got selection=%v command=%q, want false and my-claude", got.SupportsSelection, got.Command)
+	}
+}

@@ -45,18 +45,19 @@ Provides the full REST surface that shem workers and the UI consume. Atomic clai
 catalog and the stage list. `claimResponse` is the only place a `ClaimResponse`
 is built, so `ClaimTicket`, `ReviseClaim` and `resumableTickets` all ship a
 resolved `Backend` and one `Models` entry per stage. `resolveForShem` resolves a
-ticket's selections against one shem's catalog and logs a WARNING for anything
-it dropped or for a ticket bound to another vendor. `shemRow` loads a shem by
-id and errors when there is none — a zero row would read as "matches every
-ticket, resolves everything to the vendor default".
+ticket's selections against one shem's catalog; `warnOnce` logs a WARNING for
+anything dropped, or for a ticket bound to another vendor, once per message.
+`shemRow` loads a shem by id and errors when there is none.
 
-The claim gates are the SQL predicate `model_backend = '' OR model_backend = ?`
-plus a catalog-containment check: a shem whose catalog lacks a selected id
-cannot claim, and `availableTickets` omits the ticket, because another shem of
-that backend may have it.
+The claim update requires `model_backend = '' OR model_backend = ?` and
+`models = ?` (the selections the catalog check saw). A shem whose catalog lacks
+a selected id cannot claim, and `availableTickets` omits the ticket.
+
+`register` rejects a reported catalog that fails `Catalog.Validate`.
 
 `setmodels.go` — `actionSetModels` replaces a ticket's selections on unclaimed,
-non-closed tickets only (409 otherwise). `selectionColumns` validates a
-submission and returns the two columns for a caller to fold into its own
+non-closed tickets (404 unknown, 409 claimed or closed). `selectionColumns`
+validates a submission and returns the two columns for the caller's own
 `Updates`, so `start`, `requeue` and `request-changes` write selections in the
-same statement as their own transition and roll them back together.
+same statement as their transition. Request-changes checks only the submitted
+values, against the assigned shem's own catalog.

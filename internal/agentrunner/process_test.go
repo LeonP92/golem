@@ -4,15 +4,16 @@ import (
 	"context"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
-// The allow-list lives in internal/agentenv and is tested there. What this
-// asserts is that every adapter process is actually built with it, and that an
-// operator's own env block cannot widen it.
+// Every adapter process gets the filtered environment, and an operator's env
+// block cannot add golem's own variables to it.
 func TestAgentCmdStripsGolemSecretsFromEveryAdapterProcess(t *testing.T) {
 	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_agent")
 	t.Setenv("GOLEM_SHEM_API_KEY", "must-not-reach-the-agent")
@@ -40,9 +41,7 @@ func TestAgentCmdStripsGolemSecretsFromEveryAdapterProcess(t *testing.T) {
 	}
 }
 
-// The end-to-end form of the same claim, and the one that would have caught
-// the original state: it puts a fake vendor CLI on PATH, runs the real
-// RunPhase through it, and reads back the environment the agent received.
+// RunPhase through a fake vendor CLI hands the agent the filtered environment.
 func TestRunPhaseGivesTheAgentAScopedEnvironment(t *testing.T) {
 	skipWithoutShell(t)
 	dir := t.TempDir()
@@ -87,5 +86,16 @@ func skipWithoutShell(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake binary is a POSIX shell script")
+	}
+}
+
+// A process that exits 0 while a child still holds its output open succeeded.
+func TestRunAgentCmdAcceptsAnExitedProcessWithALingeringChild(t *testing.T) {
+	skipWithoutShell(t)
+	cmd := exec.Command("sh", "-c", "sleep 2 & exit 0")
+	cmd.Stdout = io.Discard
+	cmd.WaitDelay = 100 * time.Millisecond
+	if err := runAgentCmd(cmd); err != nil {
+		t.Errorf("runAgentCmd = %v, want success", err)
 	}
 }
