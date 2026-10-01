@@ -154,6 +154,10 @@ func (c *Client) Register(name string, repos []string, backend string, catalog m
 		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// An invalid catalog is refused with plain text, not JSON.
+	if err := statusError(resp); err != nil {
+		return 0, err
+	}
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

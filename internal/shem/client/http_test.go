@@ -105,6 +105,22 @@ func TestClient_Register(t *testing.T) {
 	}
 }
 
+// The orchestrator refuses an invalid backend catalog with a plain-text 400;
+// Register must report it, not a JSON decode error.
+func TestClient_Register_RefusalNamesTheReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "backend catalog: no models", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	c.RetryInitial = 10 * time.Millisecond
+	_, err := c.Register("shem-a", nil, "claude-code", models.Catalog{})
+	if err == nil || !strings.Contains(err.Error(), "backend catalog: no models") {
+		t.Errorf("expected the refusal text, got %v", err)
+	}
+}
+
 func TestClient_ClaimTicket_409(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "conflict", http.StatusConflict)
