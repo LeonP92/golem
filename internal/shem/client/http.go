@@ -348,6 +348,45 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 	return seqNum, nil
 }
 
+// GetReaped returns the IDs of tickets the orchestrator's heartbeat reaper
+// released from this shem and nobody has claimed since.
+func (c *Client) GetReaped() ([]string, error) {
+	resp, err := c.do("GET", "/api/tickets/reaped", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := statusError(resp); err != nil {
+		return nil, err
+	}
+	var results []struct {
+		TicketID string `json:"ticket_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(results))
+	for i, r := range results {
+		ids[i] = r.TicketID
+	}
+	return ids, nil
+}
+
+// Reclaim takes back a ticket the reaper released from this shem, restoring
+// the phase it was in. Returns ErrNotAvailable when it is no longer
+// reclaimable — claimed by someone else, requeued, closed or re-gated.
+func (c *Client) Reclaim(ticketID string) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/reclaim", ticketID), nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotAvailable
+	}
+	return statusError(resp)
+}
+
 // statusError returns nil for a 2xx response and otherwise an error naming
 // the status and the start of the body, which is plain text for refusals.
 func statusError(resp *http.Response) error {
