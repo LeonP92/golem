@@ -124,13 +124,18 @@ func (h *Handlers) wsUpgrade(w http.ResponseWriter, r *http.Request) {
 	// Unregisters the connection on any read error (disconnect or close).
 	shemID := shem.ID
 	go func() {
-		defer h.Hub.Unregister(shemID)
+		defer h.Hub.UnregisterConn(shemID, conn)
 		for {
 			_, _, err := conn.ReadMessage()
 			if err != nil {
 				return
 			}
-			h.DB.Model(&db.Shem{}).Where("id = ?", shemID).Update("last_heartbeat", time.Now())
+			// status too, not only the time: the reaper marks a shem
+			// offline on a stale heartbeat, and a shem that was only slow
+			// (never re-registering) otherwise showed offline for good.
+			h.DB.Model(&db.Shem{}).Where("id = ?", shemID).Updates(map[string]any{
+				"last_heartbeat": time.Now(), "status": "online",
+			})
 		}
 	}()
 }

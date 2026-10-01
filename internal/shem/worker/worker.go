@@ -429,6 +429,7 @@ func (w *Worker) pollLoop() {
 			// Self-heal: work whose notification was lost, or that never
 			// had one, is picked up here rather than waiting for a restart
 			// or a person.
+			w.reclaimReaped()
 			if assigned, err := w.client.GetAssigned(); err == nil {
 				w.reviseAssigned(assigned)
 			}
@@ -458,6 +459,44 @@ func (w *Worker) pollLoop() {
 				}
 			}
 		}
+	}
+}
+
+// reclaimReaped takes back tickets the orchestrator's heartbeat reaper
+// released from this shem while they were still running here.
+//
+// The reaper judges a shem dead from a stale heartbeat alone, and a live shem
+// can miss heartbeats — seen when the orchestrator's database stalled for
+// tens of seconds per write. Its tickets went back to unassigned while their
+// agents kept running; the poll loop then skipped them as already running,
+// and each run finished into "ticket not owned by this shem" and started its
+// phase over. A reaped ticket NOT running here is left alone: a normal claim
+// resumes it from its checkpoint.
+func (w *Worker) reclaimReaped() {
+	w.mu.Lock()
+	running := make(map[string]bool, len(w.running))
+	for id := range w.running {
+		running[id] = true
+	}
+	w.mu.Unlock()
+	if len(running) == 0 {
+		return
+	}
+
+	reaped, err := w.client.GetReaped()
+	if err != nil {
+		log.Printf("worker: get reaped tickets: %v", err)
+		return
+	}
+	for _, id := range reaped {
+		if !running[id] {
+			continue
+		}
+		if err := w.client.Reclaim(id); err != nil {
+			log.Printf("worker: reclaim ticket %s: %v", id, err)
+			continue
+		}
+		log.Printf("worker: reclaimed ticket %s — the orchestrator released it on a missed heartbeat while it was still running here", id)
 	}
 }
 

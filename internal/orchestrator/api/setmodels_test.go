@@ -518,3 +518,23 @@ func TestRequestChangesKeepsAStoredSizeTheShemLacks(t *testing.T) {
 		t.Errorf("selections = %v, want revise=haiku over the kept default", sel)
 	}
 }
+
+// A reaped ticket's shem is still running it on the old models, so new
+// selections end the reaped record: the next claim runs the new ones.
+func TestSetModelsEndsTheReapedRecord(t *testing.T) {
+	h, mux, cookie, ticket := setModelsFixture(t)
+	var shem db.Shem
+	h.DB.First(&shem, "name = ?", "node-a")
+	h.DB.Model(&ticket).Updates(map[string]any{"reaped_from_shem": shem.ID, "reaped_from_phase": "implement"})
+
+	w := postModelAction(t, mux, cookie, ticket.ID, url.Values{
+		"action": {"set-models"}, "model_backend": {"claude-code"}, "model_brainstorm": {"opus"},
+	})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	got := reload(t, h, ticket.ID)
+	if got.ReapedFromShem != nil || got.ReapedFromPhase != "" {
+		t.Errorf("reaped record kept: %v %q", got.ReapedFromShem, got.ReapedFromPhase)
+	}
+}

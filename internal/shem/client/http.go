@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/models"
@@ -317,8 +318,14 @@ func (c *Client) PostCheckpoint(ticketID string, phase, sha string) error {
 	if err != nil {
 		return err
 	}
-	_ = resp.Body.Close() // response consumed; a close error changes nothing
-	return nil
+	defer func() { _ = resp.Body.Close() }()
+	// The checkpoint endpoint answers a non-owner with 404 ("not found or
+	// not owner"); 409 is the convention the other ownership-scoped writes
+	// use, so both mean the same here.
+	if resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	return statusError(resp)
 }
 
 // PostLog logs a message to a ticket.
@@ -328,6 +335,15 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// Refusals are plain text. Decoding one as JSON reported
+	// "invalid character 'i' in literal true" — the "ti" of "ticket not
+	// owned" — instead of the refusal itself.
+	if resp.StatusCode == http.StatusConflict {
+		return 0, ErrNotOwner
+	}
+	if err := statusError(resp); err != nil {
+		return 0, err
+	}
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -339,6 +355,55 @@ func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
 		return 0, errors.New("missing sequence_num in response")
 	}
 	return seqNum, nil
+}
+
+// GetReaped returns the IDs of tickets the orchestrator's heartbeat reaper
+// released from this shem and nobody has claimed since.
+func (c *Client) GetReaped() ([]string, error) {
+	resp, err := c.do("GET", "/api/tickets/reaped", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if err := statusError(resp); err != nil {
+		return nil, err
+	}
+	var results []struct {
+		TicketID string `json:"ticket_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&results); err != nil {
+		return nil, err
+	}
+	ids := make([]string, len(results))
+	for i, r := range results {
+		ids[i] = r.TicketID
+	}
+	return ids, nil
+}
+
+// Reclaim takes back a ticket the reaper released from this shem, restoring
+// the phase it was in. Returns ErrNotAvailable when it is no longer
+// reclaimable — claimed by someone else, requeued, closed or re-gated.
+func (c *Client) Reclaim(ticketID string) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/reclaim", ticketID), nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotAvailable
+	}
+	return statusError(resp)
+}
+
+// statusError returns nil for a 2xx response and otherwise an error naming
+// the status and the start of the body, which is plain text for refusals.
+func statusError(resp *http.Response) error {
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return nil
+	}
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
 // PostDocumentFile streams a file to the orchestrator as a document log entry.

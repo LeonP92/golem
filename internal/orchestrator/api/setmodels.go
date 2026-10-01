@@ -22,9 +22,12 @@ func (h *Handlers) actionSetModels(w http.ResponseWriter, r *http.Request, id st
 		return
 	}
 	selJSON, _ := json.Marshal(sel)
+	// A reaped ticket's shem still runs the old models; ending the record
+	// stops it reclaiming, so the next claim runs these.
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND assigned_shem IS NULL AND phase != 'closed'", id).
-		Updates(map[string]any{"models": string(selJSON), "model_backend": bound})
+		Updates(map[string]any{"models": string(selJSON), "model_backend": bound,
+			"reaped_from_shem": nil, "reaped_from_phase": ""})
 	if result.Error != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return

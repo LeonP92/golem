@@ -115,6 +115,8 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 		Where("id = ? AND phase = 'unassigned' AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 			"(model_backend = '' OR model_backend = ?) AND models = ?", ticketID, shem.Backend, ticket.Models).
+		// The phase change also ends any reaped record (Ticket.BeforeUpdate),
+		// so the shem it was reaped from cannot take it from the new owner.
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
 	if result.Error != nil {
 		return nil, result.Error
@@ -136,10 +138,12 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
 	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))
 	mux.Handle("GET /api/tickets/assigned", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.assignedTickets)))
+	mux.Handle("GET /api/tickets/reaped", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reapedTickets)))
 	mux.Handle("GET /api/tickets/{id}",
 		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.getTicket))))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
+	mux.Handle("POST /api/tickets/{id}/reclaim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reclaimTicket)))
 	mux.Handle("PATCH /api/tickets/{id}/phase", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updatePhase)))
 	mux.Handle("PATCH /api/tickets/{id}/checkpoint", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updateCheckpoint)))
 }
