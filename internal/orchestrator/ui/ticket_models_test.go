@@ -110,7 +110,7 @@ func (f *modelFixture) post(t *testing.T, path string, form url.Values) *httptes
 	return w
 }
 
-func TestNewTicketFormOffersEveryStageAndTheCatalogsTiers(t *testing.T) {
+func TestNewTicketFormOffersEveryStageAndTheCatalogsModels(t *testing.T) {
 	f := newModelFixture(t)
 	f.shem(t, "node-a", "claude-code", "opus", "haiku")
 
@@ -123,19 +123,51 @@ func TestNewTicketFormOffersEveryStageAndTheCatalogsTiers(t *testing.T) {
 			t.Errorf("the form has no select for stage %q", st)
 		}
 	}
-	for _, tier := range []string{"tier:small", "tier:large"} {
-		if !strings.Contains(body, `value="`+tier+`"`) {
-			t.Errorf("the form does not offer %q", tier)
-		}
-	}
 	for _, id := range []string{"opus", "haiku"} {
 		if !strings.Contains(body, `value="`+id+`"`) {
 			t.Errorf("the form does not offer model %q", id)
 		}
 	}
-	// The tier group sits above the models.
-	if strings.Index(body, `value="tier:small"`) > strings.Index(body, `value="opus"`) {
-		t.Error("the tier options are below the concrete models")
+	// With one backend a size only duplicates a model, so none is offered.
+	if strings.Contains(body, `value="tier:`) {
+		t.Error("the form offers sizes although only one backend is reported")
+	}
+}
+
+func TestSizesAreOfferedAcrossSeveralBackends(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	f.shem(t, "node-b", "codex", "gpt-max")
+
+	body := f.get(t, "/tickets/new").Body.String()
+	for _, want := range []string{
+		`label="Any shem, by size"`,
+		`value="tier:large"`,
+		"large — opus on claude-code, gpt-max on codex",
+		`label="Only claude-code shems"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the form does not carry %q", want)
+		}
+	}
+	if strings.Index(body, `value="tier:large"`) > strings.Index(body, `value="opus"`) {
+		t.Error("the sizes are below the models")
+	}
+}
+
+// A size stored on the ticket stays selectable with one backend, so saving the
+// panel cannot drop it.
+func TestAStoredSizeStaysSelectedWithOneBackend(t *testing.T) {
+	f := newModelFixture(t)
+	f.shem(t, "node-a", "claude-code", "opus")
+	ticket := f.ticket(t, "t-size", models.Selections{"plan": "tier:large"}, "", "unassigned")
+
+	body := f.get(t, "/tickets/"+ticket.ID).Body.String()
+	if !strings.Contains(body, `value="tier:large" selected`) {
+		t.Error("the stored size is not offered and selected")
+	}
+	if strings.Contains(body, `value="tier:small"`) {
+		t.Error("an unchosen size is offered with one backend")
 	}
 }
 

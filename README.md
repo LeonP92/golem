@@ -446,9 +446,11 @@ and Request changes a `model_revise` one, both usable while a shem is working
 the ticket.
 
 A selection naming a concrete model id binds the ticket to that backend, so
-only a shem running it can claim the ticket. A `tier:<label>` selection binds
-nothing — every backend resolves the tier against its own catalog, so
-`tier:large` means "whatever this machine calls large".
+only a shem running it can claim the ticket. With shems on several backends
+the selects also offer sizes ("Any shem, by size"): a size binds nothing, and
+each backend resolves it against its own catalog, so `large` means "whatever
+this machine calls large". With one backend a size only duplicates a model, so
+the selects list models alone.
 
 A ticket bound to a backend no shem runs shows a `waiting for a <backend> shem`
 badge on the dashboard and a banner on its own page, and waits. Clearing its

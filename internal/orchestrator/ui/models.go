@@ -2,15 +2,26 @@ package ui
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 )
 
+// option is one choice in a model select.
+type option struct{ Value, Label string }
+
+// optionGroup is one labelled group of options.
+type optionGroup struct {
+	Label   string
+	Options []option
+}
+
 // modelSelect is one select: its form field, its label, the text of its empty
-// option, and the value currently chosen.
+// option, the value currently chosen, and its options.
 type modelSelect struct {
 	Field, Label, Empty, Chosen string
+	Groups                      []optionGroup
 }
 
 // modelPickerData is the view-model for the model selects.
@@ -51,6 +62,7 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 		Field:  models.FieldPrefix + models.DefaultKey,
 		Empty:  "Per-stage defaults",
 		Chosen: sel[models.DefaultKey],
+		Groups: modelGroups(out.Backends, out.Backend, cat, sel[models.DefaultKey]),
 	}
 	for _, st := range models.Stages {
 		empty := "Default (vendor)"
@@ -62,6 +74,7 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 			Label:  string(st),
 			Empty:  empty,
 			Chosen: sel[string(st)],
+			Groups: modelGroups(out.Backends, out.Backend, cat, sel[string(st)]),
 		})
 	}
 	return out
@@ -71,7 +84,6 @@ func modelPicker(fleet db.Fleet, backend string, sel map[string]string) modelPic
 // the hidden model_backend the action needs alongside it.
 type singleSelect struct {
 	Select  modelSelect
-	Catalog models.Catalog
 	Backend string
 	Show    bool
 }
@@ -81,8 +93,8 @@ type singleSelect struct {
 // control renders no model field at all.
 func singleModelSelect(p modelPickerData, field, label string) singleSelect {
 	return singleSelect{
-		Select:  modelSelect{Field: field, Label: label, Empty: "unchanged"},
-		Catalog: p.Catalog,
+		Select: modelSelect{Field: field, Label: label, Empty: "unchanged",
+			Groups: modelGroups(p.Backends, p.Backend, p.Catalog, "")},
 		Backend: p.Backend,
 		Show:    len(p.Backends) > 0 && p.Catalog.SupportsSelection,
 	}
@@ -135,4 +147,45 @@ func inStageOrder(m map[models.Stage]string) []stageModel {
 		out = append(out, stageModel{Stage: string(st), Model: m[st]})
 	}
 	return out
+}
+
+// modelGroups lists one select's choices: the backend's models and, when the
+// fleet runs several backends, sizes that resolve on any of them. A size
+// already chosen stays listed, so saving the form cannot drop it.
+func modelGroups(fleet []db.BackendCatalog, backend string, cat models.Catalog, chosen string) []optionGroup {
+	multi := len(fleet) > 1
+	chosenTier, chosenIsTier := models.TierRef(chosen)
+	var sizes []option
+	for _, t := range cat.Tiers {
+		if multi || (chosenIsTier && t == chosenTier) {
+			sizes = append(sizes, option{Value: models.TierValue(t), Label: sizeLabel(fleet, t)})
+		}
+	}
+	var groups []optionGroup
+	if len(sizes) > 0 {
+		groups = append(groups, optionGroup{Label: "Any shem, by size", Options: sizes})
+	}
+	label := "Models"
+	if multi {
+		label = "Only " + backend + " shems"
+	}
+	group := optionGroup{Label: label}
+	for _, m := range cat.Models {
+		group.Options = append(group.Options, option{Value: m.ID, Label: m.Label})
+	}
+	return append(groups, group)
+}
+
+// sizeLabel names a tier and the model it resolves to on each backend.
+func sizeLabel(fleet []db.BackendCatalog, t models.Tier) string {
+	var on []string
+	for _, b := range fleet {
+		if id := b.Catalog.ForTier(t); id != "" {
+			on = append(on, id+" on "+b.Name)
+		}
+	}
+	if len(on) == 0 {
+		return string(t)
+	}
+	return string(t) + " — " + strings.Join(on, ", ")
 }

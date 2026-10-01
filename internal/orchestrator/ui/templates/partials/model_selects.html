@@ -18,36 +18,15 @@
   </select>
   {{end}}
   {{if .Catalog.SupportsSelection}}
-  {{$cat := .Catalog}}
   <select name="{{.Default.Field}}" class="select select-bordered">
-    <option value="">{{.Default.Empty}}</option>
-    <optgroup label="Tiers">
-      {{range $t := $cat.Tiers}}
-      <option value="tier:{{$t}}" {{if eq (printf "tier:%s" $t) $.Default.Chosen}}selected{{end}}>{{$t}} (this worker's choice)</option>
-      {{end}}
-    </optgroup>
-    <optgroup label="Models">
-      {{range $m := $cat.Models}}
-      <option value="{{$m.ID}}" {{if eq $m.ID $.Default.Chosen}}selected{{end}}>{{$m.Label}}</option>
-      {{end}}
-    </optgroup>
+    {{template "model_options" .Default}}
   </select>
   <details class="mt-2">
     <summary class="cursor-pointer text-sm text-base-content/60">Per-stage overrides</summary>
-    {{range $s := .Stages}}
-    <label class="label"><span class="label-text text-sm">{{$s.Label}}</span></label>
-    <select name="{{$s.Field}}" class="select select-bordered select-sm w-full">
-      <option value="">{{$s.Empty}}</option>
-      <optgroup label="Tiers">
-        {{range $t := $cat.Tiers}}
-        <option value="tier:{{$t}}" {{if eq (printf "tier:%s" $t) $s.Chosen}}selected{{end}}>{{$t}} (this worker's choice)</option>
-        {{end}}
-      </optgroup>
-      <optgroup label="Models">
-        {{range $m := $cat.Models}}
-        <option value="{{$m.ID}}" {{if eq $m.ID $s.Chosen}}selected{{end}}>{{$m.Label}}</option>
-        {{end}}
-      </optgroup>
+    {{range .Stages}}
+    <label class="label"><span class="label-text text-sm">{{.Label}}</span></label>
+    <select name="{{.Field}}" class="select select-bordered select-sm w-full">
+      {{template "model_options" .}}
     </select>
     {{end}}
   </details>
@@ -67,17 +46,17 @@
 <input type="hidden" name="model_backend" value="{{.Backend}}">
 <label class="label"><span class="label-text text-sm">{{.Select.Label}}</span></label>
 <select name="{{.Select.Field}}" class="select select-bordered select-sm">
-  <option value="">{{.Select.Empty}}</option>
-  <optgroup label="Tiers">
-    {{range $t := .Catalog.Tiers}}
-    <option value="tier:{{$t}}">{{$t}} (this worker's choice)</option>
-    {{end}}
-  </optgroup>
-  <optgroup label="Models">
-    {{range $m := .Catalog.Models}}
-    <option value="{{$m.ID}}">{{$m.Label}}</option>
-    {{end}}
-  </optgroup>
+  {{template "model_options" .Select}}
 </select>
+{{end}}
+{{end}}
+
+{{define "model_options"}}
+<option value="">{{.Empty}}</option>
+{{$chosen := .Chosen}}
+{{range .Groups}}
+<optgroup label="{{.Label}}">
+  {{range .Options}}<option value="{{.Value}}" {{if eq .Value $chosen}}selected{{end}}>{{.Label}}</option>{{end}}
+</optgroup>
 {{end}}
 {{end}}
