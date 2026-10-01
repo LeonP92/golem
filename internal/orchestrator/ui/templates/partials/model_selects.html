@@ -44,10 +44,12 @@
 {{/* model_backend so a concrete id validates on a ticket whose stored
      model_backend is empty. */}}
 <input type="hidden" name="model_backend" value="{{.Backend}}">
-<label class="label"><span class="label-text text-sm">{{.Select.Label}}</span></label>
-<select name="{{.Select.Field}}" class="select select-bordered select-sm">
-  {{template "model_options" .Select}}
-</select>
+<label class="flex items-center gap-2 text-sm">
+  <span class="text-base-content/70">{{.Select.Label}}</span>
+  <select name="{{.Select.Field}}" class="select select-bordered select-sm">
+    {{template "model_options" .Select}}
+  </select>
+</label>
 {{end}}
 {{end}}
 

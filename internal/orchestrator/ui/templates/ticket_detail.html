@@ -140,7 +140,7 @@
         <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
               hx-on::after-request="if(event.detail.successful) window.location.reload()">
           <input type="hidden" name="action" value="request-changes">
-          {{template "one_model_select" .ReviseSelect}}
+          <div class="mb-3">{{template "one_model_select" .ReviseSelect}}</div>
           <textarea name="feedback" rows="4"
             class="textarea textarea-bordered w-full text-sm"
             placeholder="Describe what needs to change…" required></textarea>
