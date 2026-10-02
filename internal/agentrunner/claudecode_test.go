@@ -148,7 +148,7 @@ func TestGenerateClaudeCodeArtifactsMergesExistingSettings(t *testing.T) {
 
 func TestWorktreeSetupWritesSettingsWithDenyList(t *testing.T) {
 	dir := t.TempDir()
-	cc := ClaudeCode{RepoRoot: dir}
+	cc := ClaudeCode{opts: Options{RepoRoot: dir}}
 	if err := cc.WorktreeSetup(dir); err != nil {
 		t.Fatalf("WorktreeSetup: %v", err)
 	}

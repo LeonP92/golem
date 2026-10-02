@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/models"
 )
 
 type fakeRunner struct {
@@ -19,12 +21,20 @@ type fakeRunner struct {
 	calls  atomic.Int32
 }
 
-func (f *fakeRunner) RunAgent(string, agentrunner.Context) (agentrunner.Result, error) {
+func (f *fakeRunner) Name() string { return "fake" }
+
+func (f *fakeRunner) RunAgent(context.Context, string, agentrunner.Context, string) (agentrunner.Result, error) {
 	f.calls.Add(1)
 	return agentrunner.Result{Output: f.output}, f.err
 }
 
-func (f *fakeRunner) WorktreeSetup(string) error { return nil }
+func (f *fakeRunner) RunPhase(context.Context, string, string, io.Writer, string) error { return nil }
+
+func (f *fakeRunner) WorktreeSetup(string) error                        { return nil }
+func (f *fakeRunner) PrepareHost(string) error                          { return nil }
+func (f *fakeRunner) GenerateArtifacts(string, map[string]string) error { return nil }
+func (f *fakeRunner) ReservedArgs() []string                            { return nil }
+func (f *fakeRunner) DefaultCatalog() models.Catalog                    { return models.Catalog{} }
 
 const goodNarrative = `{"narrative":"The api layer exposes handlers while the store module persists records, so api depends on store for every write path."}`
 

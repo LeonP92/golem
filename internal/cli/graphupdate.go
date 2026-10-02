@@ -10,6 +10,7 @@ import (
 
 	"github.com/leonp92/golem/internal/config"
 	"github.com/leonp92/golem/internal/graph"
+	"github.com/leonp92/golem/internal/models"
 )
 
 func GraphUpdate(args []string, stdout, stderr io.Writer) int {
@@ -17,6 +18,7 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
 	concurrency := fs.Int("concurrency", 4, "max parallel module extractions and narrative calls")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -25,6 +27,15 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(filepath.Join(golemDir, "config.yaml"))
 	if err != nil {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
+		return 1
+	}
+	if err := mf.validate(cfg); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	model, err := mf.resolve(cfg, "graph-builder", models.StageGraph)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 
@@ -125,7 +136,7 @@ func GraphUpdate(args []string, stdout, stderr io.Writer) int {
 			return 1
 		}
 	}
-	narratives := runSubsystemNarratives(cfg, *repo, allGraphs, *concurrency, false, stdout, stderr)
+	narratives := runSubsystemNarratives(mf, model, cfg, *repo, allGraphs, *concurrency, false, stdout, stderr)
 	if err := graph.WriteIndex(wikiDir, allGraphs, narratives); err != nil {
 		fmt.Fprintf(stderr, "writing index: %v\n", err)
 		return 1

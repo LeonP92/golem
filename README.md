@@ -173,8 +173,9 @@ graph:
     - ".graphql"
     - ".proto"
 
-role_models:
+role_models:          # keyed by role, or by stage; the role key wins
   reviewer: claude-opus-4-7
+  graph: claude-haiku-4-5
 
 github:
   repo: your-org/your-repo
@@ -208,7 +209,13 @@ golem ticket new --from-issue <n>              create a ticket from a GitHub iss
 
 golem observer dispatch --ticket <id> --role <role> --commit <sha>
 golem log emit --ticket <id> --role <role> --type <type> <message>
+
+golem models list  --config <shem.yaml>        a backend's tiers, models and per-stage defaults
+golem models probe --config <shem.yaml>        check each catalog model and print the verified block
 ```
+
+Every agent-invoking subcommand takes `--model <id>` for one invocation, and
+`--backend <name>` or `--backend-config <path>` to pick the adapter.
 
 ---
 
@@ -398,7 +405,56 @@ no_push: true   # for local testing; see below
 repos:
   - path: /path/to/local/repo
     remote: https://github.com/your-org/your-repo
+
+backend:
+  adapter: claude-code        # registered adapter name
+  command: claude             # binary; the adapter's default when empty
+  extra_args: ["--add-dir", "/opt/toolchains"]   # appended after the adapter's own args
+  env:                        # extra env for the agent process (not GOLEM_*)
+    ANTHROPIC_BASE_URL: "..."
+  supports_selection: true    # whether the backend accepts a per-call model
+  tiers: [small, medium, large]   # operator labels, cheapest first
+  models:                     # selectable models, in display order
+    - {id: haiku, label: "Haiku", tier: small}
+  stage_defaults:             # the tier each stage falls back to
+    brainstorm: large
 ```
+
+To see the catalog a shem will report, and to check each model against the
+vendor CLI:
+
+```bash
+docker compose exec shem golem models list  --config /etc/golem/shem.yaml
+docker compose exec shem golem models probe --config /etc/golem/shem.yaml   # paste the printed block into shem.yaml
+```
+
+An absent `backend:` block means `claude-code` with its default catalog. A
+block without `models:` keeps the adapter's default models and overrides only
+the catalog keys it sets, so `supports_selection: false` alone turns selection
+off. Unknown keys are an error. The shipped container installs and
+authenticates only `claude`, so another adapter needs a different image.
+`--backend <name>` runs an agent-invoking subcommand against a registered
+adapter with no backend document.
+
+#### Selecting a model
+
+The new-ticket form offers one model select per stage plus a ticket-wide
+default, drawn from the catalogs registered shems have reported. The same panel
+is on the ticket page while the ticket is unclaimed and not closed, with Save
+models and Clear model selections. Re-queue carries a `model_default` select
+and Request changes a `model_revise` one, both usable while a shem is working
+the ticket.
+
+A selection naming a concrete model id binds the ticket to that backend, so
+only a shem running it can claim the ticket. With shems on several backends
+the selects also offer sizes ("Any shem, by size"): a size binds nothing, and
+each backend resolves it against its own catalog, so `large` means "whatever
+this machine calls large". With one backend a size only duplicates a model, so
+the selects list models alone.
+
+A ticket bound to a backend no shem runs shows a `waiting for a <backend> shem`
+badge on the dashboard and a banner on its own page, and waits. Clearing its
+model selections releases it.
 
 `no_push: true` routes `git push` to the local repository instead of a remote, which is ideal for trying Golem out — but it also means **no branch reaches GitHub and no pull request is ever opened**. The shipped `deploy/shem.yaml` keeps it on, because the compose stack's default repositories are a throwaway local one and whatever `GOLEM_REPO_PATH` points at. To get the pull request, set `no_push: false` and give the shem a push credential: `GOLEM_SHEM_GITHUB_TOKEN` in `.env` (the container's entrypoint installs it as an HTTPS credential helper for github.com) or an SSH key. Without one the push fails and the pull request is silently never opened — the ticket still reaches `ready-for-review`.
 

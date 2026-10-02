@@ -3,6 +3,7 @@ package agentenv
 import (
 	"log"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -192,3 +193,21 @@ func passthroughNames(parent []string) map[string]bool {
 // Environ is Filter over this process's own environment. It is what every
 // agent exec site passes to cmd.Env.
 func Environ() []string { return Filter(os.Environ()) }
+
+// FilterPairs returns operator-declared variables as KEY=VALUE pairs, minus
+// golem's own. The allow-list does not apply: the operator named them.
+func FilterPairs(m map[string]string) []string {
+	pairs := make([]string, 0, len(m))
+	for k, v := range m {
+		if k == "" || IsGolemOwned(k) {
+			continue
+		}
+		pairs = append(pairs, k+"="+v)
+	}
+	sort.Strings(pairs)
+	return pairs
+}
+
+// IsGolemOwned reports whether name is golem's own configuration, which never
+// reaches an agent.
+func IsGolemOwned(name string) bool { return denied(name) }

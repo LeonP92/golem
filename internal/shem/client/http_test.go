@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 )
 
@@ -69,11 +70,18 @@ func TestClient_ExhaustsRetries(t *testing.T) {
 }
 
 func TestClient_Register(t *testing.T) {
+	var body struct {
+		Backend struct {
+			Name    string         `json:"name"`
+			Catalog models.Catalog `json:"catalog"`
+		} `json:"backend"`
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/shems/me" {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		json.NewDecoder(r.Body).Decode(&body) //nolint:errcheck
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{"shem_id": 42}) //nolint:errcheck
 	}))
@@ -81,12 +89,35 @@ func TestClient_Register(t *testing.T) {
 
 	c := client.New(srv.URL, "key", "test-shem")
 	c.RetryInitial = 10 * time.Millisecond
-	id, err := c.Register("node-a", []string{"https://github.com/org/repo"})
+	catalog := models.Catalog{SupportsSelection: true, Models: []models.Model{{ID: "opus"}}}
+	id, err := c.Register("node-a", []string{"https://github.com/org/repo"}, "claude-code", catalog)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if id != 42 {
 		t.Errorf("expected id 42, got %d", id)
+	}
+	if body.Backend.Name != "claude-code" {
+		t.Errorf("reported backend = %q, want claude-code", body.Backend.Name)
+	}
+	if len(body.Backend.Catalog.Models) != 1 || body.Backend.Catalog.Models[0].ID != "opus" {
+		t.Errorf("reported catalog = %+v, want one model opus", body.Backend.Catalog)
+	}
+}
+
+// The orchestrator refuses an invalid backend catalog with a plain-text 400;
+// Register must report it, not a JSON decode error.
+func TestClient_Register_RefusalNamesTheReason(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "backend catalog: no models", http.StatusBadRequest)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "shem-a")
+	c.RetryInitial = 10 * time.Millisecond
+	_, err := c.Register("shem-a", nil, "claude-code", models.Catalog{})
+	if err == nil || !strings.Contains(err.Error(), "backend catalog: no models") {
+		t.Errorf("expected the refusal text, got %v", err)
 	}
 }
 

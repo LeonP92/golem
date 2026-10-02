@@ -49,10 +49,15 @@ import (
 // phase check alone let a claimed-but-unapproved ticket (a state that
 // should not arise, but round 4's guard did not defend against it) get
 // double-claimed — see the comment on that clause below.
-func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, reviewedBodyHash string) {
+func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, reviewedBodyHash string, raw map[string]string, backend string) {
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
 		http.Error(w, "ticket not found", http.StatusNotFound)
+		return
+	}
+
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, false, nil)
+	if !ok {
 		return
 	}
 
@@ -70,13 +75,16 @@ func (h *Handlers) actionStart(w http.ResponseWriter, r *http.Request, id, revie
 		// requeue's job, not start's — requeue also pushes ticket_requeued
 		// to the running shem, which start still does not do, so start
 		// must not perform requeue's job under a different name.
+		// One statement, so a refusal or a stale-hash rollback writes no
+		// selections either.
+		updates := map[string]any{"phase": "unassigned", "intake_approved": true}
+		for k, v := range cols {
+			updates[k] = v
+		}
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND issue_number IS NOT NULL AND intake_approved = false "+
 				"AND phase != 'closed' AND assigned_shem IS NULL", id).
-			Updates(map[string]any{
-				"phase":           "unassigned",
-				"intake_approved": true,
-			})
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}

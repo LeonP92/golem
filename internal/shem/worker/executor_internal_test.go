@@ -330,7 +330,7 @@ func TestEnsureRepoReady_PinsGitHubWriteFalse(t *testing.T) {
 	// The graph build/update steps that follow setGitHubWrite may fail here
 	// (no "golem" binary on PATH) — that is fine; we only assert on what
 	// setGitHubWrite already wrote to disk before that point.
-	_ = ensureRepoReady(context.Background(), repoPath)
+	_ = testExecutor(t).ensureRepoReady(context.Background(), repoPath, "")
 
 	data, err := os.ReadFile(configPath)
 	if err != nil {

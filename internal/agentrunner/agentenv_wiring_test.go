@@ -1,6 +1,7 @@
 package agentrunner
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -26,6 +27,7 @@ import (
 // file and returns that path. The prompt arrives on stdin and is discarded.
 func fakeClaude(t *testing.T) string {
 	t.Helper()
+	skipWithoutShell(t)
 	dir := t.TempDir()
 	dump := filepath.Join(dir, "env.txt")
 	script := "#!/bin/sh\nenv > " + dump + "\ncat > /dev/null\n"
@@ -43,8 +45,8 @@ func TestRunAgentGivesTheAgentAScopedEnvironment(t *testing.T) {
 	t.Setenv("ORCHESTRATOR_DB", "/data/orchestrator.db")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-the-agent-needs-this")
 
-	runner := ClaudeCode{RepoRoot: t.TempDir()}
-	if _, err := runner.RunAgent("developer", Context{RolePrompt: "do the thing"}); err != nil {
+	runner := ClaudeCode{opts: Options{RepoRoot: t.TempDir()}}
+	if _, err := runner.RunAgent(context.Background(), "developer", Context{RolePrompt: "do the thing"}, ""); err != nil {
 		t.Fatalf("RunAgent: %v", err)
 	}
 

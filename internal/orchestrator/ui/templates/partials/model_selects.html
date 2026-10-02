@@ -1,0 +1,64 @@
+{{define "model_selects"}}
+{{if .Unreported}}
+<div class="model-selects">
+  <p class="text-sm text-base-content/50">No shem currently reports {{.Backend}}; this ticket's model selections are kept as they are.</p>
+</div>
+{{else if .Backends}}
+<div class="model-selects form-control">
+  <label class="label"><span class="label-text font-medium">Model</span>
+    <span class="label-text-alt text-base-content/50">Larger models for reasoning, smaller for mechanical work</span></label>
+  {{if eq (len .Backends) 1}}
+  <input type="hidden" name="model_backend" value="{{.Backend}}">
+  {{else}}
+  <select name="model_backend" class="select select-bordered" aria-label="Backend"
+          hx-get="/tickets/model-selects"
+          hx-target="closest .model-selects" hx-swap="outerHTML"
+          hx-include="closest .model-selects">
+    {{range .Backends}}<option value="{{.Name}}" {{if eq .Name $.Backend}}selected{{end}}>{{.Name}}</option>{{end}}
+  </select>
+  {{end}}
+  {{if .Catalog.SupportsSelection}}
+  <select name="{{.Default.Field}}" class="select select-bordered" aria-label="Default model">
+    {{template "model_options" .Default}}
+  </select>
+  <details class="mt-2">
+    <summary class="cursor-pointer text-sm text-base-content/60">Per-stage overrides</summary>
+    {{range .Stages}}
+    <label class="label"><span class="label-text text-sm">{{.Label}}</span></label>
+    <select name="{{.Field}}" class="select select-bordered select-sm w-full" aria-label="{{.Label}}">
+      {{template "model_options" .}}
+    </select>
+    {{end}}
+  </details>
+  {{else}}
+  <p class="text-sm text-base-content/50">{{.Backend}} runs a single model.</p>
+  {{end}}
+</div>
+{{else}}
+<p class="text-sm text-base-content/50">No worker has reported a model catalog yet.</p>
+{{end}}
+{{end}}
+
+{{define "one_model_select"}}
+{{if .Show}}
+{{/* model_backend so a concrete id validates on a ticket whose stored
+     model_backend is empty. */}}
+<input type="hidden" name="model_backend" value="{{.Backend}}">
+<label class="flex items-center gap-2 text-sm">
+  <span class="text-base-content/70">{{.Select.Label}}</span>
+  <select name="{{.Select.Field}}" class="select select-bordered select-sm">
+    {{template "model_options" .Select}}
+  </select>
+</label>
+{{end}}
+{{end}}
+
+{{define "model_options"}}
+<option value="">{{.Empty}}</option>
+{{$chosen := .Chosen}}
+{{range .Groups}}
+<optgroup label="{{.Label}}">
+  {{range .Options}}<option value="{{.Value}}" {{if eq .Value $chosen}}selected{{end}}>{{.Label}}</option>{{end}}
+</optgroup>
+{{end}}
+{{end}}

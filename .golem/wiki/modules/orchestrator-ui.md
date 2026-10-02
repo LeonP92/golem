@@ -61,3 +61,25 @@ The ticket-new form requires a `Title` field (used server-side to compute the br
 ## Why
 
 Provides human oversight of agent work: operators can monitor ticket progress, answer agent questions, approve plan/implement phase transitions, acknowledge blockers, and create new tickets without using the JSON API directly.
+
+## Model selection
+
+`models.go` — `modelPickerData` is the view-model for the model selects: the
+reported backends, the selected one, its catalog, a ticket-wide default select
+and one per stage, always built from the selected backend's own catalog. A
+ticket bound to a backend no shem reports is `Unreported`: no selects render,
+so the page cannot rewrite its selections. `modelGroups` builds each select's
+options: the backend's models and, only when several backends are reported,
+sizes labelled with what each resolves to. A size already chosen stays listed.
+`singleModelSelect` builds the standalone requeue and request-changes selects;
+`revisePicker` narrows the revise one to the assigned shem's own catalog.
+`ticketModels` resolves what each stage will run on (the assigned shem's
+catalog once claimed), listed by `inStageOrder`.
+
+The `model_selects` partial renders the panel inside `<div id="ticket-models">`
+(a div, so Clear posts no selects); `one_model_select` renders a standalone
+select with its label. `GET /tickets/model-selects` (`modelSelects`)
+re-renders the panel for a chosen backend over htmx.
+
+`TicketRow.WaitingFor` carries `db.Fleet.WaitingFor` for the dashboard's
+waiting badge, filled from one fleet load per page.

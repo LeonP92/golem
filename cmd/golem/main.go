@@ -29,7 +29,7 @@ var commandGroups = []struct {
 	{"wiki", []string{"wiki"}},
 	{"issue", []string{"issue"}},
 	{"log", []string{"log"}},
-	{"misc", []string{"ask", "answer", "observer", "version"}},
+	{"misc", []string{"ask", "answer", "observer", "models", "version"}},
 }
 
 func init() {
@@ -47,6 +47,7 @@ func init() {
 	commandTable["observer"] = commandEntry{fn: observerDispatch, desc: "Observer commands: dispatch."}
 	commandTable["graph"] = commandEntry{fn: graphDispatch, desc: "Graph commands: build, update, status, who-imports, check-boundary, deps."}
 	commandTable["issue"] = commandEntry{fn: issueDispatch, desc: "GitHub issue commands: list, sync."}
+	commandTable["models"] = commandEntry{fn: modelsDispatch, desc: "Model commands: list, probe."}
 }
 
 func helpCommand(args []string, stdout, stderr io.Writer) int {
@@ -161,6 +162,22 @@ func graphDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.GraphDeps(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintf(stderr, "unknown graph subcommand %q\n", args[0])
+		return 1
+	}
+}
+
+func modelsDispatch(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		fmt.Fprintln(stderr, "usage: golem models <list|probe> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "list":
+		return cli.ModelsList(args[1:], stdout, stderr)
+	case "probe":
+		return cli.ModelsProbe(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown models subcommand %q\n", args[0])
 		return 1
 	}
 }

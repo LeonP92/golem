@@ -1,4 +1,4 @@
-package worker
+package agentrunner
 
 import (
 	"encoding/json"

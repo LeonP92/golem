@@ -41,3 +41,19 @@ Decouples ticket execution from the orchestrator so multiple Shem processes can 
 - `internal/shem/client` — HTTP client for claim/phase/checkpoint/log calls
 - `internal/shem/config` — repo path/remote mapping
 - `internal/orchestrator/ws` — `WSMessage` type for push handler
+
+**Agent** (`agent.go`) is the adapter this shem runs plus the `backend.yaml`
+its nested `golem` subcommands read. `NewAgent` builds the configured adapter
+and writes that document into a temporary run directory, returning a cleanup
+func. `GolemExecutor.claimModel` returns the model the claim resolved for a
+stage, used by the phases and by every agent-invoking subcommand; with no
+models on the claim it falls back to `StageModel`, this shem's own default.
+`subcommandArgs` appends `--backend-config` and `--model`. `runPhase` runs one
+phase through the adapter, teeing output to `agent-<phase>.log`.
+
+`agentlog.go` holds one posting helper, `postLog`, with `postStatus`,
+`postWarning` and `postPhaseStart` wrapping it. `postPhaseStart` records the
+backend and model on the entry. `sanitizeModel` returns a model id the adapter
+can use, or `""` with a WARNING so the stage runs on the vendor default.
+
+`finish.go` holds `finishWorkPhase`, moved out of `executor.go` unchanged.

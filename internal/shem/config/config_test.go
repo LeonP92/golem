@@ -33,6 +33,11 @@ repos:
 }
 
 func TestLoad_Fields(t *testing.T) {
+	// Load honours these as overrides, so a shem's own environment would
+	// otherwise decide what this test reads back.
+	t.Setenv("GOLEM_SHEM_API_KEY", "")
+	t.Setenv("GOLEM_SHEM_NAME", "")
+
 	f, err := os.CreateTemp("", "shem*.yaml")
 	if err != nil {
 		t.Fatal(err)

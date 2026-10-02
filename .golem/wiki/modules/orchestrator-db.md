@@ -5,3 +5,17 @@ Package `internal/orchestrator/db` defines GORM model structs for all six orches
 `User` has a `Role` string column (`not null;default:'developer'`) holding an rbac role name — see `orchestrator-rbac`. Because the default backfills pre-existing rows as `developer`, `Open` runs an idempotent bootstrap (`ensureAdmin`) after `AutoMigrate`: if the users table is non-empty and no row has `role = 'admin'`, the lowest-ID user is promoted to `admin`. That keeps an upgraded deployment (and one whose last admin was deleted out-of-band) from being locked out of user management. The role name is a literal there because `db` must not import `rbac` — `rbac` imports `db`.
 
 `Ticket` also tracks `CreatedByUserID *uint` (nullable, indexed, references `User.ID`), set from the session user at creation time by the API and UI handlers. `CreatorNames(gdb *gorm.DB, tickets []Ticket) map[uint]string` resolves a batch of tickets' `CreatedByUserID` to usernames in a single query, for use by list/detail endpoints and templates that need to render "created by X" without an N+1 lookup.
+
+## Model selection
+
+`Ticket.Models` (JSON selections) and `Ticket.ModelBackend` (the backend its
+ids were validated against; empty means any) join `Shem.Backend` and
+`Shem.Catalog` (the reported catalog, as JSON). `Ticket.ModelSelections` /
+`SetModelSelections` and `Shem.ModelCatalog` decode them, returning an empty
+value on malformed JSON.
+
+`fleet.go` — `Fleet` is every registered shem's reported catalog, loaded once
+by `LoadFleet` (one query; offline rows count, since a catalog describes a
+machine rather than its liveness). `Backends` returns each backend's union
+catalog as a `BackendCatalog`, `Catalog` one by name, `Catalogs` all of them
+keyed by name, and `WaitingFor` why no shem can claim a ticket.

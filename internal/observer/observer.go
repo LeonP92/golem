@@ -1,6 +1,7 @@
 package observer
 
 import (
+	"context"
 	"strings"
 	"sync"
 
@@ -22,15 +23,17 @@ import (
 type Observer struct {
 	logPath string
 	runner  agentrunner.Runner
+	model   string
 
 	mu      sync.Mutex
 	claimed map[string]bool
 }
 
-func New(logPath string, runner agentrunner.Runner) *Observer {
+func New(logPath string, runner agentrunner.Runner, model string) *Observer {
 	return &Observer{
 		logPath: logPath,
 		runner:  runner,
+		model:   model,
 		claimed: make(map[string]bool),
 	}
 }
@@ -80,10 +83,10 @@ func (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) e
 		return nil
 	}
 
-	result, err := o.runner.RunAgent(role, agentrunner.Context{
+	result, err := o.runner.RunAgent(context.Background(), role, agentrunner.Context{
 		Diff:       diff,
 		RolePrompt: rolePrompt,
-	})
+	}, o.model)
 	if err != nil {
 		return err
 	}

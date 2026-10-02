@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 )
 
@@ -49,6 +50,10 @@ type ClaimResponse struct {
 	CheckpointPhase *string       `json:"checkpoint_phase"`
 	CheckpointSHA   *string       `json:"checkpoint_sha"`
 	LogEntries      []db.LogEntry `json:"log_entries"`
+	// Backend is the adapter the claiming shem runs.
+	Backend string `json:"backend"`
+	// Models is every stage's model id; "" means the vendor default.
+	Models map[string]string `json:"models"`
 }
 
 // PendingInput represents a pending human input.
@@ -134,17 +139,25 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 	return nil, fmt.Errorf("exhausted retries for %s %s", method, path)
 }
 
-// Register registers this shem with the orchestrator.
-func (c *Client) Register(name string, repos []string) (uint, error) {
+// Register registers this shem and reports the backend it runs.
+func (c *Client) Register(name string, repos []string, backend string, catalog models.Catalog) (uint, error) {
 	body := map[string]any{
 		"name":  name,
 		"repos": repos,
+		"backend": map[string]any{
+			"name":    backend,
+			"catalog": catalog,
+		},
 	}
 	resp, err := c.do("PUT", "/api/shems/me", body)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
+	// An invalid catalog is refused with plain text, not JSON.
+	if err := statusError(resp); err != nil {
+		return 0, err
+	}
 
 	var result map[string]uint
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {

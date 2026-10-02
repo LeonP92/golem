@@ -1,8 +1,10 @@
 package config
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 	"gopkg.in/yaml.v3"
 )
@@ -26,6 +28,9 @@ type Config struct {
 	// MaxConcurrent is the maximum number of tickets to run in parallel.
 	// Defaults to 1 if unset or zero.
 	MaxConcurrent int `yaml:"max_concurrent"`
+	// Backend is the single backend this shem runs; absent means the default
+	// adapter with its default catalog.
+	Backend *agentrunner.BackendConfig `yaml:"backend"`
 }
 
 // Load reads and parses the YAML config file at path, normalizing repo remote URLs.
@@ -41,6 +46,11 @@ func Load(path string) (*Config, error) {
 	for i := range cfg.Repos {
 		cfg.Repos[i].NormalizedRemote = urlnorm.Normalize(cfg.Repos[i].Remote)
 	}
+	b := agentrunner.ResolveBackend(cfg.Backend)
+	if err := b.Validate(); err != nil {
+		return nil, fmt.Errorf("backend: %w", err)
+	}
+	cfg.Backend = &b
 	// GOLEM_SHEM_API_KEY overrides the config file key so Docker deployments
 	// can inject the key via environment without editing shem.yaml.
 	if key := os.Getenv("GOLEM_SHEM_API_KEY"); key != "" {

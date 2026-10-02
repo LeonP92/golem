@@ -166,6 +166,10 @@ func extractInlineScriptHashes(data []byte) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
+		// Browsers hash after the parser turns CRLF and CR into LF, so a
+		// CRLF checkout must too.
+		rendered = bytes.ReplaceAll(rendered, []byte("\r\n"), []byte("\n"))
+		rendered = bytes.ReplaceAll(rendered, []byte("\r"), []byte("\n"))
 		sum := sha256.Sum256(rendered)
 		hashes = append(hashes, "'sha256-"+base64.StdEncoding.EncodeToString(sum[:])+"'")
 	}

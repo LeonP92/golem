@@ -89,7 +89,7 @@ func TestFullTicketLifecycleWithMockBackend(t *testing.T) {
 		Output: "FINDING: missing package doc comment",
 		Model:  "mock-v1",
 	})
-	obs := observer.New(logPath, mock)
+	obs := observer.New(logPath, mock, "")
 	if err := obs.DispatchForCommit("convention-enforcer", commitSHA, "diff of feature.go", "role prompt"); err != nil {
 		t.Fatalf("DispatchForCommit: %v", err)
 	}

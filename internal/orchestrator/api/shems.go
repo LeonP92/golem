@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
@@ -61,8 +62,12 @@ func (h *Handlers) RegisterShemRoutes(mux *http.ServeMux) {
 func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var body struct {
-		Name  string   `json:"name"`
-		Repos []string `json:"repos"`
+		Name    string   `json:"name"`
+		Repos   []string `json:"repos"`
+		Backend *struct {
+			Name    string         `json:"name"`
+			Catalog models.Catalog `json:"catalog"`
+		} `json:"backend"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -74,9 +79,17 @@ func (h *Handlers) register(w http.ResponseWriter, r *http.Request) {
 	}
 	reposJSON, _ := json.Marshal(normalized)
 	now := time.Now()
-	h.DB.Model(shem).Updates(map[string]any{
-		"repos": string(reposJSON), "status": "online", "last_heartbeat": now,
-	})
+	updates := map[string]any{"repos": string(reposJSON), "status": "online", "last_heartbeat": now}
+	// A nil Backend leaves both columns alone: an older shem must not blank them.
+	if body.Backend != nil {
+		if err := body.Backend.Catalog.Validate(); err != nil {
+			http.Error(w, "backend catalog: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		catalogJSON, _ := json.Marshal(body.Backend.Catalog)
+		updates["backend"], updates["catalog"] = body.Backend.Name, string(catalogJSON)
+	}
+	h.DB.Model(shem).Updates(updates)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"shem_id": shem.ID}) //nolint:errcheck
 }

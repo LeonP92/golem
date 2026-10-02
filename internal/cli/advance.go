@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
 	"github.com/leonp92/golem/internal/gate"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/ticket"
 )
 
@@ -64,6 +66,7 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("ticket", "", "ticket id (required)")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -76,6 +79,10 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(filepath.Join(golemDir, "config.yaml"))
 	if err != nil {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
+		return 1
+	}
+	if err := mf.validate(cfg); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	ticketDir := filepath.Join(golemDir, "tickets", *id)
@@ -96,15 +103,20 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	runner, err := NewRunner(cfg, s.WorktreePath)
+	runner, err := mf.runner(cfg, s.WorktreePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
 		return 1
 	}
-	result, err := runner.RunAgent("reviewer", agentrunner.Context{
+	model, err := mf.resolve(cfg, "reviewer", models.StageReview)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
 		RolePrompt: string(rolePrompt),
-	})
+	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running reviewer: %v\n", err)
 		return 1

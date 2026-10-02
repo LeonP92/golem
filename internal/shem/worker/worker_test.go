@@ -16,6 +16,18 @@ import (
 
 func strPtr(v string) *string { return &v }
 
+// testAgentFor builds an Agent from cfg; an absent backend block resolves to
+// the default adapter.
+func testAgentFor(t *testing.T, cfg *config.Config) *worker.Agent {
+	t.Helper()
+	agent, cleanup, err := worker.NewAgent(cfg)
+	if err != nil {
+		t.Fatalf("NewAgent: %v", err)
+	}
+	t.Cleanup(cleanup)
+	return agent
+}
+
 func TestWorker_ClaimsOnPush(t *testing.T) {
 	claimed := make(chan string, 1)
 
@@ -57,7 +69,7 @@ func TestWorker_ClaimsOnPush(t *testing.T) {
 	}
 	c := client.New(srv.URL, "k", "test-shem")
 	// nil executor = don't actually run golem
-	w := worker.New(cfg, c, nil)
+	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 
@@ -119,7 +131,7 @@ func TestWorker_ReviseOnPush(t *testing.T) {
 		},
 	}
 	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil)
+	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 
@@ -167,7 +179,7 @@ func TestWorker_HandlesRevise409(t *testing.T) {
 		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
 	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil)
+	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 
@@ -214,7 +226,7 @@ func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
 	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil)
+	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 
@@ -258,7 +270,7 @@ func TestWorker_HandlesClaim409(t *testing.T) {
 		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
 	}
 	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil)
+	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
 	go w.Start()
 	defer w.Shutdown()
 

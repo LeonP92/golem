@@ -40,7 +40,7 @@ func TestReclaimReaped_TakesBackOnlyTicketsRunningHere(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := New(&config.Config{}, client.New(srv.URL, "k", "shem-a"), nil)
+	w := New(&config.Config{}, client.New(srv.URL, "k", "shem-a"), nil, nil)
 	w.running["running-1"] = func() {}
 	w.running["running-2"] = func() {}
 	w.running["not-reaped"] = func() {}
@@ -63,6 +63,6 @@ func TestReclaimReaped_IdleShemMakesNoRequest(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 
-	w := New(&config.Config{}, client.New(srv.URL, "k", "shem-a"), nil)
+	w := New(&config.Config{}, client.New(srv.URL, "k", "shem-a"), nil, nil)
 	w.reclaimReaped()
 }

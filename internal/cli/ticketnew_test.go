@@ -146,3 +146,24 @@ func TestTicketNew_DescriptionStartingWithDash(t *testing.T) {
 		})
 	}
 }
+
+// A non-claude shem hands `ticket new` its own backend document, because
+// WorktreeSetup writes vendor-specific files.
+func TestTicketNewUsesTheBackendDocumentsAdapter(t *testing.T) {
+	repo := initRepoForCLI(t)
+	doc := writeBackendDoc(t, "backend:\n  adapter: claude-code\n")
+	var stdout, stderr bytes.Buffer
+
+	code := TicketNew([]string{"--repo", repo, "--id", "t1", "--backend-config", doc, "--", "add-widget"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("TicketNew failed: exit %d, stderr=%s", code, stderr.String())
+	}
+	s, err := ticket.Load(filepath.Join(repo, ".golem", "tickets", "t1"))
+	if err != nil {
+		t.Fatalf("ticket.Load: %v", err)
+	}
+	// claude-code's WorktreeSetup writes .claude/settings.json.
+	if _, err := os.Stat(filepath.Join(s.WorktreePath, ".claude", "settings.json")); err != nil {
+		t.Errorf("the document's adapter did not run WorktreeSetup: %v", err)
+	}
+}

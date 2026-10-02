@@ -2,15 +2,16 @@ package agentrunner
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
 
-	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/models"
 )
 
 const agentFrontmatterTemplate = `---
@@ -78,12 +79,39 @@ func GenerateClaudeCodeArtifacts(repoRoot string, roleContent map[string]string)
 	return os.WriteFile(settingsPath, append(out, '\n'), 0o644)
 }
 
-// ClaudeCode dispatches role invocations as one-shot `claude -p` calls.
-// It stores no credentials — it relies entirely on the host's own
-// `claude` CLI authentication (spec: Backend Adapters).
-type ClaudeCode struct {
-	RepoRoot string
-	Model    string
+func init() {
+	Register("claude-code", func(o Options) Adapter { return ClaudeCode{opts: o} })
+}
+
+// ClaudeCode runs the `claude` CLI with the host's own authentication.
+type ClaudeCode struct{ opts Options }
+
+func (c ClaudeCode) Name() string { return "claude-code" }
+
+// ReservedArgs includes -p because `claude` treats it as --print.
+func (c ClaudeCode) ReservedArgs() []string { return []string{"--print", "-p", "--model"} }
+
+func (c ClaudeCode) argv(model string) ([]string, error) {
+	cmd := c.opts.Command
+	if cmd == "" {
+		cmd = "claude"
+	}
+	args := []string{cmd, "--print"}
+	if model != "" {
+		if !models.ValidModelID(model) {
+			return nil, fmt.Errorf("invalid model id %q", model)
+		}
+		args = append(args, "--model", model)
+	}
+	return append(args, c.opts.ExtraArgs...), nil
+}
+
+// GenerateArtifacts writes the Claude Code subagent definitions and commands.
+func (c ClaudeCode) GenerateArtifacts(repoRoot string, roleContent map[string]string) error {
+	if err := GenerateClaudeCodeArtifacts(repoRoot, roleContent); err != nil {
+		return err
+	}
+	return GenerateClaudeCodeCommands(repoRoot)
 }
 
 const newTicketSkill = `---
@@ -230,31 +258,18 @@ func (c ClaudeCode) WorktreeSetup(worktreePath string) error {
 	return os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o644)
 }
 
-func (c ClaudeCode) RunAgent(role string, ctx Context) (Result, error) {
-	prompt := BuildPrompt(ctx)
-
-	args := []string{"--print"}
-	if c.Model != "" {
-		args = append(args, "--model", c.Model)
+func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model string) (Result, error) {
+	argv, err := c.argv(model)
+	if err != nil {
+		return Result{}, err
 	}
-	cmd := exec.Command("claude", args...)
-	cmd.Dir = c.RepoRoot
-	cmd.Stdin = strings.NewReader(prompt)
-	// The prompt carries untrusted text — BuildPrompt wraps log entries and a
-	// diff, and on a repository synced from GitHub the log's first line is the
-	// issue description — so this process does not get golem's own
-	// environment. Same allow-list as the shem worker's exec site; see
-	// internal/agentenv for why it is shared rather than duplicated.
-	cmd.Env = agentenv.Environ()
-	// And as an unprivileged user where one is configured. Filtering the
-	// environment is only meaningful if the agent cannot read the shem's
-	// memory: as root in the same container it reads /proc/1/environ instead.
-	agentenv.DropPrivileges(cmd)
+	cmd := agentCmd(ctx, c.opts, c.opts.RepoRoot, argv...)
+	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := runAgentCmd(cmd); err != nil {
 		// BOTH streams. Claude Code reports most of what goes wrong on
 		// stdout — "Not logged in · Please run /login", an unreadable
 		// setting, a refused tool — and this used to report only stderr, so
@@ -265,7 +280,21 @@ func (c ClaudeCode) RunAgent(role string, ctx Context) (Result, error) {
 		return Result{}, fmt.Errorf("claude --print failed for role %s: %w%s%s",
 			role, err, labelled("stderr", stderr.String()), labelled("stdout", stdout.String()))
 	}
-	return Result{Output: stdout.String(), Model: c.Model}, nil
+	return Result{Output: stdout.String(), Model: model}, nil
+}
+
+func (c ClaudeCode) RunPhase(ctx context.Context, dir, prompt string, out io.Writer, model string) error {
+	argv, err := c.argv(model)
+	if err != nil {
+		return err
+	}
+	cmd := agentCmd(ctx, c.opts, dir, argv...)
+	cmd.Stdin = strings.NewReader(prompt)
+	cmd.Stdout, cmd.Stderr = out, out
+	if err := runAgentCmd(cmd); err != nil {
+		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
+	}
+	return nil
 }
 
 // maxCapturedStream bounds how much of a failed agent's output reaches the

@@ -20,8 +20,8 @@ var observerRoles = []string{"convention-enforcer", "spec-adherence"}
 // observe runs the observers before the review gate so the reviewer sees
 // their findings. Best effort, like the gate: an observer that cannot run is
 // reported, not fatal to the ticket.
-func observe(ctx context.Context, c *client.Client, repoPath, ticketDir, ticketID, baseBranch string) {
-	if err := runObservers(ctx, repoPath, filepath.Join(ticketDir, "worktree"), ticketID, baseBranch); err != nil {
+func (e *GolemExecutor) observe(ctx context.Context, c *client.Client, repoPath, ticketDir, ticketID, baseBranch, model string) {
+	if err := e.runObservers(ctx, repoPath, filepath.Join(ticketDir, "worktree"), ticketID, baseBranch, model); err != nil {
 		postStatus(c, ticketID, "Observers failed to run: "+firstLineOf(err.Error()))
 		log.Printf("executor: observers for %s: %v", ticketID, err)
 	}
@@ -37,7 +37,7 @@ func observe(ctx context.Context, c *client.Client, repoPath, ticketDir, ticketI
 //
 // With a base branch the review covers the whole branch, not only its last
 // commit — a ticket is several commits, and the rest went unseen.
-func runObservers(ctx context.Context, repoPath, worktree, ticketID, baseBranch string) error {
+func (e *GolemExecutor) runObservers(ctx context.Context, repoPath, worktree, ticketID, baseBranch, model string) error {
 	head, err := worktreeHead(ctx, worktree)
 	if err != nil {
 		return fmt.Errorf("observers: resolving the commit to review: %w", err)
@@ -51,6 +51,7 @@ func runObservers(ctx context.Context, repoPath, worktree, ticketID, baseBranch 
 		if baseBranch != "" {
 			args = append(args, "--base", "origin/"+baseBranch)
 		}
+		args = e.Agent.subcommandArgs(args, model)
 		cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
 		cmd.Dir = repoPath
 		if out, err := cmd.CombinedOutput(); err != nil {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/models"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
@@ -28,6 +29,7 @@ type Worker struct {
 	cfg      *config.Config
 	client   *client.Client
 	executor Executor
+	agent    *Agent
 	wsc      *client.WSClient
 	stop     chan struct{}
 	mu       sync.Mutex
@@ -41,11 +43,12 @@ type Worker struct {
 }
 
 // New creates a new Worker. exec may be nil for testing (skips actual execution).
-func New(cfg *config.Config, c *client.Client, exec Executor) *Worker {
+func New(cfg *config.Config, c *client.Client, exec Executor, agent *Agent) *Worker {
 	return &Worker{
 		cfg:      cfg,
 		client:   c,
 		executor: exec,
+		agent:    agent,
 		stop:     make(chan struct{}),
 		running:  make(map[string]context.CancelFunc),
 	}
@@ -73,7 +76,7 @@ func (w *Worker) Start() {
 	}
 
 	log.Printf("worker: registering with orchestrator (repos: %v)", repos)
-	if _, err := w.client.Register(w.cfg.Name, repos); err != nil {
+	if _, err := w.client.Register(w.cfg.Name, repos, w.agent.Adapter.Name(), w.agent.Catalog); err != nil {
 		log.Printf("worker: register error: %v", err)
 	}
 
@@ -527,8 +530,8 @@ func (w *Worker) Shutdown() {
 // runGraphBuild runs `golem graph build` for one repository and reports the
 // outcome, which is what the repos view displays.
 //
-// The error text is the agent's own — agentrunner reports both of Claude's
-// streams now — so a failure an operator can act on ("Failed to
+// The error text is the agent's own — agentrunner reports both of the vendor
+// CLI's streams — so a failure an operator can act on ("Failed to
 // authenticate", a missing permission) reaches the page rather than an exit
 // status.
 func (w *Worker) runGraphBuild(remote string) {
@@ -545,7 +548,9 @@ func (w *Worker) runGraphBuild(remote string) {
 		log.Printf("worker: %v", err)
 	}
 	log.Printf("worker: building the code graph for %s in %s", remote, repoPath)
-	out, err := asAgent(exec.Command("golem", "graph", "build", "--repo", repoPath)).CombinedOutput() //nolint:gosec
+	args := w.agent.subcommandArgs([]string{"graph", "build", "--repo", repoPath},
+		w.agent.StageModel(models.StageGraph))
+	out, err := asAgent(exec.Command("golem", args...)).CombinedOutput() //nolint:gosec
 	if err != nil {
 		// CombinedOutput rather than the error alone: `golem graph build`
 		// prints why it failed and exits 1, so the exit status on its own

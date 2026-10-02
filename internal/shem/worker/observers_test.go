@@ -5,8 +5,11 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+
+	"github.com/leonp92/golem/internal/models"
 )
 
 // The observers used to be an instruction in the developer role, run by the
@@ -21,14 +24,16 @@ func TestRunObserversDispatchesEachRoleOverTheWholeBranch(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_OAUTH_TOKEN", "the-observer-needs-this")
 	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_observer")
 
-	if err := runObservers(context.Background(), repo, worktree, "t-1", "main"); err != nil {
+	e := testExecutor(t)
+	if err := e.runObservers(context.Background(), repo, worktree, "t-1", "main", "small-model"); err != nil {
 		t.Fatalf("runObservers: %v", err)
 	}
 
 	got := readLines(t, calls)
+	flags := " --backend-config " + e.Agent.ConfigPath + " --model " + e.Agent.StageModel(models.StageObserve)
 	want := []string{
-		"observer dispatch --ticket t-1 --role convention-enforcer --commit " + head + " --base origin/main",
-		"observer dispatch --ticket t-1 --role spec-adherence --commit " + head + " --base origin/main",
+		"observer dispatch --ticket t-1 --role convention-enforcer --commit " + head + " --base origin/main" + flags,
+		"observer dispatch --ticket t-1 --role spec-adherence --commit " + head + " --base origin/main" + flags,
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Errorf("golem was run as\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
@@ -49,7 +54,7 @@ func TestRunObserversSkipsARoleTheRepositoryRemoved(t *testing.T) {
 	repo, worktree, _ := observerFixture(t, "spec-adherence")
 	calls, _ := fakeGolemOnPath(t)
 
-	if err := runObservers(context.Background(), repo, worktree, "t-1", ""); err != nil {
+	if err := testExecutor(t).runObservers(context.Background(), repo, worktree, "t-1", "", ""); err != nil {
 		t.Fatalf("runObservers: %v", err)
 	}
 
@@ -66,7 +71,7 @@ func TestRunObserversReportsARoleThatFailed(t *testing.T) {
 	repo, worktree, _ := observerFixture(t, "convention-enforcer", "spec-adherence")
 	failingGolemOnPath(t)
 
-	err := runObservers(context.Background(), repo, worktree, "t-1", "main")
+	err := testExecutor(t).runObservers(context.Background(), repo, worktree, "t-1", "main", "")
 	if err == nil {
 		t.Fatal("an observer that could not run was reported as success")
 	}
@@ -138,6 +143,9 @@ func failingGolemOnPath(t *testing.T) {
 
 func writeFakeGolem(t *testing.T, dir, script string) {
 	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake golem is a POSIX shell script")
+	}
 	if err := os.WriteFile(filepath.Join(dir, "golem"), []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake golem: %v", err)
 	}

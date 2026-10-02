@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/roles"
 	"github.com/leonp92/golem/internal/ticket"
 )
@@ -68,6 +70,7 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("ticket", "", "ticket id (required)")
 	stage := fs.String("stage", "", "stage to validate: spec|plan (required)")
+	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -81,6 +84,10 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 	cfg, err := config.Load(filepath.Join(golemDir, "config.yaml"))
 	if err != nil {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
+		return 1
+	}
+	if err := mf.validate(cfg); err != nil {
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
 	ticketDir := filepath.Join(golemDir, "tickets", *id)
@@ -119,15 +126,20 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	runner, err := NewRunner(cfg, s.WorktreePath)
+	runner, err := mf.runner(cfg, s.WorktreePath)
 	if err != nil {
 		fmt.Fprintf(stderr, "selecting backend: %v\n", err)
 		return 1
 	}
-	result, err := runner.RunAgent("spec-adherence", agentrunner.Context{
+	model, err := mf.resolve(cfg, "spec-adherence", models.StageValidate)
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	result, err := runner.RunAgent(context.Background(), "spec-adherence", agentrunner.Context{
 		LogSlice:   before,
 		RolePrompt: string(rolePrompt) + "\n\n" + validationInstruction(*stage, *id, artifactName, string(artifact)),
-	})
+	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running spec-adherence: %v\n", err)
 		return 1

@@ -1,0 +1,18 @@
+# The claude-code model catalog. Aliases rather than dated ids, because
+# `claude --model` accepts them and they do not go stale on a model refresh.
+supports_selection: true
+tiers: [small, medium, large]
+models:
+  - {id: haiku,  label: "Haiku — fastest, cheapest", tier: small}
+  - {id: sonnet, label: "Sonnet — balanced",         tier: medium}
+  - {id: opus,   label: "Opus — most capable",       tier: large}
+stage_defaults:
+  brainstorm: large
+  plan: large
+  review: large
+  implement: medium
+  revise: medium
+  validate: medium
+  observe: small
+  pr-description: small
+  graph: small

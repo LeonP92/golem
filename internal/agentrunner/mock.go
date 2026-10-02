@@ -1,6 +1,12 @@
 package agentrunner
 
-import "fmt"
+import (
+	"context"
+	"fmt"
+	"io"
+
+	"github.com/leonp92/golem/internal/models"
+)
 
 // Mock is a scripted Runner used in tests so the ticket lifecycle can be
 // exercised end-to-end without a real model call or token cost
@@ -17,9 +23,14 @@ func (m *Mock) ScriptResponse(role string, result Result) {
 	m.queued[role] = append(m.queued[role], result)
 }
 
-func (m *Mock) WorktreeSetup(_ string) error { return nil }
+func (m *Mock) Name() string                                      { return "mock" }
+func (m *Mock) ReservedArgs() []string                            { return nil }
+func (m *Mock) DefaultCatalog() models.Catalog                    { return models.Catalog{} }
+func (m *Mock) WorktreeSetup(string) error                        { return nil }
+func (m *Mock) PrepareHost(string) error                          { return nil }
+func (m *Mock) GenerateArtifacts(string, map[string]string) error { return nil }
 
-func (m *Mock) RunAgent(role string, _ Context) (Result, error) {
+func (m *Mock) RunAgent(_ context.Context, role string, _ Context, model string) (Result, error) {
 	q := m.queued[role]
 	if len(q) == 0 {
 		return Result{}, fmt.Errorf("mock: no scripted response queued for role %q", role)
@@ -27,4 +38,9 @@ func (m *Mock) RunAgent(role string, _ Context) (Result, error) {
 	result := q[0]
 	m.queued[role] = q[1:]
 	return result, nil
+}
+
+func (m *Mock) RunPhase(_ context.Context, _, _ string, out io.Writer, _ string) error {
+	_, err := io.WriteString(out, "mock phase output\n")
+	return err
 }

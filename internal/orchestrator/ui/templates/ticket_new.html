@@ -94,6 +94,8 @@
                   placeholder="Describe the work to be done in plain language…">{{.Form.Description}}</textarea>
       </div>
 
+      {{template "model_selects" .ModelPicker}}
+
       <div class="flex gap-2 mt-2">
         <button type="submit" class="btn btn-primary gap-1.5">
           <span class="iconify" data-icon="heroicons:ticket"></span>

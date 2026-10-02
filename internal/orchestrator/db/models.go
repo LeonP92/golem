@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/leonp92/golem/internal/models"
 	"gorm.io/gorm"
 )
 
@@ -39,6 +40,10 @@ type Shem struct {
 	LastHeartbeat *time.Time
 	Status        string  `gorm:"not null;default:'offline'"` // online | offline
 	CurrentTicket *string // UUID of the ticket currently being worked on
+	// Backend is the adapter name this shem reported.
+	Backend string `gorm:"not null;default:''" json:"backend"`
+	// Catalog is the model catalog this shem reported, as JSON.
+	Catalog string `gorm:"not null;default:'{}'" json:"catalog"`
 }
 
 // Ticket represents a work ticket assigned to a Shem.
@@ -144,6 +149,12 @@ type Ticket struct {
 	// starting the ticket again puts it back where it was rather than
 	// somewhere a rule had to guess.
 	StoppedFromPhase string `gorm:"not null;default:''" json:"stopped_from_phase"`
+	// Models is the ticket's stage -> model id or "tier:<label>" selections,
+	// as JSON.
+	Models string `gorm:"not null;default:'{}'" json:"models"`
+	// ModelBackend is the backend its model ids were validated against;
+	// empty means any backend.
+	ModelBackend string `gorm:"not null;default:'';index" json:"model_backend"`
 	// ReapedFromShem and ReapedFromPhase record which shem the heartbeat
 	// reaper released this ticket from, and the phase it was in. A missed
 	// heartbeat does not mean the shem is dead — a stalled database delays
@@ -162,6 +173,31 @@ func (s Shem) RepoList() []string {
 	var repos []string
 	json.Unmarshal([]byte(s.Repos), &repos) //nolint:errcheck
 	return repos
+}
+
+// ModelCatalog is the catalog this shem reported, empty if it reported none.
+func (s Shem) ModelCatalog() models.Catalog {
+	var c models.Catalog
+	json.Unmarshal([]byte(s.Catalog), &c) //nolint:errcheck
+	return c
+}
+
+// ModelSelections is the ticket's selections, empty if it has none.
+func (t Ticket) ModelSelections() models.Selections {
+	sel := models.Selections{}
+	json.Unmarshal([]byte(t.Models), &sel) //nolint:errcheck
+	if sel == nil {
+		return models.Selections{}
+	}
+	return sel
+}
+
+func (t *Ticket) SetModelSelections(s models.Selections) {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return
+	}
+	t.Models = string(data)
 }
 
 // BeforeCreate generates a UUID for the ticket ID if not already set.
