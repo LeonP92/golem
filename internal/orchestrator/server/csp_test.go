@@ -261,6 +261,29 @@ func TestInlineScriptHashes_ExactBytesAndSrcSkip(t *testing.T) {
 	}
 }
 
+// Browsers hash a script after the HTML parser turns CRLF and lone CR into
+// LF, so a CRLF checkout must hash the same as an LF one.
+func TestInlineScriptHashes_NormalizesNewlines(t *testing.T) {
+	const lf = "\n  var x = 1;\n  var y = 2;\n"
+	for name, body := range map[string]string{
+		"crlf": "\r\n  var x = 1;\r\n  var y = 2;\r\n",
+		"cr":   "\r  var x = 1;\r  var y = 2;\r",
+	} {
+		fsys := fstest.MapFS{
+			"templates/page.html": &fstest.MapFile{Data: []byte("<script>" + body + "</script>")},
+		}
+		hashes, err := server.InlineScriptHashes(fsys)
+		if err != nil {
+			t.Fatalf("%s: InlineScriptHashes: %v", name, err)
+		}
+		sum := sha256.Sum256([]byte(lf))
+		want := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+		if len(hashes) != 1 || hashes[0] != want {
+			t.Errorf("%s: hashes = %v, want [%s]", name, hashes, want)
+		}
+	}
+}
+
 // TestInlineScriptHashes_HashesRenderedBytesNotSourceBytes is the fix
 // round 2 regression test. html/template elides JavaScript comments while
 // rendering (a line comment is dropped entirely; a block comment collapses
