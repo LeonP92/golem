@@ -54,6 +54,10 @@ func TicketPRDescription(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)
 		return 1
 	}
+	if err := mf.validate(cfg); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	ticketDir := filepath.Join(golemDir, "tickets", *id)
 	s, err := ticket.Load(ticketDir)
 	if err != nil {

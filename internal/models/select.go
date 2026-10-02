@@ -7,10 +7,10 @@ import (
 	"strings"
 )
 
-// ValidateSelections checks raw against the named backend's catalog and
-// returns the selections to store and the backend to bind them to. A
-// tier-only selection binds no backend.
-func ValidateSelections(catalogs map[string]Catalog, backend string, raw map[string]string) (Selections, string, error) {
+// ValidateSelections checks raw against the named backend's shem catalogs,
+// one of which must declare all of it, and returns the selections to store
+// and the backend to bind them to. A tier-only selection binds no backend.
+func ValidateSelections(catalogs map[string][]Catalog, backend string, raw map[string]string) (Selections, string, error) {
 	sel := Selections{}
 	concrete := false
 	for k, v := range raw {
@@ -35,17 +35,17 @@ func ValidateSelections(catalogs map[string]Catalog, backend string, raw map[str
 		}
 		sort.Strings(names)
 		for _, n := range names {
-			if catalogs[n].ValidateSelections(sel) == nil {
+			if validateAny(catalogs[n], sel) == nil {
 				return sel, "", nil
 			}
 		}
 		return nil, "", fmt.Errorf("no registered shem declares %s", Describe(sel))
 	}
-	cat, ok := catalogs[backend]
+	cats, ok := catalogs[backend]
 	if !ok {
 		return nil, "", fmt.Errorf("no registered shem reports backend %q", backend)
 	}
-	if err := cat.ValidateSelections(sel); err != nil {
+	if err := validateAny(cats, sel); err != nil {
 		return nil, "", err
 	}
 	if !concrete {
@@ -54,6 +54,20 @@ func ValidateSelections(catalogs map[string]Catalog, backend string, raw map[str
 		return sel, "", nil
 	}
 	return sel, backend, nil
+}
+
+// validateAny accepts sel if one catalog declares all of it, since a claim
+// needs a single shem with every selected id.
+func validateAny(cats []Catalog, sel Selections) error {
+	for _, c := range cats {
+		if c.ValidateSelections(sel) == nil {
+			return nil
+		}
+	}
+	if err := Union(cats).ValidateSelections(sel); err != nil {
+		return err
+	}
+	return fmt.Errorf("no single shem declares %s", Describe(sel))
 }
 
 // Describe renders sel as "default=opus, plan=sonnet".

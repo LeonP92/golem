@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"embed"
+	"errors"
 	"fmt"
 	"html/template"
 	"io/fs"
@@ -672,9 +673,14 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	pickerBackend := ticket.ModelBackend
 	if ticket.AssignedShem != nil {
 		var s db.Shem
-		if err := h.DB.First(&s, "id = ?", *ticket.AssignedShem).Error; err == nil {
+		err := h.DB.First(&s, "id = ?", *ticket.AssignedShem).Error
+		switch {
+		case err == nil:
 			assigned = &s
 			pickerBackend = s.Backend
+		case !errors.Is(err, gorm.ErrRecordNotFound):
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
 		}
 	}
 

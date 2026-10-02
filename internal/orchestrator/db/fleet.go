@@ -63,13 +63,9 @@ func (f Fleet) Catalog(name string) (models.Catalog, bool) {
 	return models.Union(cats), true
 }
 
-// Catalogs returns every backend's union catalog keyed by name.
-func (f Fleet) Catalogs() map[string]models.Catalog {
-	out := make(map[string]models.Catalog, len(f.order))
-	for _, n := range f.order {
-		out[n] = models.Union(f.byBackend[n])
-	}
-	return out
+// Catalogs returns every backend's per-shem catalogs keyed by name.
+func (f Fleet) Catalogs() map[string][]models.Catalog {
+	return f.byBackend
 }
 
 // WaitingFor returns why no shem can claim t, else "".

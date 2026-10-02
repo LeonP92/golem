@@ -84,7 +84,7 @@ func (h *Handlers) selectionColumns(w http.ResponseWriter, t db.Ticket, raw map[
 		}
 		// Only the submitted values must suit this shem: stored ones it lacks
 		// are already dropped when it resolves the ticket.
-		catalogs := map[string]models.Catalog{pinned.Backend: pinned.ModelCatalog()}
+		catalogs := map[string][]models.Catalog{pinned.Backend: {pinned.ModelCatalog()}}
 		_, bound, err := models.ValidateSelections(catalogs, pinned.Backend, raw)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)

@@ -5,7 +5,11 @@ import "testing"
 func TestValidateSelections(t *testing.T) {
 	claude := testCatalog()
 	single := Catalog{Models: []Model{{ID: "only"}}}
-	catalogs := map[string]Catalog{"claude-code": claude, "single": single}
+	onlyOpus := Catalog{SupportsSelection: true, Models: []Model{{ID: "opus"}}}
+	onlySonnet := Catalog{SupportsSelection: true, Models: []Model{{ID: "sonnet"}}}
+	catalogs := map[string][]Catalog{
+		"claude-code": {claude}, "single": {single}, "split": {onlyOpus, onlySonnet},
+	}
 	tests := []struct {
 		name        string
 		backend     string
@@ -34,6 +38,14 @@ func TestValidateSelections(t *testing.T) {
 			name: "mixed set with one concrete id binds the backend", backend: "claude-code",
 			raw:       map[string]string{"plan": "tier:large", "review": "opus"},
 			wantBound: "claude-code", wantSelKeys: 2,
+		},
+		{
+			name: "one shem declares the whole set", backend: "split",
+			raw: map[string]string{"plan": "opus"}, wantBound: "split", wantSelKeys: 1,
+		},
+		{
+			name: "ids split across shems no one can claim", backend: "split",
+			raw: map[string]string{"plan": "opus", "implement": "sonnet"}, wantErr: true,
 		},
 	}
 	for _, tt := range tests {

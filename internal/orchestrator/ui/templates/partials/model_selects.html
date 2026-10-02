@@ -10,7 +10,7 @@
   {{if eq (len .Backends) 1}}
   <input type="hidden" name="model_backend" value="{{.Backend}}">
   {{else}}
-  <select name="model_backend" class="select select-bordered"
+  <select name="model_backend" class="select select-bordered" aria-label="Backend"
           hx-get="/tickets/model-selects"
           hx-target="closest .model-selects" hx-swap="outerHTML"
           hx-include="closest .model-selects">
@@ -18,14 +18,14 @@
   </select>
   {{end}}
   {{if .Catalog.SupportsSelection}}
-  <select name="{{.Default.Field}}" class="select select-bordered">
+  <select name="{{.Default.Field}}" class="select select-bordered" aria-label="Default model">
     {{template "model_options" .Default}}
   </select>
   <details class="mt-2">
     <summary class="cursor-pointer text-sm text-base-content/60">Per-stage overrides</summary>
     {{range .Stages}}
     <label class="label"><span class="label-text text-sm">{{.Label}}</span></label>
-    <select name="{{.Field}}" class="select select-bordered select-sm w-full">
+    <select name="{{.Field}}" class="select select-bordered select-sm w-full" aria-label="{{.Label}}">
       {{template "model_options" .}}
     </select>
     {{end}}
