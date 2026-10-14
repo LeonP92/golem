@@ -86,7 +86,7 @@ func extractPyFunc(source []byte, decl *sitter.Node, d *StructuralData) {
 	}
 	body := decl.ChildByFieldName("body")
 	sig := strings.TrimSpace(strings.TrimSuffix(signatureBefore(source, decl, body), ":"))
-	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, Signature: sig, Doc: pyBodyDocstring(source, body)})
+	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Signature: sig, Doc: pyBodyDocstring(source, body)})
 }
 
 func extractPyClass(source []byte, decl *sitter.Node, d *StructuralData) {
@@ -105,7 +105,7 @@ func extractPyClass(source []byte, decl *sitter.Node, d *StructuralData) {
 			}
 		}
 	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: pyBodyDocstring(source, body), Fields: fields})
+	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: pyBodyDocstring(source, body), Fields: fields})
 }
 
 func extractPyTopLevelAssign(source []byte, stmt *sitter.Node, d *StructuralData) {

@@ -155,3 +155,55 @@ func TestHeadingAnchor(t *testing.T) {
 		}
 	}
 }
+
+func TestAppendIndexesSourceFiles(t *testing.T) {
+	wiki := t.TempDir()
+	if err := ResetAggregates(wiki); err != nil {
+		t.Fatal(err)
+	}
+	g := ModuleGraph{Module: "pkg", ExportedFuncs: []ExportedFunc{
+		{Name: "Run", File: "pkg/a.go"}, {Name: "Run", File: "pkg/b.go"},
+	}, ExportedTypes: []ExportedType{{Name: "Config", File: "pkg/types.go"}}}
+	if err := AppendSymbols(wiki, g); err != nil {
+		t.Fatal(err)
+	}
+	if err := AppendTypes(wiki, g); err != nil {
+		t.Fatal(err)
+	}
+	for file, paths := range map[string][]string{"symbols.md": {"pkg/a.go", "pkg/b.go"}, "types.md": {"pkg/types.go"}} {
+		data, err := os.ReadFile(filepath.Join(wiki, "graph", file))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, path := range paths {
+			if !strings.Contains(string(data), "`"+path+"`") {
+				t.Errorf("missing %s: %s", path, data)
+			}
+		}
+	}
+	// Old JSON/name-only records must still render, without invented file paths.
+	if err := AppendSymbols(wiki, ModuleGraph{Module: "old", ExportFns: []string{"Legacy"}}); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(wiki, "graph", "symbols.md"))
+	if !strings.Contains(string(data), symbolLine("old", "Legacy", "", 0, 0)) {
+		t.Fatal("legacy fallback missing")
+	}
+}
+
+func TestSymbolLineBackwardCompatibleRanges(t *testing.T) {
+	for _, tc := range []struct {
+		file       string
+		start, end int
+		want       string
+	}{
+		{"", 0, 0, "- `pkg` — Run\n"},
+		{"pkg/a.go", 0, 0, "- `pkg` (`pkg/a.go`) — Run\n"},
+		{"pkg/a.go", 2, 5, "- `pkg` (`pkg/a.go`) [L2-L5] — Run\n"},
+		{"pkg/a.go", 5, 2, "- `pkg` (`pkg/a.go`) — Run\n"},
+	} {
+		if got := symbolLine("pkg", "Run", tc.file, tc.start, tc.end); got != tc.want {
+			t.Fatalf("got %q want %q", got, tc.want)
+		}
+	}
+}

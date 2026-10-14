@@ -146,7 +146,7 @@ func aggregateModule(repoRoot string, mod graph.Module, stderr io.Writer) graph.
 			fmt.Fprintf(stderr, "warning: reading %s: %v\n", relPath, err)
 			continue
 		}
-		d, err := graph.Extract(src, langName)
+		d, err := graph.ExtractFile(src, langName, filepath.ToSlash(relPath))
 		if err != nil {
 			fmt.Fprintf(stderr, "warning: extracting %s: %v\n", relPath, err)
 			continue

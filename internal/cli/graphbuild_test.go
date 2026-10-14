@@ -162,3 +162,19 @@ func writeFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+func TestAggregateModuleRetainsSourceLocations(t *testing.T) {
+	repo := t.TempDir()
+	for file, source := range map[string]string{
+		"a.go": "package p\nfunc Run() {}\ntype Config struct{}\n",
+		"b.go": "package p\nfunc Other() {}\n",
+	} {
+		if err := os.WriteFile(filepath.Join(repo, file), []byte(source), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := aggregateModule(repo, graph.Module{Path: ".", Files: []string{"a.go", "b.go"}}, io.Discard)
+	if len(d.ExportedFuncs) != 2 || d.ExportedFuncs[0].File != "a.go" || d.ExportedFuncs[1].File != "b.go" || d.ExportedTypes[0].File != "a.go" {
+		t.Fatalf("lost locations: %+v", d)
+	}
+}

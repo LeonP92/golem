@@ -1,42 +1,48 @@
-# Code graph token benchmark (local, no LLM calls)
+# Code graph benchmark
 
-Question: does `golem graph build` cut "orientation" tokens by ~50% on a ~50-file repo and ~80% on larger ones, as the README says?
+`symbols.md` and `types.md` list every export with its file and declaration range:
 
-**Short answer: not reproduced.** In this proxy benchmark the graph beats a grep-and-read baseline only if that baseline wastes several file reads. Against a baseline that opens the right file first try, the graph cost more tokens in all three repos. The savings grow with repo size, matching the README's direction, but none reached 80%.
+```
+- `binding` (`binding/form_mapping.go`) [L182-L186] — BindUnmarshaler
+```
 
-## What was measured
+An agent that looks a symbol up reads those 5 lines instead of the 550-line file.
 
-Task: "find where top-level Go symbol X is defined and read what it does". Per repo, a random sample (seed 7) of exported top-level funcs and types with a unique name was used. Tokens are counted with tiktoken `cl100k_base`.
+## Discovery (no model calls)
 
-- **Baseline A (optimistic)**: `git grep -w X` output (first 200 lines), then read the defining file in full. Assumes the first guess is right.
-- **Baseline B (pessimistic)**: same, but the agent first reads up to 3 other files from the grep hits.
-- **Graph arm**: grep `symbols.md` and `types.md` for X, then read the whole module file under `.golem/wiki/graph/modules/` for the matching package.
+**Range reads.** Tokens to find a symbol and read its definition: whole defining file vs. the indexed range. 200 random indexed names per repo, `cl100k_base`, lookup output counted in both.
 
-Graphs were built with `golem graph build`. No `claude` backend was available, so the LLM-written subsystem narratives are missing. They only live in the index, which this arm never reads, but a real graph has them.
+| Repo | Whole file | Range | Reduction |
+|---|---:|---:|---:|
+| gin | 12,928 | 172 | 98.7% |
+| Django | 4,552 | 453 | 90.1% |
+| VS Code | 7,454 | 476 | 93.6% |
+| Kubernetes | 12,510 | 643 | 94.9% |
 
-## Results (mean tokens per lookup)
+**Lookup speed.** Finding a symbol's defining files: source search vs. graph search, warm cache, median of 3 rounds.
 
-| Repo | Go files (non-test) | Symbols | Baseline A | Baseline B | Graph | Graph vs A | Graph vs B |
-|---|---|---|---|---|---|---|---|
-| gin-gonic/gin | 59 | 60 | 2,620 | 15,369 | 14,125 | -439.1% | 8.1% |
-| LeonP92/golem | 135 | 200 | 2,366 | 8,267 | 4,074 | -72.2% | 50.7% |
-| kubernetes/kubernetes | 10021 | 200 | 12,083 | 36,019 | 15,785 (17,540 vs B) | -30.6% | 51.3% |
+| Scope | Files | Source | Graph | Paths found |
+|---|---:|---:|---:|---:|
+| Django `django/` | 907 | 8.11 ms | 1.87 ms | 143/143 |
+| VS Code `src/` | 10,410 | 82.09 ms | 4.48 ms | 97/99 |
 
-Negative means the graph used more tokens. On kubernetes 6% of sampled symbols were missing from the graph. A miss is charged as the graph lookup plus the baseline cost, and that is included above. That is why kubernetes has two graph means: a miss falls back to baseline A in one comparison and to baseline B in the other.
+**Keeping it current.** `graph update` after a one-file commit: gin 0.19 s, Django 0.08 s, VS Code 0.84 s, Kubernetes 0.76 s (narrative calls stubbed).
 
-Size of the graph artifacts a model would have to avoid reading whole: kubernetes `symbols.md` + `types.md` is about 1,332,503 tokens and `index.md` about 167,459. Both only work through grep.
+Example (Kubernetes `GetVolumesToMount`): whole file 7,059 tokens, range `L586-L616` 375 tokens.
 
-## Reading
+These show what a lookup costs when an agent uses the index. The baseline reads whole files; an agent that greps and reads a slice pays less than that. C is not indexed.
 
-- Package-level module files are big in large packages, so one lookup often costs more than reading the single defining file.
-- The graph helps when the agent would otherwise wander through grep hits. That is the realistic case on a huge repo, but this benchmark does not measure it.
-- This is a locate-a-symbol proxy, not a real agent session. Real agents also use directory listings, search tools and the model's own prior knowledge. A proper test needs real model runs (paid) on fixed tickets, comparing tokens with and without the graph.
+## Agent run (gin)
 
-## Follow-ups
+One ticket on gin `0f09c3a` (59 Go files): add MessagePack to `Context.Negotiate`, keeping the `nomsgpack` build tag working. Three runs per arm in fresh `golem-shem` containers, same spec, plan on Opus, implement on Sonnet. Medians:
 
-- The README no longer states "~50% / ~80%"; restate a number only once a model-run benchmark backs it.
-- Module graph files could be split per file, or symbol lines could carry file paths and signatures, so a lookup does not need the whole module file.
+| Arm | Passed | Cost | Time | Input tokens | Output tokens |
+|---|---:|---:|---:|---:|---:|
+| golem (graph with ranges) | 3/3 | $0.57 | 117 s | 641k | 12.3k |
+| plain `claude` | 3/3 | $0.58 | 135 s | 521k | 16.4k |
 
-## How it was run
+Plan phase alone: golem $0.30 / 55 s, plain $0.39 / 78 s (23% cheaper, 29% faster). Both start from the same ~17k context. Golem used 225k input vs 194k only because it made one more request (8 vs 7), and every request resends the whole context. It wrote shorter plans (6.0k vs 8.1k Opus output tokens), which is where the saving comes from.
 
-On shallow clones, after `golem init` and `golem graph build`, with a throwaway Python script using `git grep` and tiktoken. 2026-10-13, golem main fdcc808.
+"Passed" is hidden acceptance tests plus `go test ./...` and `go vet -tags nomsgpack ./...`. Golem's validation, observer and review gates were not run.
+
+The agents never opened `symbols.md` or `types.md`; on 59 files they found the code with `grep -n`. So this run compares golem with plain Claude, not ranges with no ranges.

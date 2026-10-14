@@ -96,6 +96,22 @@ func Extract(source []byte, langName string) (*StructuralData, error) {
 	return d, nil
 }
 
+// ExtractFile is Extract with repo-relative source locations attached to each
+// exported declaration. The caller supplies a path, never an absolute filename.
+func ExtractFile(source []byte, langName, relPath string) (*StructuralData, error) {
+	d, err := Extract(source, langName)
+	if err != nil {
+		return nil, err
+	}
+	for i := range d.ExportedFuncs {
+		d.ExportedFuncs[i].File = relPath
+	}
+	for i := range d.ExportedTypes {
+		d.ExportedTypes[i].File = relPath
+	}
+	return d, nil
+}
+
 // nodeText returns the source text spanned by n.
 func nodeText(source []byte, n *sitter.Node) string {
 	return string(source[n.StartByte():n.EndByte()])
@@ -233,6 +249,7 @@ func extractGoFunc(source []byte, decl *sitter.Node, d *StructuralData) {
 	}
 	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{
 		Name:      nm,
+		StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl),
 		Signature: signatureBefore(source, decl, decl.ChildByFieldName("body")),
 		Doc:       collectDocAbove(source, decl, goDoc),
 	})
@@ -272,7 +289,8 @@ func extractGoTypes(source []byte, decl *sitter.Node, d *StructuralData) {
 			doc = collectDocAbove(source, decl, goDoc)
 		}
 		d.ExportedTypes = append(d.ExportedTypes, ExportedType{
-			Name:   nm,
+			Name:      nm,
+			StartLine: sourceStartLine(spec), EndLine: sourceEndLine(spec),
 			Doc:    doc,
 			Fields: extractGoTypeMembers(source, spec.ChildByFieldName("type")),
 		})
@@ -370,4 +388,27 @@ func extractGoConsts(source []byte, decl *sitter.Node, d *StructuralData) {
 			}
 		}
 	}
+}
+
+// Source ranges are 1-based and inclusive. Include decorators/export wrappers
+// and immediately adjacent comments so a bounded read keeps local context.
+func sourceStartLine(n *sitter.Node) int {
+	if parent := n.Parent(); parent != nil && (parent.Kind() == "decorated_definition" || parent.Kind() == "export_statement" || parent.Kind() == "type_declaration") {
+		n = parent
+	}
+	start := n.StartPosition().Row
+	for prev := n.PrevNamedSibling(); prev != nil && (prev.Kind() == "comment" || prev.Kind() == "line_comment" || prev.Kind() == "block_comment") && prev.EndPosition().Row+1 >= start; prev = prev.PrevNamedSibling() {
+		start = prev.StartPosition().Row
+	}
+	return int(start) + 1
+}
+func sourceEndLine(n *sitter.Node) int {
+	if parent := n.Parent(); parent != nil && parent.Kind() == "type_declaration" {
+		n = parent
+	}
+	end := n.EndPosition()
+	if end.Column == 0 && end.Row > n.StartPosition().Row {
+		return int(end.Row)
+	}
+	return int(end.Row) + 1
 }

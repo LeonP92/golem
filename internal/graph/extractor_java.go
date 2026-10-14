@@ -82,7 +82,7 @@ func extractJavaType(source []byte, decl *sitter.Node, d *StructuralData) {
 	if body := decl.ChildByFieldName("body"); body != nil {
 		walk(body)
 	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: collectDocAbove(source, decl, javaDoc), Fields: fields})
+	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: collectDocAbove(source, decl, javaDoc), Fields: fields})
 }
 
 func extractJavaMethod(source []byte, decl *sitter.Node, d *StructuralData) {
@@ -92,6 +92,7 @@ func extractJavaMethod(source []byte, decl *sitter.Node, d *StructuralData) {
 	}
 	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{
 		Name:      nm,
+		StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl),
 		Signature: signatureBefore(source, decl, decl.ChildByFieldName("body")),
 		Doc:       collectDocAbove(source, decl, javaDoc),
 	})

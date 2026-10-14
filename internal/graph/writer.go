@@ -99,7 +99,7 @@ func WriteModule(wikiDir string, g ModuleGraph) error {
 }
 
 func AppendSymbols(wikiDir string, g ModuleGraph) error {
-	if len(g.ExportFns) == 0 {
+	if len(g.ExportFns) == 0 && len(g.ExportedFuncs) == 0 {
 		return nil
 	}
 	f, err := os.OpenFile(filepath.Join(wikiDir, "graph", "symbols.md"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -109,17 +109,24 @@ func AppendSymbols(wikiDir string, g ModuleGraph) error {
 	// Both the writes and the close are checked: this appends to a file on
 	// disk, so a dropped error here loses wiki content silently — the caller
 	// is told the append succeeded and nothing was written.
-	for _, fn := range g.ExportFns {
-		if _, err := fmt.Fprintf(f, "- `%s` — %s\n", g.Module, fn); err != nil {
-			f.Close() //nolint:errcheck // the write error is the one worth reporting
+	records := g.ExportedFuncs
+	if len(records) == 0 {
+		for _, name := range g.ExportFns {
+			records = append(records, ExportedFunc{Name: name})
+		}
+	}
+	for _, fn := range records {
+		if _, err := f.WriteString(symbolLine(g.Module, fn.Name, fn.File, fn.StartLine, fn.EndLine)); err != nil {
+			f.Close() //nolint:errcheck
 			return fmt.Errorf("append to fns: %w", err)
 		}
 	}
+
 	return f.Close()
 }
 
 func AppendTypes(wikiDir string, g ModuleGraph) error {
-	if len(g.ExportTypes) == 0 {
+	if len(g.ExportTypes) == 0 && len(g.ExportedTypes) == 0 {
 		return nil
 	}
 	f, err := os.OpenFile(filepath.Join(wikiDir, "graph", "types.md"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
@@ -129,13 +136,32 @@ func AppendTypes(wikiDir string, g ModuleGraph) error {
 	// Both the writes and the close are checked: this appends to a file on
 	// disk, so a dropped error here loses wiki content silently — the caller
 	// is told the append succeeded and nothing was written.
-	for _, t := range g.ExportTypes {
-		if _, err := fmt.Fprintf(f, "- `%s` — %s\n", g.Module, t); err != nil {
-			f.Close() //nolint:errcheck // the write error is the one worth reporting
+	records := g.ExportedTypes
+	if len(records) == 0 {
+		for _, name := range g.ExportTypes {
+			records = append(records, ExportedType{Name: name})
+		}
+	}
+	for _, t := range records {
+		if _, err := f.WriteString(symbolLine(g.Module, t.Name, t.File, t.StartLine, t.EndLine)); err != nil {
+			f.Close() //nolint:errcheck
 			return fmt.Errorf("append to ts: %w", err)
 		}
 	}
+
 	return f.Close()
+}
+
+// Keep the symbol last so existing exact-name grep patterns still work.
+// Records without a file (built before locations were indexed) render module-only.
+func symbolLine(module, name, file string, start, end int) string {
+	if file == "" {
+		return fmt.Sprintf("- `%s` — %s\n", module, name)
+	}
+	if start > 0 && end >= start {
+		return fmt.Sprintf("- `%s` (`%s`) [L%d-L%d] — %s\n", module, file, start, end, name)
+	}
+	return fmt.Sprintf("- `%s` (`%s`) — %s\n", module, file, name)
 }
 
 // SubsystemNarratives maps a subsystem name to its cluster narrative.
