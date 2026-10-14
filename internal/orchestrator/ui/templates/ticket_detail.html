@@ -244,6 +244,23 @@
           {{end}}
         </dl>
 
+        {{/* Approval mode. Editable under the same conditions as the models below:
+             the shem reads it once, when it claims the ticket. */}}
+        <div id="ticket-approval-mode" class="mb-4 text-sm">
+          <span class="text-base-content/50">Approval mode</span>
+          <span class="badge badge-sm ml-2 {{if .Ticket.ManualApproval}}badge-warning{{else}}badge-ghost{{end}}">
+            {{if .Ticket.ManualApproval}}manual: approve spec and plan{{else}}automatic: validation only{{end}}
+          </span>
+          {{if and (not .Ticket.AssignedShem) (ne .Ticket.Phase "closed")}}
+          <button type="button" class="btn btn-xs ml-2"
+                  hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+                  hx-vals='{"action":"set-approval-mode","manual_approval":"{{if .Ticket.ManualApproval}}false{{else}}true{{end}}"}'
+                  hx-on::after-request="if(event.detail.successful) window.location.reload()">
+            Switch to {{if .Ticket.ManualApproval}}automatic{{else}}manual{{end}}
+          </button>
+          {{end}}
+        </div>
+
         {{/* The editable panel only while unclaimed and not closed — the two
              conditions set-models itself enforces, so the page never offers a
              control that can only 409. */}}

@@ -74,6 +74,9 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		ReviewedBodyHash string            `json:"reviewed_body_hash"`
 		Models           map[string]string `json:"models"`
 		Backend          string            `json:"backend"`
+		// ManualApproval is read by set-approval-mode only. A pointer so an
+		// absent value is refused rather than read as "turn approvals off".
+		ManualApproval *bool `json:"manual_approval"`
 	}
 
 	ct := r.Header.Get("Content-Type")
@@ -113,6 +116,10 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			body.InputID = uint(id64)
 		}
 		body.Models, body.Backend = models.FromValues(r.PostForm)
+		if v := r.PostForm.Get("manual_approval"); v == "true" || v == "false" {
+			b := v == "true"
+			body.ManualApproval = &b
+		}
 	} else {
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Action == "" {
 			http.Error(w, "action is required", http.StatusBadRequest)
@@ -144,6 +151,12 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		h.actionRequestChanges(w, r, id, body.Feedback, body.Models, body.Backend)
+	case "set-approval-mode":
+		if body.ManualApproval == nil {
+			http.Error(w, "manual_approval (true or false) is required for set-approval-mode", http.StatusBadRequest)
+			return
+		}
+		h.actionSetApprovalMode(w, r, id, *body.ManualApproval)
 	case "set-models":
 		h.actionSetModels(w, r, id, body.Models, body.Backend)
 	case "answer":

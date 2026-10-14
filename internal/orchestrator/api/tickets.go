@@ -54,6 +54,8 @@ type ClaimResponse struct {
 	Backend string `json:"backend"`
 	// Models is every stage's model id; "" means the vendor default.
 	Models map[string]string `json:"models"`
+	// ManualApproval: pause for a human after brainstorm and after plan.
+	ManualApproval bool `json:"manual_approval"`
 }
 
 // ClaimTicket atomically claims a ticket for shemID. Exactly one concurrent
@@ -236,6 +238,8 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 		Description string            `json:"description"`
 		Backend     string            `json:"backend"`
 		Models      map[string]string `json:"models"`
+		// ManualApproval: require a human to approve the spec and the plan.
+		ManualApproval bool `json:"manual_approval"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -248,13 +252,14 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 	user := auth.SessionUser(r)
 	id := uuid.NewString()
 	ticket := db.Ticket{
-		ID:          id,
-		RepoRemote:  urlnorm.Normalize(body.RepoRemote),
-		BaseBranch:  body.Branch,
-		Title:       body.Title,
-		Branch:      slug.Branch(body.Title, id),
-		Description: body.Description,
-		Phase:       "unassigned",
+		ID:             id,
+		RepoRemote:     urlnorm.Normalize(body.RepoRemote),
+		BaseBranch:     body.Branch,
+		Title:          body.Title,
+		Branch:         slug.Branch(body.Title, id),
+		Description:    body.Description,
+		Phase:          "unassigned",
+		ManualApproval: body.ManualApproval,
 	}
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID

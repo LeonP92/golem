@@ -121,10 +121,9 @@ func (h *Handlers) resolveHumanInput(w http.ResponseWriter, r *http.Request) {
 	// and the key is in the environment) could answer the question that was
 	// meant for a person.
 	//
-	// Still load-bearing after brainstorm and plan approvals became
-	// automatic: those stages no longer create approval rows, but intake
-	// does, and "the shem cannot close a human's question" should not depend
-	// on which rows happen to exist today.
+	// Brainstorm and plan create approval rows for manual-approval tickets,
+	// and intake always does, so this clause is what keeps "the shem cannot
+	// close a human's question" true whichever rows exist.
 	result := h.DB.Model(&db.HumanInput{}).
 		Where("id = ? AND ticket_id = ? AND resolved_at IS NULL AND kind = ?", inputID, id, "feedback").
 		Updates(map[string]any{

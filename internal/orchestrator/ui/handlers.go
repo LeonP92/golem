@@ -510,6 +510,8 @@ type ticketForm struct {
 	Description string
 	Models      map[string]string
 	Backend     string
+	// ManualApproval is the "require my approval after spec and plan" box.
+	ManualApproval bool
 }
 
 // shemsRepos returns the deduplicated union of repos registered by all shems.
@@ -562,6 +564,8 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		Description: r.FormValue("description"),
 		Models:      rawModels,
 		Backend:     backend,
+		// A checkbox is absent from the body when unticked.
+		ManualApproval: r.FormValue("manual_approval") != "",
 	}
 	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
 		h.renderTicketNew(w, r, form, "All fields are required.")
@@ -570,13 +574,14 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 	user := auth.SessionUser(r)
 	id := uuid.NewString()
 	ticket := db.Ticket{
-		ID:          id,
-		RepoRemote:  urlnorm.Normalize(form.RepoRemote),
-		BaseBranch:  form.BaseBranch,
-		Title:       form.Title,
-		Branch:      slug.Branch(form.Title, id),
-		Description: form.Description,
-		Phase:       "unassigned",
+		ID:             id,
+		RepoRemote:     urlnorm.Normalize(form.RepoRemote),
+		BaseBranch:     form.BaseBranch,
+		Title:          form.Title,
+		Branch:         slug.Branch(form.Title, id),
+		Description:    form.Description,
+		Phase:          "unassigned",
+		ManualApproval: form.ManualApproval,
 	}
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID
