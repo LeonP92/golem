@@ -108,7 +108,9 @@ golem graph update             # incremental — only changed modules since last
 golem graph status             # show what's stale
 ```
 
-The graph-builder agent analyses each module and writes structured summaries — exports, types, imports, subsystem — into `.golem/wiki/graph/`, included in wiki search. Language-agnostic.
+Module pages (exports, types, imports, subsystem) are extracted with tree-sitter for Go, Python, JS/TS, Rust, Java and Ruby, and written to `.golem/wiki/graph/`. The graph-builder agent writes one short narrative per subsystem.
+
+`symbols.md` and `types.md` give each export's file and line range, e.g. ``- `pkg` (`pkg/a.go`) [L2-L5] — Run``, so agents read only that slice. Ranges reflect the last indexed commit; `graph update` (also run at `ticket close`) re-extracts changed modules.
 
 #### Wiki
 

@@ -102,7 +102,7 @@ func rubyAddMethod(source []byte, decl *sitter.Node, owner string, d *Structural
 		qualified = owner + "#" + nm
 	}
 	sig += nm + fieldText(source, decl, "parameters")
-	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: qualified, Signature: sig, Doc: rubyDocAbove(source, decl)})
+	d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: qualified, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Signature: sig, Doc: rubyDocAbove(source, decl)})
 }
 
 // rubyExtractType records a class/module (attr_* calls as fields) and its
@@ -146,7 +146,7 @@ func rubyExtractType(source []byte, decl *sitter.Node, outer string, d *Structur
 			}
 		}
 	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: rubyDocAbove(source, decl), Fields: fields})
+	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: rubyDocAbove(source, decl), Fields: fields})
 	for _, n := range nested {
 		rubyExtractType(source, n, nm, d)
 	}

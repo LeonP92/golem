@@ -42,6 +42,7 @@ func extractRust(source []byte, root *sitter.Node) *StructuralData {
 		case "function_item":
 			d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{
 				Name:      nm,
+				StartLine: sourceStartLine(c), EndLine: sourceEndLine(c),
 				Signature: signatureBefore(source, c, c.ChildByFieldName("body")),
 				Doc:       collectDocAbove(source, c, rustDoc),
 			})
@@ -98,5 +99,5 @@ func rustAddType(source []byte, decl *sitter.Node, nm string, d *StructuralData,
 			}
 		}
 	}
-	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: collectDocAbove(source, decl, rustDoc), Fields: fields})
+	d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: collectDocAbove(source, decl, rustDoc), Fields: fields})
 }

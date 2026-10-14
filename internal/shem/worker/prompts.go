@@ -210,17 +210,21 @@ Spec: .golem/tickets/%s/spec.md
 Instructions:
 1. Read .golem/roles/developer.md for planning guidelines.
 2. Read the spec: cat .golem/tickets/%s/spec.md
-3. Write an ordered implementation plan to .golem/tickets/%s/plan.md.
+3. Find the code before reading it: grep each symbol by exact name in
+   .golem/wiki/graph/symbols.md and types.md (never read those files whole),
+   then read only the listed file and [Lstart-Lend] range. Search source
+   directly only for what the graph does not list.
+4. Write an ordered implementation plan to .golem/tickets/%s/plan.md.
    The plan must be detailed enough for autonomous implementation.
    Each step must include:
    - What to do (clear description)
    - Exact commands or code snippets to run/write (shell blocks, language-appropriate code snippets)
    - Expected diff line count
    Format: use markdown with ## headings per step and fenced code blocks.
-4. Log the completion:
+5. Log the completion:
    golem log emit --ticket %s --role developer --type STATUS "Plan complete: <one-line summary>"
 
-STOP after step 4. Do NOT run golem ticket advance or begin any implementation.
+STOP after step 5. Do NOT run golem ticket advance or begin any implementation.
 A human will review your plan in the orchestrator UI and approve before implementation begins.`,
 		ticketID, fenceDescription(description), ticketID, feedbackSection, ticketID, ticketID, ticketID)
 }

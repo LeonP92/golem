@@ -3,9 +3,14 @@ package graph
 // ExportedFunc is a single exported/public function extracted from source.
 // Signature is language-appropriate (Go: "func Foo(x int) error"; Python:
 // "def foo(x: int) -> None:"; etc.). Doc is the verbatim leading doc
-// comment with delimiters stripped, or "" if none.
+// comment with delimiters stripped, or "" if none. File is repo-relative.
+// StartLine/EndLine are 1-based inclusive AST declaration ranges, or zero for
+// legacy records. They are hints for the indexed revision, not semantic slices.
 type ExportedFunc struct {
 	Name      string `json:"name"`
+	StartLine int    `json:"start_line,omitempty"`
+	EndLine   int    `json:"end_line,omitempty"`
+	File      string `json:"file,omitempty"`
 	Signature string `json:"signature,omitempty"`
 	Doc       string `json:"doc,omitempty"`
 }
@@ -13,11 +18,14 @@ type ExportedFunc struct {
 // ExportedType is a single exported/public type (Go: struct/interface;
 // Python: class; TS: class/interface; etc.). Fields lists the type's
 // fields/members verbatim as declared, or nil if the language/grammar
-// does not expose them.
+// does not expose them. File is the repo-relative defining source path.
 type ExportedType struct {
-	Name   string   `json:"name"`
-	Doc    string   `json:"doc,omitempty"`
-	Fields []string `json:"fields,omitempty"`
+	Name      string   `json:"name"`
+	StartLine int      `json:"start_line,omitempty"`
+	EndLine   int      `json:"end_line,omitempty"`
+	File      string   `json:"file,omitempty"`
+	Doc       string   `json:"doc,omitempty"`
+	Fields    []string `json:"fields,omitempty"`
 }
 
 // ModuleGraph is the per-module record persisted to
@@ -28,7 +36,7 @@ type ExportedType struct {
 // Summary is only read from indexes written before extraction replaced
 // per-module LLM prose; new records leave it empty and use PackageDoc.
 // ExportFns/ExportTypes mirror the names in ExportedFuncs/ExportedTypes
-// for readers that only need names (graphdeps, whoimports, symbols.md).
+// for readers that only need names (graphdeps, whoimports).
 type ModuleGraph struct {
 	Module     string   `json:"module"`
 	Summary    string   `json:"summary,omitempty"`

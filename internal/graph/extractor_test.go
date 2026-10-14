@@ -956,3 +956,71 @@ package com.example;
 		t.Errorf("package-info PackageDoc = %q", d.PackageDoc)
 	}
 }
+
+func TestExtractFileLocationsAcrossLanguages(t *testing.T) {
+	for _, tc := range []struct{ lang, source, path string }{
+		{"golang", "package p\nfunc Run() {}\ntype Config struct{}", "pkg/a.go"},
+		{"python", "def run():\n    pass\nclass Config:\n    pass\n", "pkg/a.py"},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			d, err := ExtractFile([]byte(tc.source), tc.lang, tc.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(d.ExportedFuncs) == 0 || len(d.ExportedTypes) == 0 {
+				t.Fatalf("missing exports: %+v", d)
+			}
+			for _, f := range d.ExportedFuncs {
+				if f.File != tc.path {
+					t.Errorf("file=%q", f.File)
+				}
+			}
+			for _, typ := range d.ExportedTypes {
+				if typ.File != tc.path {
+					t.Errorf("file=%q", typ.File)
+				}
+			}
+		})
+	}
+}
+
+func TestSourceRangesAcrossLanguages(t *testing.T) {
+	for _, tc := range []struct {
+		lang, src                          string
+		fnStart, fnEnd, typeStart, typeEnd int
+	}{
+		{"golang", "package p\n// Run docs\nfunc Run() {\n println(1)\n}\ntype Config struct {\n Value int\n}\n", 2, 5, 6, 8},
+		{"python", "@decorate\ndef run():\n    pass\nclass Config:\n    pass\n", 1, 3, 4, 5},
+		{"javascript", "// docs\nexport function run() {\n return 1;\n}\nexport class Config {\n constructor() {}\n}\n", 1, 4, 5, 7},
+		{"typescript", "// docs\nexport function run() {\n return 1;\n}\nexport interface Config {\n value: string;\n}\n", 1, 4, 5, 7},
+		{"rust", "pub fn run() {\n}\npub struct Config {\n pub value: i32\n}\n", 1, 2, 3, 5},
+		{"ruby", "def run\n  1\nend\nclass Config\nend\n", 1, 3, 4, 5},
+		{"java", "public class Config {\n public void run() {\n }\n}\n", 2, 3, 1, 4},
+	} {
+		t.Run(tc.lang, func(t *testing.T) {
+			d, err := ExtractFile([]byte(tc.src), tc.lang, "source")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(d.ExportedFuncs) == 0 || len(d.ExportedTypes) == 0 {
+				t.Fatalf("missing exports: %+v", d)
+			}
+			fn, typ := d.ExportedFuncs[0], d.ExportedTypes[0]
+			if fn.StartLine != tc.fnStart || fn.EndLine != tc.fnEnd || typ.StartLine != tc.typeStart || typ.EndLine != tc.typeEnd {
+				t.Fatalf("func=%+v type=%+v", fn, typ)
+			}
+		})
+	}
+}
+
+func TestGroupedGoTypeRangeKeepsDeclarationWrapper(t *testing.T) {
+	d, err := ExtractFile([]byte("package p\ntype (\n First struct{}\n Second int\n)\n"), "golang", "p.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, typ := range d.ExportedTypes {
+		if typ.StartLine != 2 || typ.EndLine != 5 {
+			t.Fatalf("%+v", typ)
+		}
+	}
+}

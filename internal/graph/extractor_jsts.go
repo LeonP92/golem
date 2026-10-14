@@ -98,19 +98,19 @@ func extractJSDecl(source []byte, decl, anchor *sitter.Node, d *StructuralData, 
 	body := decl.ChildByFieldName("body")
 	switch decl.Kind() {
 	case "function_declaration", "generator_function_declaration":
-		d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, Signature: signatureBefore(source, decl, body), Doc: doc})
+		d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Signature: signatureBefore(source, decl, body), Doc: doc})
 	case "class_declaration", "abstract_class_declaration":
 		fields := jsMembers(source, body, "public_field_definition", "field_definition")
-		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: doc, Fields: fields})
+		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: doc, Fields: fields})
 	case "interface_declaration":
 		fields := jsMembers(source, body, "property_signature", "method_signature")
-		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: doc, Fields: fields})
+		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: doc, Fields: fields})
 	case "type_alias_declaration":
 		fields := jsMembers(source, decl.ChildByFieldName("value"), "property_signature", "method_signature")
-		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: doc, Fields: fields})
+		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: doc, Fields: fields})
 	case "enum_declaration":
 		fields := jsMembers(source, body, "property_identifier", "enum_assignment")
-		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, Doc: doc, Fields: fields})
+		d.ExportedTypes = append(d.ExportedTypes, ExportedType{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Doc: doc, Fields: fields})
 	}
 }
 
@@ -163,7 +163,7 @@ func extractJSLexical(source []byte, decl, anchor *sitter.Node, d *StructuralDat
 
 		if value != nil && (value.Kind() == "arrow_function" || value.Kind() == "function_expression") {
 			sig := keyword + " " + signatureBefore(source, vd, value.ChildByFieldName("body"))
-			d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, Signature: sig, Doc: collectDocAbove(source, anchor, jsDoc)})
+			d.ExportedFuncs = append(d.ExportedFuncs, ExportedFunc{Name: nm, StartLine: sourceStartLine(decl), EndLine: sourceEndLine(decl), Signature: sig, Doc: collectDocAbove(source, anchor, jsDoc)})
 		} else if strings.ToUpper(nm) == nm {
 			d.Consts = append(d.Consts, nm)
 		}

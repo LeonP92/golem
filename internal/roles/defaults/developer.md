@@ -78,3 +78,11 @@ that is cautious. This applies regardless of language.
 - Simple over clever. Readable over compressed.
 - Implement exactly what the task requires. A half-built extension is worse
   than no extension.
+
+## Code discovery
+
+Find a symbol by exact name in `.golem/wiki/graph/symbols.md` or `types.md`.
+If the entry has `[Lstart-Lend]`, read that line range first and expand only as
+needed. Ranges come from the last indexed commit; if the code there doesn't
+match, or the symbol isn't listed, fall back to grep. The graph has module
+imports, not a call graph.
