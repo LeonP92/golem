@@ -43,6 +43,15 @@ One ticket on Kubernetes `48f5417` (17,922 Go files): add a `kubelet_volume_moun
 
 Medians, with ranges. "Plan correct" means the plan names all five answer-key items: the metric in `metrics.go` and `Register()`, the `WaitForAttachAndMount` call site, `VolumeAttachLimitExceededError`, timeout detection, and a test file.
 
+Where the tokens went (medians):
+
+| | golem | plain `claude` |
+|---|---:|---:|
+| Graph lookup output | ~350 | — |
+| Code read during discovery | ~8.2k | ~9.4k |
+| Context at the end of the run | 47k | 55k |
+| Input billed (context resent every request) | 460k | 610k |
+
 Golem found all four target symbols with one `grep` of `symbols.md`, then read only the listed ranges. Plain Claude searched the source tree. Both reached a correct plan every time; golem did it 26% cheaper and faster on the median, and its runs varied far less.
 
 ## Full ticket: gin
