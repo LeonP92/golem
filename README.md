@@ -24,7 +24,7 @@ LLM agents left to their own devices are fast but sloppy. They skip specs, inven
 
 Every change starts as a ticket. The ticket goes through **brainstorm → plan → implement → review → close**. At each step, a different role runs: a developer to write code, a convention-enforcer to check patterns, a spec-adherence checker to keep scope honest, a reviewer to attest the whole thing. Per ticket you choose how much control you want: manual approval (a human approves the spec and the plan) or automatic (the shem's own validation is the gate).
 
-The **code graph** (`golem graph build`) indexes every module so agents find the right file without scanning everything. On a 50-file repo it cuts orientation token usage by ~50%; on larger repos it's closer to 80%.
+The **code graph** (`golem graph build`) indexes every module so agents find the right file without scanning everything. It helps most on large repos, where an agent would otherwise wander through grep hits; see [docs/benchmarks/code-graph-tokens.md](docs/benchmarks/code-graph-tokens.md) for what was measured.
 
 ---
 
