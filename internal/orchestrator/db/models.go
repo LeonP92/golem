@@ -70,6 +70,9 @@ type Ticket struct {
 	// through the web form (nil IssueNumber) are unaffected by construction
 	// — see the claim/available predicates in api/tickets.go.
 	IntakeApproved bool `gorm:"not null;default:false" json:"intake_approved"`
+	// ManualApproval makes the shem wait for a human to approve the spec and
+	// the plan. False keeps automatic validation as the only gate.
+	ManualApproval bool `gorm:"not null;default:false" json:"manual_approval"`
 	// ApprovedBodyHash is the hex-encoded SHA-256 hash of Description at the
 	// moment actionStart set IntakeApproved, binding the approval to the
 	// exact text a human reviewed (spec Amendment 1 fix round 4). Without

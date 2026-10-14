@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="leonpham/golem"
+REPO="LeonP92/golem"
 BINARY="golem"
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }

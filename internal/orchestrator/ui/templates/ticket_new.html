@@ -94,6 +94,20 @@
                   placeholder="Describe the work to be done in plain language…">{{.Form.Description}}</textarea>
       </div>
 
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="manual_approval" value="1" class="checkbox checkbox-sm"
+                 {{if .Form.ManualApproval}}checked{{end}}>
+          <span>
+            <span class="label-text font-medium">Require my approval after the spec and the plan</span>
+            <span class="label-text-alt block text-base-content/50">
+              Off: the ticket moves through brainstorm, plan and implement on its own, gated by automatic validation.
+              On: it stops after the spec and after the plan until you approve or request changes.
+            </span>
+          </span>
+        </label>
+      </div>
+
       {{template "model_selects" .ModelPicker}}
 
       <div class="flex gap-2 mt-2">

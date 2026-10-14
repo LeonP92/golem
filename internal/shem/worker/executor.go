@@ -22,7 +22,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// GolemExecutor runs tickets phase by phase with human approval gates.
+// GolemExecutor runs tickets phase by phase. Per ticket, the spec and the plan
+// are either gated by a human (manual approval) or by automatic validation.
 type GolemExecutor struct {
 	repoMu sync.Map // keyed by repoPath, value *sync.Mutex
 	Agent  *Agent
@@ -106,15 +107,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			return fmt.Errorf("recovery failed: %w", err)
 		}
 		startPhase = *claim.CheckpointPhase
-		// A checkpoint records a phase that both COMPLETED and PASSED its
-		// validation — brainstorm and plan are checkpointed only after
-		// runGolemValidate returns — so there is nothing left to wait for and
-		// the next phase always starts.
-		//
-		// This used to ask GetPendingApproval whether a human had approved
-		// yet, and stayed put if not. There is no approval to pend on now:
-		// intake is the only human gate, and it is passed before the ticket is
-		// ever claimable.
+		// A checkpoint records a phase that COMPLETED and PASSED its gate:
+		// brainstorm and plan are checkpointed only after validation, and in
+		// manual-approval mode only after a human approved. So the next phase
+		// always starts; an approval still open for that next phase is picked
+		// up by gatedPhase.
 		if startPhase == "brainstorm" || startPhase == "plan" {
 			startPhase = nextPhaseAfterCheckpoint(startPhase)
 			postStatus(c, ticketID, "Resuming validated "+*claim.CheckpointPhase+" — continuing at "+startPhase)
@@ -150,32 +147,39 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		<-tailDone
 	}()
 
-	// Phase loop: brainstorm → (human approval) → plan → (human approval) → implement.
+	// Phase loop: brainstorm → plan → implement. Validation gates each step; a
+	// ticket in manual-approval mode also waits for a human after brainstorm
+	// and after plan (gatedPhase). A failed validation parks the ticket in
+	// needs-attention rather than waiting.
 	for phase := startPhase; ; {
 		switch phase {
 		case "brainstorm":
-			// No human approval gate here any more. Intake is the only
-			// human step: a person reads the description and starts the
-			// ticket. Everything after that advances on the shem's own
-			// validation, so the validation is the gate and a failure
-			// parks the ticket in needs-attention rather than waiting.
-			feedback := consumeFeedback(ctx, c, claim.TicketID)
-			model := e.claimModel(c, claim, models.StageBrainstorm)
-			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "brainstorm")
-			prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
-			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
-				return err
+			out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
+				"Brainstorm complete. Review the spec and approve to continue to planning.",
+				func(m string) { postStatus(c, ticketID, m) },
+				func() error {
+					feedback := consumeFeedback(ctx, c, claim.TicketID)
+					model := e.claimModel(c, claim, models.StageBrainstorm)
+					postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "brainstorm")
+					prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
+					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
+						return err
+					}
+					postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
+					postStatus(c, ticketID, "Brainstorm complete — validating the spec")
+					if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", e.claimModel(c, claim, models.StageValidate)); err != nil {
+						return fmt.Errorf("spec validation: %w", err)
+					}
+					return nil
+				})
+			if gErr != nil {
+				return gErr
 			}
-			postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
-			postStatus(c, ticketID, "Brainstorm complete — validating the spec")
-			if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", e.claimModel(c, claim, models.StageValidate)); err != nil {
-				return fmt.Errorf("spec validation: %w", err)
+			if out == approvalGone {
+				log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
+				return nil
 			}
-			postStatus(c, ticketID, "Spec validated — advancing to planning")
-			// Checkpointed only after validation passes, so a checkpoint at
-			// "brainstorm" means the stage is finished AND approved. That is
-			// what lets a resume advance straight to the next phase without
-			// having to ask whether an approval is still outstanding.
+			postStatus(c, ticketID, "Spec cleared — advancing to planning")
 			PostCheckpointWithRetry(c, claim.TicketID, "brainstorm", "", 5) //nolint:errcheck
 			if err := runGolemAdvance(ctx, repoPath, ticketID, "plan"); err != nil {
 				log.Printf("executor: advance to plan: %v", err)
@@ -190,19 +194,32 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			phase = "plan"
 
 		case "plan":
-			feedback := consumeFeedback(ctx, c, claim.TicketID)
-			model := e.claimModel(c, claim, models.StagePlan)
-			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "plan")
-			prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
-			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
-				return err
+			out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
+				"Plan complete. Review the plan and approve to begin implementation.",
+				func(m string) { postStatus(c, ticketID, m) },
+				func() error {
+					feedback := consumeFeedback(ctx, c, claim.TicketID)
+					model := e.claimModel(c, claim, models.StagePlan)
+					postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "plan")
+					prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
+					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
+						return err
+					}
+					postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
+					postStatus(c, ticketID, "Plan complete — validating the plan")
+					if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", e.claimModel(c, claim, models.StageValidate)); err != nil {
+						return fmt.Errorf("plan validation: %w", err)
+					}
+					return nil
+				})
+			if gErr != nil {
+				return gErr
 			}
-			postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
-			postStatus(c, ticketID, "Plan complete — validating the plan")
-			if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", e.claimModel(c, claim, models.StageValidate)); err != nil {
-				return fmt.Errorf("plan validation: %w", err)
+			if out == approvalGone {
+				log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
+				return nil
 			}
-			postStatus(c, ticketID, "Plan validated — starting implementation")
+			postStatus(c, ticketID, "Plan cleared — starting implementation")
 			PostCheckpointWithRetry(c, claim.TicketID, "plan", "", 5) //nolint:errcheck
 			if err := runGolemAdvance(ctx, repoPath, ticketID, "implement"); err != nil {
 				log.Printf("executor: advance to implement: %v", err)
@@ -417,8 +434,9 @@ func toOrchestratorPhase(localPhase string) string {
 }
 
 // nextPhaseAfterCheckpoint returns the phase to execute after a completed
-// checkpoint phase. Brainstorm and plan each have a human approval gate; once
-// that gate is passed the checkpoint is set and the next run should skip ahead.
+// checkpoint phase. Brainstorm and plan are checkpointed only once their gate
+// (validation, plus a human approval in manual mode) is passed, so the next
+// run can skip ahead.
 func nextPhaseAfterCheckpoint(phase string) string {
 	switch phase {
 	case "brainstorm":

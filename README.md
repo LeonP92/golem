@@ -22,7 +22,7 @@ Two modes, one tool:
 
 LLM agents left to their own devices are fast but sloppy. They skip specs, invent abstractions, miss conventions, and forget everything between sessions. Golem doesn't try to make the model smarter — it gives it structure.
 
-Every change starts as a ticket. The ticket goes through **brainstorm → plan → implement → review → close**. At each step, a different role runs: a developer to write code, a convention-enforcer to check patterns, a spec-adherence checker to keep scope honest, a reviewer to attest the whole thing. Humans approve transitions between phases, staying in control without doing the work.
+Every change starts as a ticket. The ticket goes through **brainstorm → plan → implement → review → close**. At each step, a different role runs: a developer to write code, a convention-enforcer to check patterns, a spec-adherence checker to keep scope honest, a reviewer to attest the whole thing. Per ticket you choose how much control you want: manual approval (a human approves the spec and the plan) or automatic (the shem's own validation is the gate).
 
 The **code graph** (`golem graph build`) indexes every module so agents find the right file without scanning everything. On a 50-file repo it cuts orientation token usage by ~50%; on larger repos it's closer to 80%.
 
@@ -235,7 +235,7 @@ Browser ──► Orchestrator (dashboard, approval gates)
 **Benefits over CLI mode:**
 
 - **Parallel execution** — multiple tickets run simultaneously across one or more shems. Work doesn't queue behind a single terminal session.
-- **Human approval gates** — brainstorm and plan phases pause for review in the UI before the shem continues. You see the spec and plan before any code is written.
+- **Per-ticket approval mode** — tick "Require my approval after the spec and the plan" when creating a ticket (or switch it on an unclaimed ticket) and the shem pauses after brainstorm and after plan until you approve or request changes in the UI. Leave it off and the shem advances on its own automatic spec/plan validation. Default: automatic.
 - **Real-time visibility** — the blackboard log streams to the dashboard as the shem works. Blockers and findings surface immediately.
 - **Atomic ticket claiming** — multiple shems on the same repo claim tickets without races. No duplicated work.
 - **Horizontal scaling** — add more shem nodes to increase parallelism. Each shem is stateless; the orchestrator holds all state in SQLite.
@@ -251,16 +251,16 @@ On first run the script creates `.env` from the example and exits — fill in `G
 
 `GOLEM_GITHUB_TOKEN` in the same file is optional and turns on the GitHub Issues integration — see [GitHub Issues](#github-issues-1) below for what else it needs.
 
-Create a ticket from the UI. The shem will pick it up within seconds, run brainstorm, and pause for your approval before proceeding to plan and implementation.
+Create a ticket from the UI. The shem will pick it up within seconds and run brainstorm. With manual approval on, it pauses for your approval before plan and again before implementation; otherwise it advances after automatic validation.
 
 ### How It Works
 
 1. You create a ticket in the UI with a description and target repo.
 2. A shem claims it atomically via the REST API.
 3. The shem runs `golem ticket new` to scaffold the worktree, then invokes Claude Code for the brainstorm phase.
-4. The shem posts the spec to the orchestrator and waits for human approval.
-5. On approval, the shem runs the plan phase — same gate, same wait.
-6. On approval, the shem implements and reviews. When done, the ticket enters `ready-for-review`.
+4. The shem posts the spec to the orchestrator and validates it. In manual mode it then waits for human approval.
+5. The shem runs the plan phase — same gate (human approval in manual mode, validation otherwise).
+6. Once cleared, the shem implements and reviews. When done, the ticket enters `ready-for-review`.
 7. You close the ticket from the UI.
 
 At every step the shem tails the ticket's `log.jsonl` and forwards entries to the orchestrator over HTTP, which fans them out to the browser via SSE.

@@ -54,6 +54,8 @@ type ClaimResponse struct {
 	Backend string `json:"backend"`
 	// Models is every stage's model id; "" means the vendor default.
 	Models map[string]string `json:"models"`
+	// ManualApproval: stop after brainstorm and after plan until a human approves.
+	ManualApproval bool `json:"manual_approval"`
 }
 
 // PendingInput represents a pending human input.
@@ -63,6 +65,9 @@ type PendingInput struct {
 	Kind      string    `json:"kind"`
 	Prompt    string    `json:"prompt"`
 	CreatedAt time.Time `json:"created_at"`
+	// Response and ResolvedAt are set once a human has answered.
+	Response   *string    `json:"response"`
+	ResolvedAt *time.Time `json:"resolved_at"`
 }
 
 // Client is the HTTP client for orchestrator API calls.
@@ -458,18 +463,47 @@ func (c *Client) GetPendingInput(ticketID string) (*PendingInput, error) {
 	return c.firstHumanInput(ticketID, "", false)
 }
 
-// PostApprovalRequest posts an approval request for a ticket.
-func (c *Client) PostApprovalRequest(ticketID string, prompt string) error {
+// PostApprovalRequest posts an approval request for a ticket and returns the
+// id of the created human input, so the caller can wait on exactly that row.
+func (c *Client) PostApprovalRequest(ticketID string, prompt string) (uint, error) {
 	body := map[string]any{"kind": "approval", "prompt": prompt}
 	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/human-inputs", ticketID), body)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
-	return nil
+	var created PendingInput
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		return 0, err
+	}
+	return created.ID, nil
+}
+
+// GetApproval returns the approval human input with the given id, resolved or
+// not, or nil if it no longer exists (the ticket was requeued, which deletes
+// its human inputs).
+func (c *Client) GetApproval(ticketID string, inputID uint) (*PendingInput, error) {
+	resp, err := c.do("GET", fmt.Sprintf("/api/tickets/%s/human-inputs?kind=approval", ticketID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	var inputs []PendingInput
+	if err := json.NewDecoder(resp.Body).Decode(&inputs); err != nil {
+		return nil, err
+	}
+	for i := range inputs {
+		if inputs[i].ID == inputID {
+			return &inputs[i], nil
+		}
+	}
+	return nil, nil
 }
 
 // GetPendingApproval retrieves the oldest pending approval for a ticket.

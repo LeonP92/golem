@@ -78,6 +78,7 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		LogEntries:      entries,
 		Backend:         backend,
 		Models:          resolved,
+		ManualApproval:  t.ManualApproval,
 	}
 }
 
