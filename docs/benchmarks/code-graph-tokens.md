@@ -32,17 +32,26 @@ Example (Kubernetes `GetVolumesToMount`): whole file 7,059 tokens, range `L586-L
 
 These show what a lookup costs when an agent uses the index. The baseline reads whole files; an agent that greps and reads a slice pays less than that. C is not indexed.
 
-## Agent run (gin)
+## Discovery and planning: Kubernetes
 
-One ticket on gin `0f09c3a` (59 Go files): add MessagePack to `Context.Negotiate`, keeping the `nomsgpack` build tag working. Three runs per arm in fresh `golem-shem` containers, same spec, plan on Opus, implement on Sonnet. Medians:
+One ticket on Kubernetes `48f5417` (17,922 Go files): add a `kubelet_volume_mount_wait_failures_total` metric with a `reason` label. Planning it means finding `WaitForAttachAndMount`, its caller in `kubelet.go`, `VolumeAttachLimitExceededError` and the kubelet metrics `Register()`. Plan phase only, Opus, same spec, three runs per arm in fresh `golem-shem` containers.
 
-| Arm | Passed | Cost | Time | Input tokens | Output tokens |
+| Arm | Plan correct | Cost | Time | Input tokens | Output tokens |
 |---|---:|---:|---:|---:|---:|
-| golem (graph with ranges) | 3/3 | $0.57 | 117 s | 641k | 12.3k |
-| plain `claude` | 3/3 | $0.58 | 135 s | 521k | 16.4k |
+| golem | 3/3 | $0.57 ($0.54–0.59) | 100 s (93–105) | 460k | 10.8k |
+| plain `claude` | 3/3 | $0.77 ($0.54–0.82) | 135 s (92–153) | 610k | 15.4k |
 
-Plan phase alone: golem $0.30 / 55 s, plain $0.39 / 78 s (23% cheaper, 29% faster). Both start from the same ~17k context. Golem used 225k input vs 194k only because it made one more request (8 vs 7), and every request resends the whole context. It wrote shorter plans (6.0k vs 8.1k Opus output tokens), which is where the saving comes from.
+Medians, with ranges. "Plan correct" means the plan names all five answer-key items: the metric in `metrics.go` and `Register()`, the `WaitForAttachAndMount` call site, `VolumeAttachLimitExceededError`, timeout detection, and a test file.
 
-"Passed" is hidden acceptance tests plus `go test ./...` and `go vet -tags nomsgpack ./...`. Golem's validation, observer and review gates were not run.
+Golem found all four target symbols with one `grep` of `symbols.md`, then read only the listed ranges. Plain Claude searched the source tree. Both reached a correct plan every time; golem did it 26% cheaper and faster on the median, and its runs varied far less.
 
-The agents never opened `symbols.md` or `types.md`; on 59 files they found the code with `grep -n`. So this run compares golem with plain Claude, not ranges with no ranges.
+## Full ticket: gin
+
+One ticket on gin `0f09c3a` (59 Go files): add MessagePack to `Context.Negotiate`, keeping the `nomsgpack` build tag working. Plan on Opus, implement on Sonnet, three runs per arm.
+
+| Arm | Passed | Cost | Time |
+|---|---:|---:|---:|
+| golem | 3/3 | $0.57 | 117 s |
+| plain `claude` | 3/3 | $0.58 | 135 s |
+
+"Passed" is hidden acceptance tests plus `go test ./...` and `go vet -tags nomsgpack ./...`. On a repo this small, grep is already cheap and the graph adds little.
