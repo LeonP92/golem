@@ -275,7 +275,9 @@ func (n narrator) narrate(clusters map[string][]graph.ModuleGraph) graph.Subsyst
 		return out
 	}
 
-	var mu sync.Mutex
+	var mu, outMu sync.Mutex
+	// narrateOne logs from many goroutines; the caller's writers need not be goroutine-safe.
+	n.stdout, n.stderr = lockedWriter{&outMu, n.stdout}, lockedWriter{&outMu, n.stderr}
 	sem := make(chan struct{}, max(n.concurrency, 1))
 	var wg sync.WaitGroup
 	for _, t := range misses {
@@ -292,6 +294,17 @@ func (n narrator) narrate(clusters map[string][]graph.ModuleGraph) graph.Subsyst
 	}
 	wg.Wait()
 	return out
+}
+
+type lockedWriter struct {
+	mu *sync.Mutex
+	w  io.Writer
+}
+
+func (l lockedWriter) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.w.Write(p)
 }
 
 // narrateOne asks the LLM for one cluster. Runner errors are transient
