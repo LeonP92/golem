@@ -38,45 +38,7 @@ func GenerateClaudeCodeArtifacts(repoRoot string, roleContent map[string]string)
 		}
 	}
 
-	settingsPath := filepath.Join(repoRoot, ".claude", "settings.json")
-	existing, err := os.ReadFile(settingsPath)
-	if err != nil && !os.IsNotExist(err) {
-		return err
-	}
-
-	// Parse into a raw map so unknown top-level fields are preserved.
-	raw := map[string]json.RawMessage{}
-	if len(existing) > 0 {
-		_ = json.Unmarshal(existing, &raw)
-	}
-
-	// Extract existing allow/deny in one pass.
-	var existingPerms struct {
-		Allow []string `json:"allow"`
-		Deny  []string `json:"deny"`
-	}
-	if permRaw, ok := raw["permissions"]; ok {
-		_ = json.Unmarshal(permRaw, &existingPerms)
-	}
-
-	// Union allow and deny lists (dedup each).
-	allow := union(existingPerms.Allow, claudeCodeAllowList)
-	deny := union(existingPerms.Deny, claudeCodeDenyList)
-
-	// Write back, preserving unrelated top-level fields.
-	permBytes, err := json.Marshal(struct {
-		Allow []string `json:"allow"`
-		Deny  []string `json:"deny"`
-	}{Allow: allow, Deny: deny})
-	if err != nil {
-		return err
-	}
-	raw["permissions"] = permBytes
-	out, err := json.MarshalIndent(raw, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(settingsPath, append(out, '\n'), 0o644)
+	return mergeClaudeCodeSettings(filepath.Join(repoRoot, ".claude", "settings.json"))
 }
 
 func init() {
@@ -225,17 +187,99 @@ func union(base, additions []string) []string {
 	return result
 }
 
-func settingsJSON(allowList, denyList []string) string {
-	doc := struct {
-		Permissions struct {
-			Allow []string `json:"allow"`
-			Deny  []string `json:"deny"`
-		} `json:"permissions"`
-	}{}
-	doc.Permissions.Allow = allowList
-	doc.Permissions.Deny = denyList
-	b, _ := json.MarshalIndent(doc, "", "  ")
-	return string(b)
+// mergeClaudeCodeSettings makes the Claude Code settings file at path grant
+// golem's allow list and enforce its deny list without taking anything away
+// from what is already there. It is the single writer of settings.json, used
+// by both `golem init` (GenerateArtifacts) and WorktreeSetup.
+//
+// The file is merged, never regenerated: a repository commits its own
+// .claude/settings.json (extra allow entries for its gate scripts, hooks,
+// env, ...) and a worktree checks that file out. Overwriting it stripped
+// those entries from every ticket worktree, so the reviewer could not run
+// the project's gate, and agents then committed the stripped file back.
+//
+// Every top-level field, and every field under "permissions" other than
+// allow/deny, survives the round trip; allow and deny keep their existing
+// order with golem's missing entries appended (deduplicated). When nothing
+// is missing the file is left byte-for-byte untouched, so the worktree of a
+// repository that already carries golem's entries stays clean in
+// `git status`. An existing file that is not a JSON object is replaced with
+// golem's defaults, as `golem init` has always done.
+func mergeClaudeCodeSettings(path string) error {
+	existing, err := os.ReadFile(path) //nolint:gosec // the repository's own settings file
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+
+	// Raw maps, so fields this code does not know about pass through as-is.
+	var raw map[string]json.RawMessage
+	if len(existing) > 0 && json.Unmarshal(existing, &raw) != nil {
+		raw = nil // malformed, or not an object: start over
+	}
+	if raw == nil {
+		raw = map[string]json.RawMessage{}
+	}
+	var perms map[string]json.RawMessage
+	if p, ok := raw["permissions"]; ok && json.Unmarshal(p, &perms) != nil {
+		perms = nil
+	}
+	if perms == nil {
+		perms = map[string]json.RawMessage{}
+	}
+
+	allow, allowAdded := mergeRuleList(perms["allow"], claudeCodeAllowList)
+	deny, denyAdded := mergeRuleList(perms["deny"], claudeCodeDenyList)
+	if !allowAdded && !denyAdded {
+		return nil // already grants and denies everything golem needs
+	}
+
+	if perms["allow"], err = marshalJSON(allow); err != nil {
+		return err
+	}
+	if perms["deny"], err = marshalJSON(deny); err != nil {
+		return err
+	}
+	if raw["permissions"], err = marshalJSON(perms); err != nil {
+		return err
+	}
+	compact, err := marshalJSON(raw)
+	if err != nil {
+		return err
+	}
+	var out bytes.Buffer
+	if err := json.Indent(&out, compact, "", "  "); err != nil {
+		return err
+	}
+	out.WriteByte('\n')
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, out.Bytes(), 0o644) //nolint:gosec // settings are not secret
+}
+
+// mergeRuleList unions golem's rules into an existing permissions list and
+// reports whether the list changed. A list that is absent or is not an array
+// of strings counts as empty.
+func mergeRuleList(existing json.RawMessage, golem []string) ([]string, bool) {
+	var have []string
+	if len(existing) > 0 && json.Unmarshal(existing, &have) != nil {
+		return append([]string(nil), golem...), true
+	}
+	merged := union(have, golem)
+	return merged, len(existing) == 0 || len(merged) != len(have)
+}
+
+// marshalJSON is json.Marshal without HTML escaping, so a rule such as
+// "Bash(a && b)" is written as typed rather than with each & escaped to a
+// \u-sequence.
+func marshalJSON(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(buf.Bytes(), "\n"), nil
 }
 
 func GenerateClaudeCodeCommands(repoRoot string) error {
@@ -249,13 +293,11 @@ func GenerateClaudeCodeCommands(repoRoot string) error {
 	return os.WriteFile(filepath.Join(dir, "tickets.md"), []byte(ticketsSkill), 0o644)
 }
 
+// WorktreeSetup merges golem's permissions into the worktree's
+// .claude/settings.json (the repository's committed file, as the checkout
+// just produced it) rather than replacing it.
 func (c ClaudeCode) WorktreeSetup(worktreePath string) error {
-	dir := filepath.Join(worktreePath, ".claude")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
-	settings := settingsJSON(claudeCodeAllowList, claudeCodeDenyList)
-	return os.WriteFile(filepath.Join(dir, "settings.json"), []byte(settings), 0o644)
+	return mergeClaudeCodeSettings(filepath.Join(worktreePath, ".claude", "settings.json"))
 }
 
 func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model string) (Result, error) {
