@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -187,24 +189,10 @@ func union(base, additions []string) []string {
 	return result
 }
 
-// mergeClaudeCodeSettings makes the Claude Code settings file at path grant
-// golem's allow list and enforce its deny list without taking anything away
-// from what is already there. It is the single writer of settings.json, used
-// by both `golem init` (GenerateArtifacts) and WorktreeSetup.
-//
-// The file is merged, never regenerated: a repository commits its own
-// .claude/settings.json (extra allow entries for its gate scripts, hooks,
-// env, ...) and a worktree checks that file out. Overwriting it stripped
-// those entries from every ticket worktree, so the reviewer could not run
-// the project's gate, and agents then committed the stripped file back.
-//
-// Every top-level field, and every field under "permissions" other than
-// allow/deny, survives the round trip; allow and deny keep their existing
-// order with golem's missing entries appended (deduplicated). When nothing
-// is missing the file is left byte-for-byte untouched, so the worktree of a
-// repository that already carries golem's entries stays clean in
-// `git status`. An existing file that is not a JSON object is replaced with
-// golem's defaults, as `golem init` has always done.
+// mergeClaudeCodeSettings adds golem's missing allow/deny rules to the
+// settings file at path (used by GenerateClaudeCodeArtifacts and
+// WorktreeSetup). It merges, never drops existing fields, and leaves the file
+// untouched when nothing is missing.
 func mergeClaudeCodeSettings(path string) error {
 	existing, err := os.ReadFile(path) //nolint:gosec // the repository's own settings file
 	if err != nil && !os.IsNotExist(err) {
@@ -212,9 +200,11 @@ func mergeClaudeCodeSettings(path string) error {
 	}
 
 	// Raw maps, so fields this code does not know about pass through as-is.
+	existing = bytes.TrimPrefix(existing, []byte("\xef\xbb\xbf"))
 	var raw map[string]json.RawMessage
-	if len(existing) > 0 && json.Unmarshal(existing, &raw) != nil {
-		raw = nil // malformed, or not an object: start over
+	if len(existing) > 0 && (json.Unmarshal(existing, &raw) != nil || raw == nil) {
+		log.Printf("agentrunner: %s is not a JSON object; using golem's defaults", path)
+		raw = nil
 	}
 	if raw == nil {
 		raw = map[string]json.RawMessage{}
@@ -297,7 +287,12 @@ func GenerateClaudeCodeCommands(repoRoot string) error {
 // .claude/settings.json (the repository's committed file, as the checkout
 // just produced it) rather than replacing it.
 func (c ClaudeCode) WorktreeSetup(worktreePath string) error {
-	return mergeClaudeCodeSettings(filepath.Join(worktreePath, ".claude", "settings.json"))
+	if err := mergeClaudeCodeSettings(filepath.Join(worktreePath, ".claude", "settings.json")); err != nil {
+		return err
+	}
+	// Keep golem's additions out of `git add -A`; fails harmlessly when untracked.
+	_ = exec.Command("git", "-C", worktreePath, "update-index", "--skip-worktree", ".claude/settings.json").Run() //nolint:gosec
+	return nil
 }
 
 func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model string) (Result, error) {

@@ -158,7 +158,7 @@ func TestRecoverTicket_UsesClaimBranch(t *testing.T) {
 		},
 	}
 
-	if err := worker.RecoverTicket(ctx, claim, cfg); err != nil {
+	if err := worker.RecoverTicket(ctx, claim, cfg, func(string) error { return nil }); err != nil {
 		t.Fatalf("RecoverTicket: %v", err)
 	}
 

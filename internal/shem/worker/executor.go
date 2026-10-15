@@ -103,7 +103,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	startPhase := "brainstorm"
 	if claim.CheckpointPhase != nil {
 		postStatus(c, ticketID, "Resuming from checkpoint: "+*claim.CheckpointPhase)
-		if err := RecoverTicket(ctx, claim, cfg); err != nil {
+		if err := RecoverTicket(ctx, claim, cfg, e.Agent.Adapter.WorktreeSetup); err != nil {
 			return fmt.Errorf("recovery failed: %w", err)
 		}
 		startPhase = *claim.CheckpointPhase
@@ -165,6 +165,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
 						return err
 					}
+					adoptStrayTicketFile(ticketDir, "spec.md")
 					postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
 					postStatus(c, ticketID, "Brainstorm complete — validating the spec")
 					if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", e.claimModel(c, claim, models.StageValidate)); err != nil {
@@ -205,6 +206,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
 						return err
 					}
+					adoptStrayTicketFile(ticketDir, "plan.md")
 					postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
 					postStatus(c, ticketID, "Plan complete — validating the plan")
 					if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", e.claimModel(c, claim, models.StageValidate)); err != nil {
