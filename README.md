@@ -440,10 +440,12 @@ Registered adapters are `claude-code`, `codex` and `opencode`. The shipped
 container defaults to claude-code; the others are selected with
 `GOLEM_BACKEND` / `GOLEM_BACKENDS` in .env, which pick the CLI the image
 installs and the auth the entrypoint prepares (see .env.example). Codex runs
-`codex exec --sandbox workspace-write` with golem's allow/deny list as
-`.codex/rules/` prefix rules and per-repo trust in `~/.codex/config.toml`;
-its custom providers must speak the Responses API. Opencode runs `opencode
-run` with the same lists as an `opencode.json` permission block and roles
+`codex exec` with golem's allow/deny list as `.codex/rules/` prefix rules
+and per-repo trust in `~/.codex/config.toml`; its sandbox is
+workspace-write unless `GOLEM_CODEX_SANDBOX` says otherwise (the container
+sets danger-full-access, as codex's sandbox cannot start under Docker). Its
+custom providers must speak the Responses API. Opencode runs `opencode run`
+with the same lists as an `opencode.json` permission block and roles
 projected into `.opencode/agents/`; it is the adapter for any
 OpenAI-compatible endpoint, via a provider block with
 `@ai-sdk/openai-compatible` and a baseURL.
