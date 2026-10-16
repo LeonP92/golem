@@ -66,6 +66,7 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	fs.SetOutput(stderr)
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("ticket", "", "ticket id (required)")
+	base := fs.String("base", "", "base branch; the reviewer gets the diff from its merge-base")
 	mf := addModelFlags(fs)
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -113,8 +114,16 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
+	var diff string
+	if *base != "" {
+		if diff, err = reviewDiff(s.WorktreePath, *base, "HEAD", stderr); err != nil {
+			fmt.Fprintf(stderr, "getting branch diff: %v\n", err)
+			return 1
+		}
+	}
 	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
+		Diff:       diff,
 		RolePrompt: string(rolePrompt),
 	}, model)
 	if err != nil {
