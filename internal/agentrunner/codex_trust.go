@@ -89,8 +89,11 @@ func trustCodexProject(configPath, repoPath string) error {
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", configPath, err)
 	}
-	defer f.Close()
-	if _, err := f.WriteString(entry); err != nil {
+	_, err = f.WriteString(entry)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
 		return fmt.Errorf("writing %s: %w", configPath, err)
 	}
 	log.Printf("executor: trusted codex project %s", repoPath)

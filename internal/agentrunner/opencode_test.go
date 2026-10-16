@@ -57,7 +57,7 @@ func TestOpenCodePermissionOrder(t *testing.T) {
 	if catchAll < 0 || allowGit < 0 || denyPush < 0 {
 		t.Fatalf("missing rules: %s", text)
 	}
-	if !(catchAll < allowGit && allowGit < denyPush) {
+	if catchAll >= allowGit || allowGit >= denyPush {
 		t.Errorf("rule order is not catch-all < allow < deny: %s", text)
 	}
 	if perm.Bash["*"] != "deny" {
