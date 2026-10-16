@@ -99,3 +99,20 @@ func TestRunAgentCmdAcceptsAnExitedProcessWithALingeringChild(t *testing.T) {
 		t.Errorf("runAgentCmd = %v, want success", err)
 	}
 }
+
+// A stale inherited PWD made opencode treat "/" as the project, so the
+// worktree's opencode.json was never loaded. PWD must name cmd.Dir.
+func TestAgentCmdSetsPWDToDir(t *testing.T) {
+	t.Setenv("PWD", "/")
+	dir := t.TempDir()
+	cmd := agentCmd(context.Background(), Options{Env: map[string]string{"PWD": "/elsewhere"}}, dir, "true")
+	pwd := ""
+	for _, kv := range cmd.Env {
+		if v, ok := strings.CutPrefix(kv, "PWD="); ok {
+			pwd = v // the last one wins, as in os/exec
+		}
+	}
+	if pwd != dir {
+		t.Errorf("PWD = %q, want %q", pwd, dir)
+	}
+}
