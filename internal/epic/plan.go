@@ -15,8 +15,7 @@ import (
 )
 
 // MaxNodes bounds a single plan revision. A larger spec is planned in
-// rolling milestone waves, not as one unreviewable graph (plan: Scale and
-// review).
+// rolling waves, not as one unreviewable graph.
 const MaxNodes = 200
 
 // Plan is one immutable plan revision. Once approved it never changes; an
@@ -50,7 +49,7 @@ type Node struct {
 	RequirementIDs     []string `json:"requirement_ids"`
 	ExpectedModules    []string `json:"expected_modules,omitempty"`
 	Risk               string   `json:"risk,omitempty"`
-	BranchTarget       string   `json:"branch_target"` // the ref this node's PR integrates into
+	BranchTarget       string   `json:"branch_target"` // the run's target ref; filled in when empty
 }
 
 type Edge struct {

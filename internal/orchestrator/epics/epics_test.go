@@ -14,9 +14,9 @@ func validPlan() epic.Plan {
 		Requirements: []epic.Requirement{{ID: "R1", Text: "model"}, {ID: "R2", Text: "api"}},
 		Nodes: []epic.Node{
 			{Key: "T1", Title: "schema", AcceptanceCommands: []string{"go test ./..."},
-				RequirementIDs: []string{"R1"}, BranchTarget: "epic/x"},
+				RequirementIDs: []string{"R1"}},
 			{Key: "T2", Title: "api", AcceptanceCommands: []string{"go test ./api/..."},
-				RequirementIDs: []string{"R2"}, BranchTarget: "epic/x"},
+				RequirementIDs: []string{"R2"}},
 		},
 		Edges: []epic.Edge{{Predecessor: "T1", Successor: "T2", Reason: "api uses model"}},
 	}
@@ -84,10 +84,6 @@ func TestAddRevisionRejectsInvalidPlan(t *testing.T) {
 	if count != 0 {
 		t.Errorf("invalid plan left %d revisions behind", count)
 	}
-	gdb.Model(&db.EpicNode{}).Count(&count)
-	if count != 0 {
-		t.Errorf("invalid plan left %d nodes behind", count)
-	}
 }
 
 // The stored revision round-trips into the same plan: the DAG view and the
@@ -108,12 +104,6 @@ func TestAddRevisionRoundTripsAndSnapshots(t *testing.T) {
 	}
 	if len(plan.Nodes) != 2 || len(plan.Edges) != 1 || plan.Nodes[0].Key != "T1" {
 		t.Errorf("round-tripped plan differs: %+v", plan)
-	}
-	var nodes, edges int64
-	gdb.Model(&db.EpicNode{}).Count(&nodes)
-	gdb.Model(&db.EpicEdge{}).Count(&edges)
-	if nodes != 2 || edges != 1 {
-		t.Errorf("snapshots: %d nodes %d edges, want 2/1", nodes, edges)
 	}
 	var updated db.Epic
 	gdb.Where("id = ?", e.ID).First(&updated)
@@ -140,7 +130,7 @@ func TestApproveBindsToExactHash(t *testing.T) {
 	}
 }
 
-// The M1 exit invariant: editing approved content invalidates the approval.
+// editing approved content invalidates the approval.
 func TestEditingApprovedContentInvalidatesApproval(t *testing.T) {
 	gdb, _ := db.Open(":memory:")
 	e := createEpic(t, gdb)

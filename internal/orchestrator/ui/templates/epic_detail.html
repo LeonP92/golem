@@ -117,35 +117,7 @@
 </div>
 {{end}}
 
-{{if .GraphLayers}}
-<div class="card bg-base-100 shadow-sm mb-6">
-  <div class="card-body">
-    <h2 class="card-title">Dependency map</h2>
-    <p class="text-sm text-base-content/60">Left to right: each layer depends only on layers before it.</p>
-    <div class="overflow-x-auto">
-      <div class="flex gap-4 items-start min-w-max py-2">
-        {{range .GraphLayers}}
-        <div class="flex flex-col gap-2 w-56">
-          {{range .}}
-          <div class="card card-compact bg-base-200 {{if .Integrated}}border border-success{{else if .Ready}}border border-info{{end}}">
-            <div class="card-body">
-              <div class="font-mono text-xs">{{.Key}}</div>
-              <div class="text-sm font-medium">{{.Title}}</div>
-              {{if .BlockedBy}}<div class="text-xs text-base-content/60">← {{range $i, $b := .BlockedBy}}{{if $i}}, {{end}}{{$b}}{{end}}</div>{{end}}
-              {{if .Integrated}}<span class="badge badge-success badge-sm">integrated</span>
-              {{else if .Ready}}<span class="badge badge-info badge-sm">ready</span>{{end}}
-              {{if .TicketID}}<a href="/tickets/{{.TicketID}}" class="link link-hover text-xs">ticket</a>{{end}}
-            </div>
-          </div>
-          {{end}}
-        </div>
-        {{end}}
-      </div>
-    </div>
-  </div>
-</div>
-{{end}}
-
+{{if or (eq .Epic.State "draft") (eq .Epic.State "awaiting-approval")}}
 <div class="card bg-base-100 shadow-sm">
   <div class="card-body">
     <h2 class="card-title">{{if .Revision}}Revise plan{{else}}Add plan{{end}}</h2>
@@ -156,13 +128,15 @@
     <form method="POST" action="/epics/{{.Epic.ID}}/revisions">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <textarea name="plan_json" rows="14" class="textarea textarea-bordered font-mono text-xs w-full"
-                placeholder='{"requirements":[{"id":"R1","text":"..."}],"nodes":[{"key":"T1","title":"...","acceptance_commands":["go test ./..."],"requirement_ids":["R1"],"branch_target":"{{.Epic.IntegrationRef}}"}],"edges":[]}'></textarea>
+                placeholder='{"requirements":[{"id":"R1","text":"..."}],"nodes":[{"key":"T1","title":"...","acceptance_commands":["go test ./..."],"requirement_ids":["R1"]}],"edges":[]}'></textarea>
       <div class="card-actions justify-end mt-2">
         <button type="submit" class="btn btn-sm">Validate and save revision</button>
       </div>
     </form>
   </div>
 </div>
+
+{{end}}
 
 <details class="collapse collapse-arrow bg-base-100 shadow-sm mt-6">
   <summary class="collapse-title font-medium">Original specification</summary>

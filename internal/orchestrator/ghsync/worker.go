@@ -2,21 +2,12 @@ package ghsync
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"os"
 	"sync"
 	"time"
 
 	"github.com/leonp92/golem/internal/orchestrator/db"
 )
-
-// OutboxDrainLeaseName is the lease every drainLoop holds while draining.
-// The outbox has always assumed a single drainer; epic work raises the cost
-// of a duplicate side effect (two orchestrators posting the same comment or
-// opening the same PR twice), so the assumption is now enforced rather than
-// documented.
-const OutboxDrainLeaseName = "ghsync-outbox-drain"
 
 // notifyBuffer bounds the number of distinct manual-trigger requests that can
 // be queued for consumption before a caller of TriggerSync would block. Each
@@ -48,8 +39,6 @@ type Worker struct {
 	triggers map[uint]chan struct{} // repo ID → buffered(1) manual-trigger slot
 	notify   chan uint              // repo IDs whose slot has been claimed
 
-	holderID string // this process's identity for the outbox drain lease
-
 	stop     chan struct{} // closed by Stop to ask both loops to exit
 	stopOnce sync.Once
 	exited   chan struct{} // closed once either loop has actually returned, for any reason
@@ -59,15 +48,10 @@ type Worker struct {
 
 // NewWorker returns a Worker over syncer with the given intervals.
 func NewWorker(s *Syncer, pollInterval, drainInterval time.Duration) *Worker {
-	host, err := os.Hostname()
-	if err != nil {
-		host = "unknown"
-	}
 	return &Worker{
 		syncer:        s,
 		pollInterval:  pollInterval,
 		drainInterval: drainInterval,
-		holderID:      fmt.Sprintf("%s:%d", host, os.Getpid()),
 		triggers:      map[uint]chan struct{}{},
 		notify:        make(chan uint, notifyBuffer),
 		stop:          make(chan struct{}),
@@ -266,24 +250,11 @@ func (w *Worker) prMonitorLoop(ctx context.Context) {
 }
 
 // drainLoop delivers queued GitHub writes on the fast ticker.
-//
-// It drains only while holding the outbox drain lease (OutboxDrainLeaseName),
-// so two orchestrators sharing a database cannot both deliver the same rows.
-// The TTL is several drain intervals: long enough that one slow delivery does
-// not lose the lease, short enough that a crashed drainer's successor starts
-// promptly. The fencing token is kept for the epic scheduler's writes; the
-// drain itself is already serialized by holding the lease at all.
 func (w *Worker) drainLoop(ctx context.Context) {
 	defer w.done.Done()
 	defer w.signalExited()
 	ticker := time.NewTicker(w.drainInterval)
 	defer ticker.Stop()
-	ttl := w.drainInterval * 3
-	if ttl < 30*time.Second {
-		ttl = 30 * time.Second
-	}
-	held := false
-	var token int64
 	for {
 		select {
 		case <-ctx.Done():
@@ -291,27 +262,6 @@ func (w *Worker) drainLoop(ctx context.Context) {
 		case <-w.stop:
 			return
 		case <-ticker.C:
-			if !held {
-				t, acquired, err := db.AcquireLease(w.syncer.DB, OutboxDrainLeaseName, w.holderID, ttl)
-				if err != nil {
-					log.Printf("ghsync: acquire drain lease: %v", err)
-					continue
-				}
-				if !acquired {
-					continue
-				}
-				token, held = t, true
-			} else {
-				ok, err := db.RenewLease(w.syncer.DB, OutboxDrainLeaseName, w.holderID, token, ttl)
-				if err != nil {
-					log.Printf("ghsync: renew drain lease: %v", err)
-					continue
-				}
-				if !ok {
-					held = false
-					continue
-				}
-			}
 			if err := w.syncer.Drain(ctx); err != nil {
 				log.Printf("ghsync: drain: %v", err)
 			}

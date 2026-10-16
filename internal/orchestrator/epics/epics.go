@@ -1,8 +1,6 @@
-// Package epics is the orchestrator-side service for Epic Runs: creating
-// epics, storing immutable plan revisions, and binding approvals to exact
-// plan content. Execution (materializing tickets, scheduling, merging) is
-// a later milestone; this package guarantees that what runs later is
-// exactly what a human approved.
+// Package epics is the orchestrator side of Epic Runs: creating epics,
+// immutable plan revisions bound to approvals, materializing children as
+// ordinary tickets, integration receipts and the merge lane.
 package epics
 
 import (
@@ -11,15 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
 
 	"github.com/leonp92/golem/internal/epic"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
 )
 
-// Branch strategies and delivery targets, from the approved design.
 const (
 	StrategyEpicBranch = "epic-branch"
 	StrategyTrunkFlags = "trunk-flags"
@@ -28,42 +27,47 @@ const (
 	TargetBaseBranch    = "base-branch"
 )
 
+// Run states.
+const (
+	StateDraft               = "draft"
+	StateAwaitingApproval    = "awaiting-approval"
+	StateRunning             = "running"
+	StatePaused              = "paused"
+	StateAwaitingFinalReview = "awaiting-final-review"
+	StateCompleted           = "completed"
+)
+
+// States lists the run states in display order.
+var States = []string{StateDraft, StateAwaitingApproval, StateRunning, StatePaused,
+	StateAwaitingFinalReview, StateCompleted}
+
 var (
 	ErrNotFound        = errors.New("epic not found")
-	ErrNotEditable     = errors.New("epic is no longer editable; mid-run plan deltas are a later milestone")
-	ErrHashMismatch    = errors.New("plan hash does not match the revision — approval must bind to the exact plan reviewed")
+	ErrNotEditable     = errors.New("epic is no longer editable once started")
+	ErrHashMismatch    = errors.New("plan hash does not match the revision")
 	ErrRevisionMissing = errors.New("plan revision not found")
+	ErrInvalid         = errors.New("epics: invalid input")
 	ErrNotCurrent      = errors.New("only the current revision of a run awaiting approval can be approved")
 )
 
 type CreateParams struct {
-	RepoRemote     string
-	Title          string
-	SpecMarkdown   string
-	BaseBranch     string
-	BranchStrategy string
-	DeliveryTarget string
-	// AutoMergeChildren and AutoMergeFinal are the two independent
-	// auto-merge toggles. Final is only meaningful for a base-branch
-	// delivery target: a feature-branch handoff is always the human's
-	// merge. Any enabled auto-merge forces TesterRequired on — an
-	// auto-merge without a tester verdict is precisely the failure the
-	// tester gate exists to prevent.
+	RepoRemote        string
+	Title             string
+	SpecMarkdown      string
+	BaseBranch        string
+	BranchStrategy    string
+	DeliveryTarget    string
 	AutoMergeChildren bool
-	AutoMergeFinal    bool
-	// AutoApprovePhases makes children skip the human spec/plan approval;
-	// the snapshot applies at Start and each child keeps its own
-	// ManualApproval as the override.
+	AutoMergeFinal    bool // base-branch delivery only
 	AutoApprovePhases bool
 	CreatedByUserID   *uint
 }
 
-// Create stores a new epic in draft. Strategy and delivery target are set
-// here and never change mid-run; an invalid combination is rejected now
-// rather than surfacing as a surprise at merge time.
+// Create stores a new epic in draft. Strategy and delivery target never
+// change afterwards, so invalid combinations are rejected here.
 func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 	if p.RepoRemote == "" || p.Title == "" || p.SpecMarkdown == "" {
-		return nil, fmt.Errorf("repo, title and spec are required")
+		return nil, fmt.Errorf("%w: repo, title and spec are required", ErrInvalid)
 	}
 	if p.BaseBranch == "" {
 		p.BaseBranch = "main"
@@ -74,43 +78,36 @@ func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 	if p.DeliveryTarget == "" {
 		p.DeliveryTarget = TargetFeatureBranch
 	}
-	switch p.BranchStrategy {
-	case StrategyEpicBranch:
-	case StrategyTrunkFlags:
-		// Trunk integrates slices directly to base; there is no assembled
-		// feature branch to hand off, so a feature-branch delivery target
-		// contradicts the strategy.
-		if p.DeliveryTarget == TargetFeatureBranch {
-			return nil, fmt.Errorf("trunk-flags integrates to base and has no final feature-branch handoff; delivery target must be base-branch")
-		}
-	default:
-		return nil, fmt.Errorf("unknown branch strategy %q", p.BranchStrategy)
+	if p.BranchStrategy != StrategyEpicBranch && p.BranchStrategy != StrategyTrunkFlags {
+		return nil, fmt.Errorf("%w: unknown branch strategy %q", ErrInvalid, p.BranchStrategy)
 	}
 	if p.DeliveryTarget != TargetFeatureBranch && p.DeliveryTarget != TargetBaseBranch {
-		return nil, fmt.Errorf("unknown delivery target %q", p.DeliveryTarget)
+		return nil, fmt.Errorf("%w: unknown delivery target %q", ErrInvalid, p.DeliveryTarget)
+	}
+	if p.BranchStrategy == StrategyTrunkFlags && p.DeliveryTarget == TargetFeatureBranch {
+		return nil, fmt.Errorf("%w: trunk-flags integrates to base and has no feature branch; delivery target must be base-branch", ErrInvalid)
 	}
 	if p.AutoMergeFinal && p.DeliveryTarget != TargetBaseBranch {
-		return nil, fmt.Errorf("final auto-merge requires the base-branch delivery target; a feature-branch handoff always stays human-merged")
+		return nil, fmt.Errorf("%w: final auto-merge requires the base-branch delivery target", ErrInvalid)
 	}
 
 	sum := sha256.Sum256([]byte(p.SpecMarkdown))
 	e := &db.Epic{
-		ID:              uuid.NewString(),
-		RepoRemote:      p.RepoRemote,
-		Title:           p.Title,
-		SpecMarkdown:    p.SpecMarkdown,
-		SpecHash:        hex.EncodeToString(sum[:]),
-		BaseBranch:      p.BaseBranch,
-		BranchStrategy:  p.BranchStrategy,
-		DeliveryTarget:  p.DeliveryTarget,
-		State:           "draft",
-		CreatedByUserID: p.CreatedByUserID,
+		ID:                uuid.NewString(),
+		RepoRemote:        p.RepoRemote,
+		Title:             p.Title,
+		SpecMarkdown:      p.SpecMarkdown,
+		SpecHash:          hex.EncodeToString(sum[:]),
+		BaseBranch:        p.BaseBranch,
+		BranchStrategy:    p.BranchStrategy,
+		DeliveryTarget:    p.DeliveryTarget,
+		AutoMergeChildren: p.AutoMergeChildren,
+		AutoMergeFinal:    p.AutoMergeFinal,
+		TesterRequired:    p.AutoMergeChildren || p.AutoMergeFinal,
+		AutoApprovePhases: p.AutoApprovePhases,
+		State:             StateDraft,
+		CreatedByUserID:   p.CreatedByUserID,
 	}
-	e.AutoMergeChildren = p.AutoMergeChildren
-	e.AutoMergeFinal = p.AutoMergeFinal
-	e.AutoApprovePhases = p.AutoApprovePhases
-	e.TesterRequired = p.AutoMergeChildren || p.AutoMergeFinal
-
 	if p.BranchStrategy == StrategyEpicBranch {
 		e.IntegrationRef = "epic/" + e.ID
 	}
@@ -120,74 +117,87 @@ func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 	return e, nil
 }
 
-// AddRevision validates a candidate plan and stores it as the epic's next
-// immutable revision, with its node and edge snapshots, in one transaction.
-// Any previous approval is cleared: editing content after approval must
-// never inherit the old approval.
-func AddRevision(gdb *gorm.DB, epicID string, plan epic.Plan, repoSHA string) (*db.EpicPlanRevision, error) {
-	if errs := epic.Validate(plan); len(errs) > 0 {
-		return nil, fmt.Errorf("plan is invalid: %v", errors.Join(errs...))
+// TargetRef is where children merge: the integration ref, or base under
+// trunk-flags.
+func TargetRef(e *db.Epic) string {
+	if e.IntegrationRef != "" {
+		return e.IntegrationRef
 	}
-	hash, err := epic.Hash(plan)
-	if err != nil {
-		return nil, err
-	}
-	canonical, err := json.Marshal(plan)
-	if err != nil {
-		return nil, err
-	}
+	return e.BaseBranch
+}
 
+// List returns epics newest first, optionally filtered.
+func List(gdb *gorm.DB, repo, state string) ([]db.Epic, error) {
+	var list []db.Epic
+	q := gdb.Order("created_at desc")
+	if repo != "" {
+		q = q.Where("repo_remote = ?", urlnorm.Normalize(repo))
+	}
+	if state != "" {
+		q = q.Where("state = ?", state)
+	}
+	return list, q.Find(&list).Error
+}
+
+func load(gdb *gorm.DB, id string) (*db.Epic, error) {
+	var e db.Epic
+	if err := gdb.First(&e, "id = ?", id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	return &e, nil
+}
+
+// AddRevision validates a plan and stores it as the next immutable
+// revision, clearing any previous approval. A node's empty branch_target
+// is filled with the run's target ref; any other value is rejected.
+func AddRevision(gdb *gorm.DB, epicID string, plan epic.Plan, repoSHA string) (*db.EpicPlanRevision, error) {
 	var rev db.EpicPlanRevision
-	err = gdb.Transaction(func(tx *gorm.DB) error {
-		var e db.Epic
-		if err := tx.Where("id = ?", epicID).First(&e).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
+	err := gdb.Transaction(func(tx *gorm.DB) error {
+		e, err := load(tx, epicID)
+		if err != nil {
 			return err
 		}
-		// v1 allows editing before execution only. Approved mid-run deltas
-		// arrive as their own milestone; silently mutating live approved
-		// scope is exactly what the design forbids.
-		if e.State != "draft" && e.State != "planning" && e.State != "awaiting-approval" {
+		if e.State != StateDraft && e.State != StateAwaitingApproval {
 			return ErrNotEditable
 		}
-
+		target := TargetRef(e)
+		var errs []error
+		for i, n := range plan.Nodes {
+			switch n.BranchTarget {
+			case "":
+				plan.Nodes[i].BranchTarget = target
+			case target:
+			default:
+				errs = append(errs, fmt.Errorf("node %q targets %q; this run integrates into %q", n.Key, n.BranchTarget, target))
+			}
+		}
+		if errs = append(errs, epic.Validate(plan)...); len(errs) > 0 {
+			return fmt.Errorf("%w: plan: %w", ErrInvalid, errors.Join(errs...))
+		}
+		canonical, err := json.Marshal(plan)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(canonical)
 		rev = db.EpicPlanRevision{
 			EpicID:   epicID,
 			Revision: e.CurrentRevision + 1,
 			SpecHash: e.SpecHash,
 			RepoSHA:  repoSHA,
 			PlanJSON: string(canonical),
-			PlanHash: hash,
+			PlanHash: hex.EncodeToString(sum[:]),
 		}
 		if err := tx.Create(&rev).Error; err != nil {
 			return err
 		}
-		for _, n := range plan.Nodes {
-			reqs, _ := json.Marshal(n.RequirementIDs)
-			node := db.EpicNode{
-				EpicID: epicID, Revision: rev.Revision, NodeKey: n.Key,
-				Title: n.Title, RequirementIDs: string(reqs), BranchTarget: n.BranchTarget,
-			}
-			if err := tx.Create(&node).Error; err != nil {
-				return err
-			}
-		}
-		for _, ed := range plan.Edges {
-			edge := db.EpicEdge{
-				EpicID: epicID, Revision: rev.Revision,
-				Predecessor: ed.Predecessor, Successor: ed.Successor, Reason: ed.Reason,
-			}
-			if err := tx.Create(&edge).Error; err != nil {
-				return err
-			}
-		}
-		return tx.Model(&e).Updates(map[string]any{
+		return tx.Model(e).Updates(map[string]any{
 			"current_revision":   rev.Revision,
 			"approved_revision":  0,
 			"approved_plan_hash": "",
-			"state":              "awaiting-approval",
+			"state":              StateAwaitingApproval,
 		}).Error
 	})
 	if err != nil {
@@ -196,22 +206,15 @@ func AddRevision(gdb *gorm.DB, epicID string, plan epic.Plan, repoSHA string) (*
 	return &rev, nil
 }
 
-// Approve binds a human's approval to an exact revision AND its content
-// hash. Both must match what is stored: approving "the plan" without the
-// hash would let a quiet re-save carry an approval onto content the human
-// never saw.
+// Approve binds approval to an exact revision and its content hash, so a
+// re-save can never carry an approval onto content the human did not see.
 func Approve(gdb *gorm.DB, epicID string, revision int, planHash, actor string) error {
 	return gdb.Transaction(func(tx *gorm.DB) error {
-		var e db.Epic
-		if err := tx.Where("id = ?", epicID).First(&e).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return ErrNotFound
-			}
+		e, err := load(tx, epicID)
+		if err != nil {
 			return err
 		}
-		// Only the current revision of a run not yet started: approving a
-		// replaced revision, or re-approving a live run, wedges its children.
-		if e.State != "awaiting-approval" || revision != e.CurrentRevision {
+		if e.State != StateAwaitingApproval || revision != e.CurrentRevision {
 			return ErrNotCurrent
 		}
 		var rev db.EpicPlanRevision
@@ -224,21 +227,18 @@ func Approve(gdb *gorm.DB, epicID string, revision int, planHash, actor string) 
 		if rev.PlanHash != planHash {
 			return ErrHashMismatch
 		}
-		now := timeNow()
-		if err := tx.Model(&rev).Updates(map[string]any{
-			"approved_by": actor, "approved_at": &now,
-		}).Error; err != nil {
+		now := time.Now()
+		if err := tx.Model(&rev).Updates(map[string]any{"approved_by": actor, "approved_at": &now}).Error; err != nil {
 			return err
 		}
-		return tx.Model(&e).Updates(map[string]any{
+		return tx.Model(e).Updates(map[string]any{
 			"approved_revision":  revision,
 			"approved_plan_hash": planHash,
 		}).Error
 	})
 }
 
-// LoadPlan returns the stored plan for a revision. The DAG view and the
-// list view render from this same record, so they cannot drift apart.
+// LoadPlan returns the stored plan for a revision.
 func LoadPlan(gdb *gorm.DB, epicID string, revision int) (*epic.Plan, *db.EpicPlanRevision, error) {
 	var rev db.EpicPlanRevision
 	if err := gdb.Where("epic_id = ? AND revision = ?", epicID, revision).First(&rev).Error; err != nil {

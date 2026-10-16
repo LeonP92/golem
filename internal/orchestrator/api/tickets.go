@@ -56,29 +56,19 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: pause for a human after brainstorm and after plan.
 	ManualApproval bool `json:"manual_approval"`
-	// Epic is the run context for a materialized child, nil on ordinary
-	// tickets. The worker uses it to resolve its exact base SHA against
-	// the run's base branch when the integration ref does not exist on
-	// the remote yet (run start — the first finishing child creates it).
+	// Epic is set only for an epic child.
 	Epic *EpicClaim `json:"epic,omitempty"`
 }
 
-// EpicClaim carries what a worker needs to run an epic child correctly:
-// which run and node it is, and the run's base branch to fall back to for
-// base resolution. Requirement texts and acceptance commands travel in
-// the ticket Description (composed verbatim from the approved plan at
-// materialization), so they cannot drift from what the human approved.
+// EpicClaim is what a worker needs to run an epic child.
 type EpicClaim struct {
-	EpicID       string `json:"epic_id"`
-	NodeKey      string `json:"node_key"`
-	PlanRevision int    `json:"plan_revision"`
+	EpicID  string `json:"epic_id"`
+	NodeKey string `json:"node_key"`
+	// BaseFallback (the run's base branch) seeds the integration ref
+	// until the first child creates it.
 	BaseFallback string `json:"base_fallback"`
-	// TesterRequired tells the worker to run the tester stage on the
-	// finished head and post the verdict: the lane merges nothing for
-	// this epic without it.
-	TesterRequired bool `json:"tester_required"`
-	// AcceptanceCommands are the node's approved acceptance commands, run
-	// by the gate after the repo's own.
+	// TesterRequired: run the tester on the pushed head and post a verdict.
+	TesterRequired     bool     `json:"tester_required"`
 	AcceptanceCommands []string `json:"acceptance_commands,omitempty"`
 }
 

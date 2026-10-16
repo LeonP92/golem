@@ -10,7 +10,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/db"
 )
 
-// diamond is the M2 exit-test shape: A -> B/C -> D. B and C may run in
+// diamond: A -> B/C -> D. B and C may run in
 // parallel only after A integrates; D waits for both.
 func diamondPlan(target string) epic.Plan {
 	return epic.Plan{
@@ -105,13 +105,6 @@ func TestStartMaterializesChildrenOnce(t *testing.T) {
 	if fresh.State != "running" {
 		t.Fatalf("state = %q", fresh.State)
 	}
-	// Every node row points at its ticket.
-	var unmapped int64
-	gdb.Model(&db.EpicNode{}).Where("epic_id = ? AND ticket_id = ''", e.ID).Count(&unmapped)
-	if unmapped != 0 {
-		t.Fatalf("%d nodes have no ticket mapping", unmapped)
-	}
-
 	// Restart/repeated start never duplicates children.
 	again, err := Start(gdb, e.ID)
 	if err != nil {
@@ -138,7 +131,7 @@ func TestStartRequiresApproval(t *testing.T) {
 	}
 }
 
-// The M2 exit behavior: B and C become ready together only after A
+// B and C become ready together only after A
 // integrates; D waits for both.
 func TestReadinessFollowsIntegrationReceipts(t *testing.T) {
 	gdb, _ := db.Open(":memory:")
@@ -147,7 +140,7 @@ func TestReadinessFollowsIntegrationReceipts(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	if err := RecordIntegration(gdb, e.ID, "A", "sha-a", e.IntegrationRef); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "A", "sha-a"); err != nil {
 		t.Fatalf("integrate A: %v", err)
 	}
 	ready := readyKeys(t, gdb, e.ID)
@@ -155,20 +148,20 @@ func TestReadinessFollowsIntegrationReceipts(t *testing.T) {
 		t.Fatalf("after A: %v", ready)
 	}
 
-	if err := RecordIntegration(gdb, e.ID, "B", "sha-b", e.IntegrationRef); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "B", "sha-b"); err != nil {
 		t.Fatalf("integrate B: %v", err)
 	}
 	if ready := readyKeys(t, gdb, e.ID); ready["D"] {
 		t.Fatalf("D ready with only one predecessor integrated: %v", ready)
 	}
-	if err := RecordIntegration(gdb, e.ID, "C", "sha-c", e.IntegrationRef); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "C", "sha-c"); err != nil {
 		t.Fatalf("integrate C: %v", err)
 	}
 	if ready := readyKeys(t, gdb, e.ID); !ready["D"] {
 		t.Fatalf("D not ready after both predecessors: %v", ready)
 	}
 
-	if err := RecordIntegration(gdb, e.ID, "D", "sha-d", e.IntegrationRef); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "D", "sha-d"); err != nil {
 		t.Fatalf("integrate D: %v", err)
 	}
 	var fresh db.Epic
@@ -185,21 +178,21 @@ func TestRecordIntegrationFailsClosed(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 	// Unknown node key.
-	if err := RecordIntegration(gdb, e.ID, "ZZ", "sha", e.IntegrationRef); err == nil {
+	if err := RecordIntegration(gdb, e.ID, "ZZ", "sha"); err == nil {
 		t.Fatal("unknown node accepted")
 	}
 	// Missing SHA.
-	if err := RecordIntegration(gdb, e.ID, "A", "", e.IntegrationRef); err == nil {
+	if err := RecordIntegration(gdb, e.ID, "A", ""); err == nil {
 		t.Fatal("empty SHA accepted")
 	}
 	// Identical repeat is one receipt; a conflicting repeat is an error.
-	if err := RecordIntegration(gdb, e.ID, "A", "sha-a", e.IntegrationRef); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "A", "sha-a"); err != nil {
 		t.Fatalf("integrate A: %v", err)
 	}
-	if err := RecordIntegration(gdb, e.ID, "A", "sha-a", e.IntegrationRef); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "A", "sha-a"); err != nil {
 		t.Fatalf("identical repeat: %v", err)
 	}
-	if err := RecordIntegration(gdb, e.ID, "A", "sha-other", e.IntegrationRef); !errors.Is(err, ErrIntegrationConflict) {
+	if err := RecordIntegration(gdb, e.ID, "A", "sha-other"); !errors.Is(err, ErrIntegrationConflict) {
 		t.Fatalf("conflicting repeat = %v", err)
 	}
 	// No receipts while the run is not running.
@@ -207,7 +200,7 @@ func TestRecordIntegrationFailsClosed(t *testing.T) {
 	if _, err := AddRevision(gdb, e2.ID, diamondPlan(e2.IntegrationRef), ""); err != nil {
 		t.Fatalf("AddRevision: %v", err)
 	}
-	if err := RecordIntegration(gdb, e2.ID, "A", "sha", e2.IntegrationRef); !errors.Is(err, ErrWrongState) {
+	if err := RecordIntegration(gdb, e2.ID, "A", "sha"); !errors.Is(err, ErrWrongState) {
 		t.Fatalf("receipt before start = %v", err)
 	}
 }

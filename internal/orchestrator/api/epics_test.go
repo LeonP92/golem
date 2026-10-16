@@ -52,9 +52,9 @@ func validPlanJSON() epic.Plan {
 		Requirements: []epic.Requirement{{ID: "R1", Text: "model"}, {ID: "R2", Text: "api"}},
 		Nodes: []epic.Node{
 			{Key: "T1", Title: "schema", AcceptanceCommands: []string{"go test ./..."},
-				RequirementIDs: []string{"R1"}, BranchTarget: "epic/x"},
+				RequirementIDs: []string{"R1"}},
 			{Key: "T2", Title: "api", AcceptanceCommands: []string{"go test ./api/..."},
-				RequirementIDs: []string{"R2"}, BranchTarget: "epic/x"},
+				RequirementIDs: []string{"R2"}},
 		},
 		Edges: []epic.Edge{{Predecessor: "T1", Successor: "T2", Reason: "api uses model"}},
 	}
@@ -75,10 +75,10 @@ func createTestEpic(t *testing.T, mux *http.ServeMux, cookie *http.Cookie) db.Ep
 	return e
 }
 
-// The M1 flow end to end over HTTP: create, add a valid revision, approve
+// End to end over HTTP: create, add a valid revision, approve
 // the exact hash, and see the approval on the epic.
 func TestEpicLifecycleOverHTTP(t *testing.T) {
-	_, mux, cookie := setupEpicTest(t)
+	h, mux, cookie := setupEpicTest(t)
 	e := createTestEpic(t, mux, cookie)
 
 	rec := epicRequest(t, mux, cookie, "POST", "/api/epics/"+e.ID+"/revisions", validPlanJSON())
@@ -107,6 +107,11 @@ func TestEpicLifecycleOverHTTP(t *testing.T) {
 	json.Unmarshal(rec.Body.Bytes(), &detail)
 	if detail.Epic.ApprovedPlanHash != rev.PlanHash {
 		t.Errorf("approved hash = %q, want %q", detail.Epic.ApprovedPlanHash, rev.PlanHash)
+	}
+	var stored db.EpicPlanRevision
+	h.DB.First(&stored, "epic_id = ?", e.ID)
+	if stored.ApprovedBy != "leon" {
+		t.Errorf("approved_by = %q, want the username", stored.ApprovedBy)
 	}
 	if len(detail.Plan.Nodes) != 2 {
 		t.Errorf("detail plan has %d nodes, want 2", len(detail.Plan.Nodes))

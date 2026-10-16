@@ -220,7 +220,7 @@ func TestEpicRunEndpoints(t *testing.T) {
 	}
 
 	// Integration receipt over HTTP, then B is claimable.
-	body := strings.NewReader(`{"sha":"abc123","target_ref":"` + e.IntegrationRef + `"}`)
+	body := strings.NewReader(`{"sha":"abc123"}`)
 	req = httptest.NewRequest(http.MethodPost, "/api/epics/"+e.ID+"/nodes/A/integrate", body)
 	req.AddCookie(cookie)
 	req.Header.Set("X-CSRF-Token", auth.CSRFTokenForSession(cookie.Value))
@@ -255,7 +255,7 @@ func TestClaimResponseCarriesEpicContext(t *testing.T) {
 		t.Fatalf("decode: %v", err)
 	}
 	if resp.Epic == nil || resp.Epic.EpicID != e.ID || resp.Epic.NodeKey != "A" ||
-		resp.Epic.PlanRevision != 1 || resp.Epic.BaseFallback != e.BaseBranch ||
+		resp.Epic.BaseFallback != e.BaseBranch ||
 		len(resp.Epic.AcceptanceCommands) != 1 || resp.Epic.AcceptanceCommands[0] != "go test ./..." {
 		t.Fatalf("epic context = %+v", resp.Epic)
 	}
@@ -275,8 +275,7 @@ func TestClaimResponseCarriesEpicContext(t *testing.T) {
 }
 
 // The verdict endpoint is the tester runner's write path: API-key auth,
-// validated shape, and a verdict that lifts the lane's blocked row for
-// the same head.
+// validated shape, ownership of the child.
 func TestPostEpicVerdict(t *testing.T) {
 	h, mux := setupTicketTest(t)
 	h.RegisterEpicRoutes(mux)
@@ -284,12 +283,6 @@ func TestPostEpicVerdict(t *testing.T) {
 	e := seedRunningEpic(t, h.DB)
 	seedShem(t, h, "shem-b", "otherkey")
 	assignTicketToShem(t, h, epicChild(t, h.DB, e.ID, "A").ID, "shem-a")
-
-	// A blocked-tester row waiting on a verdict for head1.
-	h.DB.Create(&db.IntegrationAttempt{
-		EpicID: e.ID, EpicNodeKey: "A", TicketID: "x", PRNumber: 1,
-		HeadSHA: "head1", State: "blocked-tester", Cause: "waiting",
-	})
 
 	postAs := func(name, key, body string) *httptest.ResponseRecorder {
 		w := httptest.NewRecorder()
@@ -308,7 +301,7 @@ func TestPostEpicVerdict(t *testing.T) {
 	if w := post(`{"epic_node_key":"","head_sha":"head1","verdict":"pass"}`); w.Code == http.StatusCreated {
 		t.Fatal("final-candidate verdict accepted from a shem")
 	}
-	if w := post(`{"epic_node_key":"A","head_sha":"head1","verdict":"MAYBE"}`); w.Code != http.StatusBadRequest {
+	if w := post(`{"epic_node_key":"A","head_sha":"head1","verdict":"MAYBE"}`); w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("bad verdict: %d", w.Code)
 	}
 	w := post(`{"epic_node_key":"A","head_sha":"head1","base_sha":"base1","verdict":"pass","scenarios":"boot, login","backend":"local"}`)
@@ -319,10 +312,6 @@ func TestPostEpicVerdict(t *testing.T) {
 	h.DB.Model(&db.TesterVerdict{}).Where("epic_id = ? AND head_sha = 'head1' AND verdict = 'pass'", e.ID).Count(&n)
 	if n != 1 {
 		t.Fatalf("verdicts = %d", n)
-	}
-	h.DB.Model(&db.IntegrationAttempt{}).Where("epic_id = ? AND state = 'blocked-tester'", e.ID).Count(&n)
-	if n != 0 {
-		t.Fatal("the verdict must lift the blocked row for its head")
 	}
 	// No API key, no write.
 	w = httptest.NewRecorder()

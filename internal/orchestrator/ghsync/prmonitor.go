@@ -99,7 +99,7 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 		if err := s.DB.Select("state").First(&e, "id = ?", *ticket.EpicID).Error; err != nil {
 			return fmt.Errorf("load epic %s: %w", *ticket.EpicID, err)
 		}
-		if e.State != "running" {
+		if e.State != epics.StateRunning {
 			return nil
 		}
 	}
@@ -147,12 +147,16 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 		if checksErr != nil {
 			return fmt.Errorf("list checks for pull request #%d: %w", status.Number, checksErr)
 		}
-		// Clean pass: an epic child's pull request may be merged by the
-		// integration lane itself when the epic's policy allows it. For
-		// ordinary tickets and hand-merged epics this is a no-op and the
-		// human merge is observed on a later pass as always.
-		if err := epics.AttemptMerge(ctx, s.DB, s.GH, &ticket, status); err != nil {
+		// An epic child may be merged by the integration lane; a no-op for
+		// ordinary tickets.
+		fix, park, err := epics.MergeChild(ctx, s.DB, s.GH, repo.Owner, repo.Name, &ticket, status)
+		switch {
+		case err != nil:
 			return fmt.Errorf("epic integration lane: %w", err)
+		case fix != "":
+			return s.needsFixing(ticket, status.HeadSHA, fix)
+		case park != "":
+			return s.setPhase(ticket, "needs-attention", park)
 		}
 		return nil
 	}
@@ -357,21 +361,19 @@ func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestSt
 // the ticket. Receipt first: a closed ticket is never polled again, so a
 // receipt that fails must leave the ticket open for the next tick to retry.
 func (s *Syncer) closeMergedTicket(ticket db.Ticket, status github.PullRequestStatus) error {
-	if ticket.EpicID != nil {
+	switch {
+	case ticket.EpicID == nil:
+	case status.BaseRef != "" && status.BaseRef != ticket.BaseBranch:
+		log.Printf("pr monitor: epic child %s merged into %s, not %s; no receipt", ticket.ID, status.BaseRef, ticket.BaseBranch)
+	default:
 		sha := status.MergeCommitSHA
 		if sha == "" {
 			sha = status.HeadSHA
 		}
-		ref := status.BaseRef
-		if ref == "" {
-			ref = ticket.BaseBranch
-		}
-		err := epics.RecordIntegration(s.DB, *ticket.EpicID, ticket.EpicNodeKey, sha, ref)
-		switch {
-		case errors.Is(err, epics.ErrIntegrationConflict), errors.Is(err, epics.ErrWrongState):
-			// Not retryable: the record disagrees or the run is over.
+		err := epics.RecordIntegration(s.DB, *ticket.EpicID, ticket.EpicNodeKey, sha)
+		if errors.Is(err, epics.ErrIntegrationConflict) || errors.Is(err, epics.ErrWrongState) {
 			log.Printf("pr monitor: epic receipt for %s node %s: %v", ticket.ID, ticket.EpicNodeKey, err)
-		case err != nil:
+		} else if err != nil {
 			return fmt.Errorf("epic receipt for node %s: %w", ticket.EpicNodeKey, err)
 		}
 	}

@@ -64,7 +64,7 @@ func epicGet(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, path string)
 
 const epicUITestPlan = `{"requirements":[{"id":"R1","text":"model"}],
 "nodes":[{"key":"T1","title":"schema","acceptance_commands":["go test ./..."],
-"requirement_ids":["R1"],"branch_target":"epic/x"}],"edges":[]}`
+"requirement_ids":["R1"]}],"edges":[]}`
 
 // The full human loop the design asks for: create the epic, save a plan
 // revision, approve it — with the approve form carrying the exact hash the
@@ -206,16 +206,13 @@ func TestEpicDetail_StartAndProgress(t *testing.T) {
 	if !strings.Contains(body, "0 / 1</strong> integrated") {
 		t.Fatal("no progress line after start")
 	}
-	// The child is a real ticket, linked from the row and the map.
+	// The child is a real ticket, linked from its row.
 	var child db.Ticket
 	if err := gdb.First(&child, "epic_id = ?", rev.EpicID).Error; err != nil {
 		t.Fatalf("child: %v", err)
 	}
 	if !strings.Contains(body, "/tickets/"+child.ID) {
 		t.Fatal("child ticket not linked")
-	}
-	if !strings.Contains(body, "Dependency map") {
-		t.Fatal("dependency map not rendered")
 	}
 	// Starting again is a no-op (the button stays gone anyway).
 	w = epicFormPost(t, mux, cookie, detail+"/start", url.Values{})

@@ -2,7 +2,6 @@ package epics
 
 import (
 	"context"
-	"errors"
 	"strings"
 	"testing"
 
@@ -32,7 +31,7 @@ func awaitingFinalReview(t *testing.T, target string, autoFinal bool) (*gorm.DB,
 		t.Fatalf("start: %v", err)
 	}
 	for _, key := range []string{"T1", "T2"} {
-		if err := RecordIntegration(gdb, e.ID, key, "sha-"+key, e.IntegrationRef); err != nil {
+		if err := RecordIntegration(gdb, e.ID, key, "sha-"+key); err != nil {
 			t.Fatalf("receipt %s: %v", key, err)
 		}
 	}
@@ -63,7 +62,7 @@ func TestMergeFinalFeatureTargetNeverTouchesBase(t *testing.T) {
 	gh := github.NewFake()
 	finalPR(t, gh, e.IntegrationRef, "head1")
 	err := MergeFinal(context.Background(), gdb, gh, e.ID)
-	if err == nil || !strings.Contains(err.Error(), "never touches base") {
+	if err == nil || !strings.Contains(err.Error(), "final merge is yours") {
 		t.Fatalf("err = %v", err)
 	}
 	for _, c := range gh.CallsSnapshot() {
@@ -102,14 +101,9 @@ func TestMergeFinalRequiresCurrentPass(t *testing.T) {
 	if fresh.State != "completed" {
 		t.Fatalf("state = %q, want completed", fresh.State)
 	}
-	var att db.IntegrationAttempt
-	gdb.First(&att, "epic_id = ? AND epic_node_key = ''", e.ID)
-	if att.State != "merged" {
-		t.Fatalf("attempt = %+v", att)
-	}
 }
 
-// Protected-branch rules on the final merge are honored and recorded.
+// Protected-branch refusals on the final merge surface.
 func TestMergeFinalProtectedBranch(t *testing.T) {
 	gdb, e := awaitingFinalReview(t, TargetBaseBranch, true)
 	gh := github.NewFake()
@@ -118,11 +112,6 @@ func TestMergeFinalProtectedBranch(t *testing.T) {
 	RecordVerdict(gdb, db.TesterVerdict{EpicID: e.ID, HeadSHA: "head1", Verdict: "pass"})
 	if err := MergeFinal(context.Background(), gdb, gh, e.ID); err == nil {
 		t.Fatal("protection refusal must surface")
-	}
-	var att db.IntegrationAttempt
-	gdb.First(&att, "epic_id = ? AND epic_node_key = ''", e.ID)
-	if att.State != "failed-forbidden" {
-		t.Fatalf("attempt = %+v", att)
 	}
 }
 
@@ -144,41 +133,6 @@ func TestMergeFinalRequiresAllIntegrated(t *testing.T) {
 	}
 }
 
-// A transient final-merge failure retries on the same head; it must not
-// turn every later click into a silent no-op.
-func TestMergeFinalRetriesTransientFailure(t *testing.T) {
-	gdb, e := awaitingFinalReview(t, TargetBaseBranch, true)
-	gh := github.NewFake()
-	num := finalPR(t, gh, e.IntegrationRef, "head1")
-	RecordVerdict(gdb, db.TesterVerdict{EpicID: e.ID, HeadSHA: "head1", Verdict: "pass"})
-	gh.MergeErr = map[int]error{num: errors.New("502 bad gateway")}
-	if err := MergeFinal(context.Background(), gdb, gh, e.ID); err == nil {
-		t.Fatal("transient failure must surface")
-	}
-	gh.MergeErr = nil
-	if err := MergeFinal(context.Background(), gdb, gh, e.ID); err != nil {
-		t.Fatalf("retry: %v", err)
-	}
-	var fresh db.Epic
-	gdb.First(&fresh, "id = ?", e.ID)
-	if fresh.State != "completed" {
-		t.Fatalf("state = %q, want completed", fresh.State)
-	}
-}
-
-// A terminal refusal is reported on every later click, not swallowed.
-func TestMergeFinalTerminalRowIsReported(t *testing.T) {
-	gdb, e := awaitingFinalReview(t, TargetBaseBranch, true)
-	gh := github.NewFake()
-	num := finalPR(t, gh, e.IntegrationRef, "head1")
-	gh.MergeErr = map[int]error{num: github.ErrMergeForbidden}
-	RecordVerdict(gdb, db.TesterVerdict{EpicID: e.ID, HeadSHA: "head1", Verdict: "pass"})
-	_ = MergeFinal(context.Background(), gdb, gh, e.ID)
-	if err := MergeFinal(context.Background(), gdb, gh, e.ID); err == nil {
-		t.Fatal("second click on a refused head reported success")
-	}
-}
-
 // Trunk + flags integrates straight into base: the last receipt is the
 // delivery, so the run completes instead of waiting on a final PR that
 // can never exist.
@@ -197,7 +151,7 @@ func TestTrunkFlagsCompletesOnLastReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, k := range []string{"T1", "T2"} {
-		if err := RecordIntegration(gdb, e.ID, k, "sha-"+k, "main"); err != nil {
+		if err := RecordIntegration(gdb, e.ID, k, "sha-"+k); err != nil {
 			t.Fatal(err)
 		}
 	}

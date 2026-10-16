@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
@@ -82,17 +83,22 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		ManualApproval:  t.ManualApproval,
 	}
 	if t.EpicID != nil {
-		resp.Epic = &EpicClaim{EpicID: *t.EpicID, NodeKey: t.EpicNodeKey,
-			PlanRevision: t.EpicPlanRevision}
+		resp.Epic = &EpicClaim{EpicID: *t.EpicID, NodeKey: t.EpicNodeKey}
 		var e db.Epic
-		if err := h.DB.First(&e, "id = ?", *t.EpicID).Error; err == nil {
+		plan, _, err := epics.LoadPlan(h.DB, *t.EpicID, t.EpicPlanRevision)
+		if err == nil {
+			err = h.DB.First(&e, "id = ?", *t.EpicID).Error
+		}
+		if err != nil {
+			// The claim still goes out; without TesterRequired the lane just
+			// never auto-merges this child (fails closed).
+			log.Printf("claim %s: load epic context: %v", t.ID, err)
+		} else {
 			resp.Epic.BaseFallback = e.BaseBranch
 			resp.Epic.TesterRequired = e.TesterRequired
-			if plan, _, perr := epics.LoadPlan(h.DB, e.ID, t.EpicPlanRevision); perr == nil {
-				for _, n := range plan.Nodes {
-					if n.Key == t.EpicNodeKey {
-						resp.Epic.AcceptanceCommands = n.AcceptanceCommands
-					}
+			for _, n := range plan.Nodes {
+				if n.Key == t.EpicNodeKey {
+					resp.Epic.AcceptanceCommands = n.AcceptanceCommands
 				}
 			}
 		}
