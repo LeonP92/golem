@@ -486,10 +486,11 @@ func (e *GolemExecutor) runGolemVerify(ctx context.Context, repoPath, ticketID s
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
-	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 2) {
+	failed := errors.As(err, &exit) && exit.ExitCode() == 2
+	if err != nil && !failed {
 		log.Printf("executor: self-verification for %s did not run: %v\n%s", ticketID, err, out)
 	}
-	return string(out), errors.As(err, &exit) && exit.ExitCode() == 2
+	return string(out), failed
 }
 
 func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, baseBranch, model string) error {

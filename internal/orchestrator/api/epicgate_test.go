@@ -15,6 +15,8 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/epics"
+	"github.com/leonp92/golem/internal/orchestrator/sse"
+	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
 
 // seedRunningEpic builds a two-node epic (A -> B), approves it and starts
@@ -319,5 +321,34 @@ func TestPostEpicVerdict(t *testing.T) {
 	mux.ServeHTTP(w, req)
 	if w.Code == http.StatusCreated {
 		t.Fatal("unauthenticated verdict write")
+	}
+}
+
+// The epic SQL (claim gates, idempotent start inside a transaction,
+// receipts) on PostgreSQL, where a failed statement aborts the transaction.
+func TestPostgresEpicRun(t *testing.T) {
+	gdb := openPostgres(t)
+	h := api.NewHandlers(gdb, ws.NewHub(), sse.NewBroker())
+	mux := http.NewServeMux()
+	h.RegisterTicketRoutes(mux)
+	seedShem(t, h, "shem-a", "testkey")
+	e := seedRunningEpic(t, gdb)
+	if created, err := epics.Start(gdb, e.ID); err != nil || created != 0 {
+		t.Fatalf("repeat start: created=%d err=%v", created, err)
+	}
+	b := epicChild(t, gdb, e.ID, "B")
+	claim := func(id string) int {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, shemRequest(http.MethodPost, "/api/tickets/"+id+"/claim", "shem-a", "testkey"))
+		return w.Code
+	}
+	if code := claim(b.ID); code != http.StatusConflict {
+		t.Fatalf("blocked child claim = %d, want 409", code)
+	}
+	if err := epics.RecordIntegration(gdb, e.ID, "A", "sha-a"); err != nil {
+		t.Fatalf("receipt: %v", err)
+	}
+	if code := claim(b.ID); code != http.StatusOK {
+		t.Fatalf("unblocked child claim = %d, want 200", code)
 	}
 }
