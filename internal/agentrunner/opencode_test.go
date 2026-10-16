@@ -91,8 +91,8 @@ func TestOpenCodeConfigPreservesOtherKeys(t *testing.T) {
 	if err := json.Unmarshal(parsed["model"], &model); err != nil || model != "anthropic/claude-opus-4-5" {
 		t.Errorf("operator's model key not preserved: %s", parsed["model"])
 	}
-	if strings.Contains(string(parsed["permission"]), `"old"`) {
-		t.Errorf("stale permission block survived the merge: %s", parsed["permission"])
+	if !strings.Contains(string(parsed["permission"]), `"old"`) {
+		t.Errorf("operator permission key dropped by the merge: %s", parsed["permission"])
 	}
 }
 

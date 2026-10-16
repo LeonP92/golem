@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -91,56 +92,177 @@ var opencodeBashDeny = []string{
 	"sudo *",
 }
 
-// opencodePermissionJSON renders golem's permission block for opencode.json.
-//
-// Opencode permission rules are per tool with "allow" / "ask" / "deny"
-// actions, evaluated by pattern match with the LAST match winning
-// (https://opencode.ai/docs/permissions). The emission order below is
-// therefore load-bearing and deliberately not a Go map: the catch-all
-// "ask" first, then the allow globs, then the deny globs so an explicit
-// deny beats an overlapping allow. "ask" rather than "deny" for the
-// catch-all because opencode run can be given --auto to approve asks while
-// still honouring explicit denies — the operator's escape hatch — whereas a
-// denied command has none. Without --auto an unlisted command surfaces as
-// an unanswered permission request, which fails the run loudly instead of
-// silently doing the wrong thing.
-func opencodePermissionJSON() json.RawMessage {
-	var b strings.Builder
-	b.WriteString(`{"bash":{`)
-	b.WriteString(`"*":"ask"`)
-	writeRules := func(action string, globs []string) {
-		for _, g := range globs {
-			key, _ := json.Marshal(g)
-			fmt.Fprintf(&b, ",%s:%q", key, action)
-		}
-	}
-	writeRules("allow", opencodeBashAllow)
-	writeRules("deny", opencodeBashDeny)
-	// edit mirrors claude's Edit(**) allowance; webfetch stays at "ask" so
-	// network egress is never silently granted.
-	b.WriteString(`},"edit":"allow","webfetch":"ask"}`)
-	return json.RawMessage(b.String())
+// jsonField is one key of a JSON object, kept in document order.
+type jsonField struct {
+	Key   string
+	Value json.RawMessage
 }
 
-// writeOpenCodeConfig installs golem's permission block into dir's
-// opencode.json, preserving any unrelated top-level keys the operator set,
-// the same merge the claude adapter applies to .claude/settings.json.
+// orderedObject decodes a JSON object without losing key order, which
+// opencode's last-match-wins permission rules depend on.
+func orderedObject(raw []byte) ([]jsonField, error) {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('{') {
+		return nil, fmt.Errorf("not a JSON object")
+	}
+	var out []jsonField
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		var v json.RawMessage
+		if err := dec.Decode(&v); err != nil {
+			return nil, err
+		}
+		out = setField(out, tok.(string), v)
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	if dec.More() {
+		return nil, fmt.Errorf("trailing data after JSON object")
+	}
+	return out, nil
+}
+
+// setField replaces key's value in place, or appends it.
+func setField(fields []jsonField, key string, v json.RawMessage) []jsonField {
+	for i := range fields {
+		if fields[i].Key == key {
+			fields[i].Value = v
+			return fields
+		}
+	}
+	return append(fields, jsonField{key, v})
+}
+
+func getField(fields []jsonField, key string) (json.RawMessage, bool) {
+	for _, f := range fields {
+		if f.Key == key {
+			return f.Value, true
+		}
+	}
+	return nil, false
+}
+
+func encodeObject(fields []jsonField) json.RawMessage {
+	var b bytes.Buffer
+	b.WriteByte('{')
+	for i, f := range fields {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		k, _ := marshalJSON(f.Key)
+		b.Write(k)
+		b.WriteByte(':')
+		b.Write(f.Value)
+	}
+	b.WriteByte('}')
+	return b.Bytes()
+}
+
+func jsonString(s string) json.RawMessage {
+	out, _ := marshalJSON(s)
+	return out
+}
+
+// mergeOpenCodePermission merges golem's rules into an operator's
+// permission value (nil when absent).
+//
+// Opencode evaluates rules by pattern with the LAST match winning
+// (https://opencode.ai/docs/permissions), so bash order is load-bearing:
+// golem's "ask" catch-all and allows, then the operator's entries (theirs
+// win over golem's allows), then golem's denies, which always win — the
+// same precedence claude gives a deny. "ask" rather than "deny" for the
+// catch-all because `opencode run --auto` approves asks while honouring
+// explicit denies. Other permission keys keep the operator's value.
+func mergeOpenCodePermission(existing json.RawMessage) (json.RawMessage, error) {
+	var perm []jsonField
+	if len(existing) > 0 {
+		var err error
+		if perm, err = orderedObject(existing); err != nil {
+			return nil, fmt.Errorf("permission: %w", err)
+		}
+	}
+	bash := []jsonField{{"*", jsonString("ask")}}
+	for _, g := range opencodeBashAllow {
+		bash = setField(bash, g, jsonString("allow"))
+	}
+	if v, ok := getField(perm, "bash"); ok {
+		var s string
+		if json.Unmarshal(v, &s) == nil {
+			bash = setField(bash, "*", v) // a bare string is the catch-all
+		} else {
+			ops, err := orderedObject(v)
+			if err != nil {
+				return nil, fmt.Errorf("permission.bash: %w", err)
+			}
+			for _, f := range ops {
+				bash = setField(bash, f.Key, f.Value)
+			}
+		}
+	}
+	for _, g := range opencodeBashDeny {
+		for i := range bash {
+			if bash[i].Key == g {
+				bash = append(bash[:i], bash[i+1:]...)
+				break
+			}
+		}
+		bash = append(bash, jsonField{g, jsonString("deny")})
+	}
+	perm = setField(perm, "bash", encodeObject(bash))
+	// edit mirrors claude's Edit(**); webfetch stays "ask" so network
+	// egress is never silently granted.
+	for _, d := range []jsonField{{"edit", jsonString("allow")}, {"webfetch", jsonString("ask")}} {
+		if _, ok := getField(perm, d.Key); !ok {
+			perm = append(perm, d)
+		}
+	}
+	return encodeObject(perm), nil
+}
+
+// opencodePermissionJSON is golem's permission block on its own.
+func opencodePermissionJSON() json.RawMessage {
+	out, _ := mergeOpenCodePermission(nil)
+	return out
+}
+
+// writeOpenCodeConfig merges golem's permission block into dir's
+// opencode.json, keeping every other key and the operator's own rules. A
+// file encoding/json cannot read (opencode also accepts comments) is left
+// alone rather than replaced, and an unchanged result is not rewritten.
 func writeOpenCodeConfig(dir string) error {
 	configPath := filepath.Join(dir, "opencode.json")
 	existing, err := os.ReadFile(configPath) //nolint:gosec // path inside the worked repo
 	if err != nil && !os.IsNotExist(err) {
 		return err
 	}
-	raw := map[string]json.RawMessage{}
-	if len(existing) > 0 {
-		_ = json.Unmarshal(existing, &raw)
+	existing = bytes.TrimPrefix(existing, []byte("\xef\xbb\xbf"))
+	var top []jsonField
+	if len(bytes.TrimSpace(existing)) > 0 {
+		if top, err = orderedObject(existing); err != nil {
+			log.Printf("agentrunner: leaving %s alone (%v); golem's permission rules are not applied", configPath, err)
+			return nil
+		}
 	}
-	raw["permission"] = opencodePermissionJSON()
-	out, err := json.MarshalIndent(raw, "", "  ")
+	prev, _ := getField(top, "permission")
+	perm, err := mergeOpenCodePermission(prev)
 	if err != nil {
+		log.Printf("agentrunner: leaving %s alone (%v); golem's permission rules are not applied", configPath, err)
+		return nil
+	}
+	top = setField(top, "permission", perm)
+	var out bytes.Buffer
+	if err := json.Indent(&out, encodeObject(top), "", "  "); err != nil {
 		return err
 	}
-	return os.WriteFile(configPath, append(out, '\n'), 0o644)
+	out.WriteByte('\n')
+	if bytes.Equal(out.Bytes(), existing) {
+		return nil
+	}
+	return os.WriteFile(configPath, out.Bytes(), 0o644) //nolint:gosec // not secret
 }
 
 // openCodeAgentFrontmatter renders the frontmatter for one projected role.
@@ -183,7 +305,11 @@ func (o OpenCode) GenerateArtifacts(repoRoot string, roleContent map[string]stri
 
 // WorktreeSetup installs the permission block in a fresh worktree.
 func (o OpenCode) WorktreeSetup(worktreePath string) error {
-	return writeOpenCodeConfig(worktreePath)
+	if err := writeOpenCodeConfig(worktreePath); err != nil {
+		return err
+	}
+	skipWorktree(worktreePath, "opencode.json")
+	return nil
 }
 
 // PrepareHost has nothing to do: opencode has no workspace-trust system to

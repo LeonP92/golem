@@ -143,7 +143,11 @@ func (c Codex) GenerateArtifacts(repoRoot string, roleContent map[string]string)
 
 // WorktreeSetup installs the same rules in a fresh worktree.
 func (c Codex) WorktreeSetup(worktreePath string) error {
-	return writeCodexRules(worktreePath)
+	if err := writeCodexRules(worktreePath); err != nil {
+		return err
+	}
+	skipWorktree(worktreePath, ".codex/rules/golem.rules")
+	return nil
 }
 
 func (c Codex) RunAgent(ctx context.Context, role string, in Context, model string) (Result, error) {
