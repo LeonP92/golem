@@ -24,6 +24,12 @@
           </a>
           {{end}}
         </div>
+        {{if .Ticket.EpicID}}
+        <p class="text-base-content/70 mt-1 text-sm font-medium">
+          Part of <a href="/epics/{{.Ticket.EpicID}}" class="link link-hover">this epic run</a>
+          (node {{.Ticket.EpicNodeKey}}){{if not .Ticket.EpicReady}} — dependency-blocked until its predecessors integrate{{end}}.
+        </p>
+        {{end}}
         {{if .Ticket.IssueNumber}}
         <p class="text-base-content/70 mt-1 text-sm font-medium">{{.Ticket.Title}}</p>
         <p class="text-base-content/50 mt-0.5 text-xs flex items-center gap-1 flex-wrap">

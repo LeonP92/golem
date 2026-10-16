@@ -28,7 +28,7 @@ func TestGolemTicketNewArgs_SeparatesDescription(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			args := golemTicketNewArgs("t1", "golem/branch", tc.description, "/run/backend.yaml")
+			args := golemTicketNewArgs("t1", "golem/branch", tc.description, "/run/backend.yaml", "")
 
 			sep := slices.Index(args, "--")
 			if sep == -1 {
@@ -53,5 +53,40 @@ func TestGolemTicketNewArgs_SeparatesDescription(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// The pinned base commit rides in the flag region: it is resolved locally
+// from git, never from the untrusted description, and must still precede
+// the separator so it is parsed as a flag.
+func TestGolemTicketNewArgs_BaseSHAPrecedesSeparator(t *testing.T) {
+	sha := "0123456789abcdef0123456789abcdef01234567"
+	args := golemTicketNewArgs("t1", "golem/branch", "desc", "/run/backend.yaml", sha)
+
+	sep := slices.Index(args, "--")
+	idx := slices.Index(args, "--base-sha")
+	if idx == -1 || idx > sep {
+		t.Errorf("--base-sha is missing or after the separator: %q", args)
+	}
+	if args[idx+1] != sha {
+		t.Errorf("--base-sha value = %q, want %q", args[idx+1], sha)
+	}
+}
+
+func TestGolemTicketNewArgs_NoBaseSHAOmitsFlag(t *testing.T) {
+	args := golemTicketNewArgs("t1", "golem/branch", "desc", "/run/backend.yaml", "")
+	if slices.Contains(args, "--base-sha") {
+		t.Errorf("--base-sha present without a value: %q", args)
+	}
+}
+
+// Acceptance commands travel as repeated --accept flags, before the
+// separator, in plan order.
+func TestGolemTicketNewArgs_AcceptPrecedesSeparator(t *testing.T) {
+	args := golemTicketNewArgs("t1", "b", "desc", "/run/backend.yaml", "", "sh a.sh", "sh b.sh")
+	sep := slices.Index(args, "--")
+	first := slices.Index(args, "--accept")
+	if first == -1 || first > sep || args[first+1] != "sh a.sh" || args[first+3] != "sh b.sh" {
+		t.Errorf("args = %q", args)
 	}
 }

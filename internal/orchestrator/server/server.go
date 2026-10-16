@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	"github.com/leonp92/golem/internal/orchestrator/ui"
@@ -26,6 +27,10 @@ type Server struct {
 	// when the worker was actually started, so a nil *ghsync.Worker is
 	// never boxed into this interface (see main.go for why that matters).
 	Sync api.SyncTrigger
+	// GH is the GitHub client the sync worker uses; shared with handlers
+	// that must act on GitHub directly (epic final merge). Nil when sync
+	// is not configured.
+	GH github.Client
 	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
 	ManualSyncCooldown time.Duration
 	// CSPMode controls the Content-Security-Policy header: "enforce"
@@ -64,6 +69,7 @@ func (s *Server) Routes() http.Handler {
 	h := api.NewHandlers(s.DB, s.Hub, s.Broker)
 	h.BaseURL = s.BaseURL
 	h.Sync = s.Sync
+	h.GH = s.GH
 	h.ManualSyncCooldown = s.ManualSyncCooldown
 	h.GitHubTokenEnv = s.GitHubTokenEnv
 	h.LogEntryHTML = ui.MakeLogEntryRenderer(tmpls)
@@ -73,9 +79,11 @@ func (s *Server) Routes() http.Handler {
 	h.RegisterHumanRoutes(mux)
 	h.RegisterGitHubRoutes(mux)
 	h.RegisterModelRoutes(mux)
+	h.RegisterEpicRoutes(mux)
 
 	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls, s.SecureCookie)
 	uiHandlers.GitHubDefaultLabel = s.GitHubDefaultLabel
+	uiHandlers.GH = s.GH
 	uiHandlers.Hub = s.Hub
 	uiHandlers.RegisterRoutes(mux)
 

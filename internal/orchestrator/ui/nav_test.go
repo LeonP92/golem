@@ -50,7 +50,7 @@ func TestNavIsCompleteOnEveryNavPage(t *testing.T) {
 
 	// Every page that renders the nav. The ticket detail page is deliberately
 	// nav-less (it renders with an empty Nav), so it is not listed.
-	pages := []string{"/dashboard", "/shems", "/settings/github", "/tickets/new", "/users", "/settings/security"}
+	pages := []string{"/dashboard", "/epics", "/epics/new", "/shems", "/settings/github", "/tickets/new", "/users", "/settings/security"}
 
 	// One marker per permission-gated nav control, with the render-map key
 	// that supplies it, so a failure says which key the page forgot.

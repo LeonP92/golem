@@ -419,3 +419,33 @@ func waitFor(t *testing.T, timeout time.Duration, cond func() bool, what string)
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+// A second orchestrator sharing the database must not drain while another
+// holds the outbox lease — the single-drainer assumption is enforced, not
+// documented.
+func TestDrainLoopSkipsWhileLeaseHeldElsewhere(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	f := github.NewFake()
+	f.AddIssue(github.Issue{Number: 7, State: "open", Labels: []string{"golem"}})
+	if err := ghsync.Enqueue(gdb, db.GitHubOutbox{
+		TicketID: "t1", Kind: ghsync.KindComment, Payload: `{"body":"hi"}`,
+		IdempotencyKey: ghsync.CommentKey("t1", "spec"),
+	}); err != nil {
+		t.Fatalf("Enqueue: %v", err)
+	}
+	if _, acquired, err := db.AcquireLease(gdb, ghsync.OutboxDrainLeaseName, "other-orchestrator", time.Minute); err != nil || !acquired {
+		t.Fatalf("AcquireLease: acquired=%t err=%v", acquired, err)
+	}
+
+	w := ghsync.NewWorker(ghsync.NewSyncer(gdb, f), time.Hour, 10*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	w.Start(ctx)
+	defer w.Stop()
+
+	// The drain ticker fires many times within this window; none may deliver.
+	time.Sleep(200 * time.Millisecond)
+	if got := len(f.CommentsFor(7)); got != 0 {
+		t.Errorf("drained %d comments while another orchestrator held the lease, want 0", got)
+	}
+}

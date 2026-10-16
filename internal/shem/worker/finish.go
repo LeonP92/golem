@@ -66,6 +66,23 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
 		} else {
 			postStatus(c, ticketID, "Pushed "+branch+" to origin")
+			// An epic child's PR targets the run's integration ref; the
+			// first finishing child creates that ref on the remote at the
+			// pinned base SHA so the pull request has a base. Non-fatal:
+			// a later child retries it, and the orchestrator's PR writer
+			// fails loudly while the ref is genuinely absent.
+			if claim.Epic != nil {
+				baseSHA := readBranchBaseSHA(ticketDir)
+				if baseSHA == "" {
+					postStatus(c, ticketID, "No pinned base SHA recorded; leaving the "+
+						"integration ref to another child")
+				} else if err := ensureRemoteBaseRef(ctx, repoPath, claim.RepoRemote,
+					claim.Epic.BaseFallback, claim.BaseBranch, baseSHA); err != nil {
+					postStatus(c, ticketID, "Could not create integration ref "+
+						claim.BaseBranch+": "+firstLineOf(err.Error()))
+					log.Printf("executor: ensure base ref for %s: %v", ticketID, err)
+				}
+			}
 			// Generated here, after the push and before the report, because
 			// the description is written from the branch's own diff and only
 			// this host has it. A failure is logged and the report goes out
@@ -80,6 +97,13 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			}
 			if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
 				log.Printf("executor: post branch-pushed: %v", pErr)
+			}
+			// An epic child whose run requires a tester verdict gets the
+			// tester stage against the exact head just pushed, so the
+			// integration lane's gate has its evidence. Runs after the PR
+			// report so a slow tester never delays the pull request.
+			if claim.Epic != nil && claim.Epic.TesterRequired {
+				e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
 			}
 		}
 	}

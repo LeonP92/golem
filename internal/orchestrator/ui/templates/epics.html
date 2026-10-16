@@ -1,0 +1,69 @@
+{{define "page_content"}}
+<div class="flex items-center justify-between mb-6">
+  <h1 class="text-2xl font-bold">Epics</h1>
+  {{if .CanCreateTicket}}
+  <a href="/epics/new" class="btn btn-primary btn-sm gap-1.5">
+    <span class="iconify" data-icon="heroicons:plus"></span>
+    New Epic
+  </a>
+  {{end}}
+</div>
+
+<form method="GET" action="/epics" class="flex flex-wrap gap-2 mb-4">
+  <input type="text" name="repo" value="{{.RepoFilter}}" placeholder="Repository"
+         class="input input-bordered input-sm" list="epic-repos" />
+  <datalist id="epic-repos">{{range .AvailableRepos}}<option value="{{.}}">{{end}}</datalist>
+  <select name="state" class="select select-bordered select-sm">
+    <option value="">All states</option>
+    {{range $s := .States}}
+    <option value="{{$s}}" {{if eq $.StateFilter $s}}selected{{end}}>{{$s}}</option>
+    {{end}}
+  </select>
+  <button type="submit" class="btn btn-sm">Filter</button>
+</form>
+
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body p-0">
+    <div class="overflow-x-auto">
+      <table class="table table-zebra">
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Repository</th>
+            <th>State</th>
+            <th>Strategy</th>
+            <th>Plan</th>
+            <th>Created</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{range .Epics}}
+          <tr>
+            <td><a href="/epics/{{.ID}}" class="link link-hover font-medium">{{.Title}}</a></td>
+            <td class="text-sm">{{.RepoRemote}}</td>
+            <td><span class="badge badge-sm">{{.State}}</span></td>
+            <td class="text-sm">{{.BranchStrategy}} / {{.DeliveryTarget}}</td>
+            <td class="text-sm">
+              {{if .ApprovedPlanHash}}approved r{{.ApprovedRevision}}
+              {{else if .CurrentRevision}}r{{.CurrentRevision}} awaiting approval
+              {{else}}no plan yet{{end}}
+            </td>
+            <td class="text-sm">{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          </tr>
+          {{else}}
+          <tr>
+            <td colspan="6" class="text-center py-12 text-base-content/50">
+              <div class="flex flex-col items-center gap-2">
+                <span class="iconify text-4xl" data-icon="heroicons:rectangle-stack"></span>
+                <p>No epics yet.</p>
+                <p class="text-sm">An epic turns one large spec into an approved, dependency-ordered plan of ordinary tickets.</p>
+              </div>
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+{{end}}

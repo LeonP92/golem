@@ -533,3 +533,38 @@ func TestDrainCommitsPostWriteAndDoneAtAtomically(t *testing.T) {
 		t.Error("LastError empty after the commit transaction failed")
 	}
 }
+
+// An epic child has no issue but still needs its pull request — the lane
+// merges it — and a draft would be unmergeable, so it opens ready.
+func TestDrainPullRequestForEpicChild(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	newRepo(t, gdb)
+	epicID := "e1"
+	if err := gdb.Create(&db.Ticket{ID: "c1", RepoRemote: "https://github.com/org/repo",
+		Title: "child", Branch: "ticket/child-c1", BaseBranch: "epic/e1", Phase: "ready-for-review",
+		EpicID: &epicID, EpicNodeKey: "A"}).Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := ghsync.Enqueue(gdb, db.GitHubOutbox{
+		TicketID: "c1", Kind: ghsync.KindPR,
+		Payload:        `{"head":"ticket/child-c1","base":"epic/e1","title":"child","body":"b"}`,
+		IdempotencyKey: ghsync.PRKey("c1"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f := github.NewFake()
+	if err := ghsync.NewSyncer(gdb, f).Drain(context.Background()); err != nil {
+		t.Fatalf("Drain: %v", err)
+	}
+	if prs := f.PRsSnapshot(); len(prs) != 1 {
+		t.Fatalf("PRs = %d, want 1", len(prs))
+	}
+	if f.DraftByHead["ticket/child-c1"] {
+		t.Fatal("epic child PR opened as a draft")
+	}
+	var tk db.Ticket
+	gdb.First(&tk, "id = ?", "c1")
+	if tk.PRNumber == nil {
+		t.Fatal("PR number not recorded on the child")
+	}
+}

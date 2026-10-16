@@ -391,3 +391,29 @@ func TestUpdatePhaseRace_ConcurrentBranchPushed_StillQueuesOnePR(t *testing.T) {
 		t.Errorf("pr rows = %d, want exactly 1 once both preconditions are true", prs)
 	}
 }
+
+// An epic child has no issue, yet its pull request is what the lane
+// merges: branch pushed + ready-for-review queues one, with no "Closes".
+func TestPRQueuedForEpicChildWithoutIssue(t *testing.T) {
+	h, mux := setupPRTest(t)
+	h.RegisterEpicRoutes(mux)
+	shem := seedShem(t, h, "pr-shem", "prkey")
+	e := seedRunningEpic(t, h.DB)
+	child := epicChild(t, h.DB, e.ID, "A")
+	h.DB.Model(&db.Ticket{}).Where("id = ?", child.ID).
+		Updates(map[string]any{"assigned_shem": shem.ID, "phase": "implement"})
+
+	if code := doBranchPushed(t, mux, child.ID, "pr-shem", "prkey"); code != http.StatusNoContent {
+		t.Fatalf("push status = %d", code)
+	}
+	if code := doPhaseUpdateTo(t, mux, child.ID, "pr-shem", "prkey", "ready-for-review"); code != http.StatusNoContent {
+		t.Fatalf("phase status = %d", code)
+	}
+	var row db.GitHubOutbox
+	if err := h.DB.First(&row, "kind = ? AND ticket_id = ?", ghsync.KindPR, child.ID).Error; err != nil {
+		t.Fatalf("no PR queued for the epic child: %v", err)
+	}
+	if strings.Contains(row.Payload, "Closes #") || !strings.Contains(row.Payload, e.IntegrationRef) {
+		t.Fatalf("payload = %s", row.Payload)
+	}
+}

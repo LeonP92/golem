@@ -1,0 +1,70 @@
+{{define "page_content"}}
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold mb-6">New Epic</h1>
+  {{if .Error}}
+  <div class="alert alert-error mb-4"><span>{{.Error}}</span></div>
+  {{end}}
+  <form method="POST" action="/epics/new" class="card bg-base-100 shadow-sm">
+    <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+    <div class="card-body space-y-4">
+      <label class="form-control">
+        <span class="label-text font-medium">Title</span>
+        <input type="text" name="title" value="{{.Form.Title}}" class="input input-bordered" required>
+      </label>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <label class="form-control">
+          <span class="label-text font-medium">Repository</span>
+          <input type="text" name="repo_remote" value="{{.Form.RepoRemote}}" class="input input-bordered"
+                 list="epic-repos" placeholder="https://github.com/org/repo" required>
+          <datalist id="epic-repos">{{range .AvailableRepos}}<option value="{{.}}">{{end}}</datalist>
+        </label>
+        <label class="form-control">
+          <span class="label-text font-medium">Base branch</span>
+          <input type="text" name="base_branch" value="{{.Form.BaseBranch}}" class="input input-bordered" required>
+        </label>
+      </div>
+      <label class="form-control">
+        <span class="label-text font-medium">Specification (Markdown)</span>
+        <textarea name="spec_markdown" rows="14" class="textarea textarea-bordered font-mono text-sm"
+                  placeholder="# Feature&#10;&#10;## Requirements&#10;R1 ..." required>{{.Form.SpecMarkdown}}</textarea>
+        <span class="label-text-alt">The original spec is stored verbatim and hashed; every plan revision binds back to it.</span>
+      </label>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <label class="form-control">
+          <span class="label-text font-medium">Branch strategy</span>
+          <select name="branch_strategy" class="select select-bordered">
+            <option value="epic-branch" {{if eq .Form.BranchStrategy "epic-branch"}}selected{{end}}>Epic branch (default)</option>
+            <option value="trunk-flags" {{if eq .Form.BranchStrategy "trunk-flags"}}selected{{end}}>Trunk + feature flags</option>
+          </select>
+        </label>
+        <label class="form-control">
+          <span class="label-text font-medium">Delivery target</span>
+          <select name="delivery_target" class="select select-bordered">
+            <option value="feature-branch" {{if eq .Form.DeliveryTarget "feature-branch"}}selected{{end}}>Feature branch (final review is yours)</option>
+            <option value="base-branch" {{if eq .Form.DeliveryTarget "base-branch"}}selected{{end}}>Base branch (tester-gated auto-merge)</option>
+          </select>
+          <span class="label-text-alt">Trunk + flags delivers slices to base; it has no final feature-branch handoff.</span>
+        </label>
+      </div>
+      <div class="space-y-1">
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="auto_merge_children" class="checkbox" {{if .Form.AutoMergeChildren}}checked{{end}}>
+          <span class="label-text">Auto-merge child PRs into the integration branch (requires the tester gate)</span>
+        </label>
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="auto_merge_final" class="checkbox" {{if .Form.AutoMergeFinal}}checked{{end}}>
+          <span class="label-text">Auto-merge the final PR to base (only with the base-branch delivery target)</span>
+        </label>
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="auto_approve_phases" class="checkbox" {{if .Form.AutoApprovePhases}}checked{{end}}>
+          <span class="label-text">Auto-approve child phases (children skip the human spec/plan approval; each child can still be overridden)</span>
+        </label>
+        <p class="label-text-alt pl-10">Turning either auto-merge on makes the tester verdict required; nothing merges without it. Phase auto-approval is inherited when a child is created — later policy changes never alter an existing child.</p>
+      </div>
+      <div class="card-actions justify-end">
+        <button type="submit" class="btn btn-primary">Create epic</button>
+      </div>
+    </div>
+  </form>
+</div>
+{{end}}

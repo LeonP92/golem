@@ -67,7 +67,8 @@ func Open(dsn string) (*gorm.DB, error) {
 	}
 	if err := gdb.AutoMigrate(
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
-		&GitHubRepo{}, &GitHubOutbox{},
+		&GitHubRepo{}, &GitHubOutbox{}, &Lease{},
+		&Epic{}, &EpicPlanRevision{}, &EpicNode{}, &EpicEdge{}, &IntegrationAttempt{}, &TesterVerdict{},
 	); err != nil {
 		return nil, err
 	}

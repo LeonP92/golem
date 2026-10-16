@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/leonp92/golem/internal/blog"
@@ -165,5 +166,70 @@ func TestTicketNewUsesTheBackendDocumentsAdapter(t *testing.T) {
 	// claude-code's WorktreeSetup writes .claude/settings.json.
 	if _, err := os.Stat(filepath.Join(s.WorktreePath, ".claude", "settings.json")); err != nil {
 		t.Errorf("the document's adapter did not run WorktreeSetup: %v", err)
+	}
+}
+
+func TestTicketNewBasePinsWorktreeToCommit(t *testing.T) {
+	repo := initRepoForCLI(t)
+	git := func(args ...string) string {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("git %v: %v", args, err)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	baseSHA := git("rev-parse", "HEAD")
+	os.WriteFile(filepath.Join(repo, "SECOND.md"), []byte("later"), 0o644)
+	git("add", ".")
+	git("commit", "-q", "-m", "second")
+
+	var stdout, stderr bytes.Buffer
+	code := TicketNew([]string{"--repo", repo, "--id", "tb", "--base", baseSHA, "add-widget"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("TicketNew failed: exit %d, stderr=%s", code, stderr.String())
+	}
+	s, err := ticket.Load(filepath.Join(repo, ".golem", "tickets", "tb"))
+	if err != nil {
+		t.Fatalf("ticket.Load: %v", err)
+	}
+	if s.BranchBaseSHA != baseSHA {
+		t.Errorf("BranchBaseSHA = %q, want %q", s.BranchBaseSHA, baseSHA)
+	}
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = s.WorktreePath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("rev-parse in worktree: %v", err)
+	}
+	if got := strings.TrimSpace(string(out)); got != baseSHA {
+		t.Errorf("worktree HEAD = %q, want pinned base %q", got, baseSHA)
+	}
+}
+
+func TestTicketNewRejectsUnresolvableBase(t *testing.T) {
+	repo := initRepoForCLI(t)
+	var stdout, stderr bytes.Buffer
+	for _, flag := range []string{"--base", "--base-sha"} {
+		code := TicketNew([]string{"--repo", repo, "--id", "tb", flag, "does-not-exist", "add-widget"}, &stdout, &stderr)
+		if code == 0 {
+			t.Errorf("TicketNew with %s does-not-exist: expected failure, got exit 0", flag)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".golem", "tickets", "tb", "state.json")); !os.IsNotExist(err) {
+		t.Error("failed base resolution must not leave a ticket behind")
+	}
+}
+
+func TestTicketNewRecordsAcceptanceCommands(t *testing.T) {
+	repo := initRepoForCLI(t)
+	var stdout, stderr bytes.Buffer
+	if code := TicketNew([]string{"--repo", repo, "--id", "ta", "--accept", "sh a.sh", "--accept", "sh b.sh", "x"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("TicketNew: exit %d, stderr=%s", code, stderr.String())
+	}
+	s, _ := ticket.Load(filepath.Join(repo, ".golem", "tickets", "ta"))
+	if len(s.AcceptanceCommands) != 2 || s.AcceptanceCommands[1] != "sh b.sh" {
+		t.Fatalf("AcceptanceCommands = %q", s.AcceptanceCommands)
 	}
 }

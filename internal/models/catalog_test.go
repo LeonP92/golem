@@ -4,7 +4,7 @@ import "testing"
 
 func TestStagesOrder(t *testing.T) {
 	want := []Stage{"brainstorm", "plan", "implement", "revise", "validate",
-		"observe", "review", "pr-description", "graph"}
+		"observe", "review", "pr-description", "graph", "test"}
 	if len(Stages) != len(want) {
 		t.Fatalf("Stages has %d entries, want %d", len(Stages), len(want))
 	}

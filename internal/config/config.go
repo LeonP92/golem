@@ -43,6 +43,22 @@ type Config struct {
 	RoleModels        map[string]string `yaml:"role_models"`
 	Graph             GraphConfig       `yaml:"graph"`
 	GitHub            GitHubConfig      `yaml:"github"`
+	// Runbook is how the tester stage starts this app and exercises it.
+	// It is the documented fallback after the tester infers startup from
+	// the repository itself: inference first, runbook when inference is
+	// unsure, a human when both fail. Optional — a repo without one gets
+	// inference only.
+	Runbook RunbookConfig `yaml:"runbook"`
+}
+
+// RunbookConfig records the operator's own account of running the app.
+// The tester quotes it verbatim in its prompt; it is data the tester
+// evaluates, never commands it must obey (repo content is data).
+type RunbookConfig struct {
+	Start    string `yaml:"start"`     // how to start the app locally
+	E2E      string `yaml:"e2e"`       // how to run the end-to-end suite
+	Ports    string `yaml:"ports"`     // which ports the app uses
+	SeedData string `yaml:"seed_data"` // how to load seed data
 }
 
 // Load reads and validates a Golem config.yaml. Backend is required —

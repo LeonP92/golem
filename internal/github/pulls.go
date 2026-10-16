@@ -84,6 +84,11 @@ type PullRequestStatus struct {
 	MergeableState string
 	HeadSHA        string
 	BaseRef        string
+	// MergeCommitSHA is the commit the merge created on the base, present
+	// only once Merged is true. For a squash/rebase merge it differs from
+	// HeadSHA; it is the SHA an integration receipt should name, because
+	// it is what the target ref actually contains.
+	MergeCommitSHA string
 }
 
 // Conflicted reports whether the pull request cannot merge because the branch
@@ -125,6 +130,7 @@ func (c *client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		MergeableState: pr.GetMergeableState(),
 		HeadSHA:        pr.GetHead().GetSHA(),
 		BaseRef:        pr.GetBase().GetRef(),
+		MergeCommitSHA: pr.GetMergeCommitSHA(),
 	}
 	if pr.Mergeable != nil {
 		st.Mergeable = gh.Ptr(pr.GetMergeable())
@@ -303,4 +309,42 @@ func failedConclusion(c string) bool {
 // have produced another run held for the same approval.
 func needsHumanConclusion(c string) bool {
 	return c == "action_required"
+}
+
+// ErrMergeConflictHead wraps the 409 the merge endpoint returns when
+// expectedHeadSHA no longer matches the branch head. It is a distinct
+// sentinel because the response is not a conflict-with-base: the merge was
+// refused before it could even be evaluated, and the caller must re-read and
+// re-validate the pull request rather than treat the change as conflicting.
+var ErrMergeConflictHead = errors.New("github: pull request head moved before merge")
+
+// ErrMergeForbidden wraps a 403 from the merge endpoint: the token lacks
+// permission. A 405 (not mergeable yet, e.g. checks pending) is left a
+// plain error so the lane retries it.
+var ErrMergeForbidden = errors.New("github: merge refused by permissions or branch protection")
+
+// MergePullRequest merges number into its base, pinned to expectedHeadSHA.
+// GitHub itself enforces the pin: a head that moved between validation and
+// the merge call is a 409, never a silent merge of the newer commits.
+func (c *client) MergePullRequest(ctx context.Context, owner, repo string, number int, expectedHeadSHA string) (string, error) {
+	res, _, err := c.api.PullRequests.Merge(ctx, owner, repo, number, "", &gh.PullRequestOptions{
+		SHA:         expectedHeadSHA,
+		MergeMethod: "merge",
+	})
+	if err != nil {
+		var resp *gh.ErrorResponse
+		if errors.As(err, &resp) && resp.Response != nil {
+			switch resp.Response.StatusCode {
+			case http.StatusConflict:
+				return "", fmt.Errorf("merge pull request %s/%s#%d: %w: %w", owner, repo, number, ErrMergeConflictHead, err)
+			case http.StatusForbidden:
+				return "", fmt.Errorf("merge pull request %s/%s#%d: %w: %w", owner, repo, number, ErrMergeForbidden, err)
+			}
+		}
+		return "", fmt.Errorf("merge pull request %s/%s#%d: %w", owner, repo, number, err)
+	}
+	if !res.GetMerged() {
+		return "", fmt.Errorf("merge pull request %s/%s#%d: github reports not merged: %s", owner, repo, number, res.GetMessage())
+	}
+	return res.GetSHA(), nil
 }

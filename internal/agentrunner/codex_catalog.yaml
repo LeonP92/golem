@@ -20,3 +20,4 @@ stage_defaults:
   observe: small
   pr-description: small
   graph: small
+  test: medium

@@ -23,12 +23,17 @@ const (
 	StageReview        Stage = "review"
 	StagePRDescription Stage = "pr-description"
 	StageGraph         Stage = "graph"
+	// StageTest is the tester agent: it runs the merge candidate against
+	// the spec's acceptance criteria and returns the verdict that gates
+	// auto-merge. A distinct stage so it gets its own model selection,
+	// per the same per-stage controls as every other stage.
+	StageTest Stage = "test"
 )
 
 // Stages is the closed set of stages, in display order.
 var Stages = []Stage{
 	StageBrainstorm, StagePlan, StageImplement, StageRevise, StageValidate,
-	StageObserve, StageReview, StagePRDescription, StageGraph,
+	StageObserve, StageReview, StagePRDescription, StageGraph, StageTest,
 }
 
 func isStage(s string) bool {

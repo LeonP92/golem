@@ -97,3 +97,27 @@ func TestDispatchForCommitSkipsIfAlreadyLoggedFromPriorRun(t *testing.T) {
 		t.Fatalf("expected the prior entry to be untouched and no new one added, got %d entries", len(entries))
 	}
 }
+
+// A silent observer still leaves evidence it ran: the gating reviewer
+// fails any category it cannot see checked.
+func TestDispatchForCommitRecordsSilenceAsNoFindings(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "log.jsonl")
+	mock := agentrunner.NewMock()
+	mock.ScriptResponse("convention-enforcer", agentrunner.Result{Output: "", Model: "mock"})
+	o := New(logPath, mock, "")
+	if err := o.DispatchForCommit("convention-enforcer", "abc123", "diff", "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := blog.ReadAll(logPath)
+	if len(entries) != 1 || entries[0].Type != blog.TypeStatus || entries[0].CommitSHA != "abc123" ||
+		!strings.Contains(entries[0].Message, "no findings") {
+		t.Fatalf("entries = %+v", entries)
+	}
+	// And the same commit is not reviewed twice.
+	if err := New(logPath, mock, "").DispatchForCommit("convention-enforcer", "abc123", "diff", "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ = blog.ReadAll(logPath); len(entries) != 1 {
+		t.Fatalf("re-dispatch duplicated the entry: %d", len(entries))
+	}
+}

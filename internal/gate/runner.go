@@ -11,6 +11,13 @@ import (
 type Result struct {
 	Passed bool
 	Output string
+	// CommandsRun is how many configured gate commands actually executed.
+	// A gate with no commands passes vacuously; the evidence entry shows 0.
+	CommandsRun int
+	// HeadSHA is the commit the gate ran against, so evidence can be bound
+	// to an exact candidate and goes stale when the head moves. Empty when
+	// the directory is not a git worktree.
+	HeadSHA string
 }
 
 // Run stops at the first failing command rather than running the rest.
@@ -36,15 +43,33 @@ type Result struct {
 func Run(dir string, cfg config.GateConfig) (Result, error) {
 	var output strings.Builder
 	env := agentenv.Environ()
+	res := Result{Passed: true, HeadSHA: headSHA(dir)}
 	for _, command := range cfg.Commands {
 		cmd := exec.Command("sh", "-c", command)
 		cmd.Dir = dir
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
 		output.Write(out)
+		res.CommandsRun++
 		if err != nil {
-			return Result{Passed: false, Output: output.String()}, nil
+			res.Passed = false
+			res.Output = output.String()
+			return res, nil
 		}
 	}
-	return Result{Passed: true, Output: output.String()}, nil
+	res.Output = output.String()
+	return res, nil
+}
+
+// headSHA binds the gate result to the exact commit it ran against. It is
+// best-effort: a directory that is not a git worktree yields an empty SHA,
+// and callers treat empty as unverifiable, not as current.
+func headSHA(dir string) string {
+	cmd := exec.Command("git", "rev-parse", "HEAD")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

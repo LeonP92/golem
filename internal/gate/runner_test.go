@@ -33,3 +33,43 @@ func TestRunStopsAtFirstFailure(t *testing.T) {
 		t.Error("gate runner should stop at first failure, not run subsequent commands")
 	}
 }
+
+func TestRunCountsExecutedCommands(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Run(dir, config.GateConfig{Commands: []string{"true", "true"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.CommandsRun != 2 {
+		t.Errorf("CommandsRun = %d, want 2", res.CommandsRun)
+	}
+}
+
+// An empty check list passes vacuously and reports zero commands run.
+func TestRunEmptyCommandsPassVacuously(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Run(dir, config.GateConfig{Commands: nil})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !res.Passed {
+		t.Error("empty commands should still pass the review gate (vacuous)")
+	}
+	if res.CommandsRun != 0 {
+		t.Errorf("CommandsRun = %d, want 0", res.CommandsRun)
+	}
+}
+
+func TestRunStopsAtFirstFailureAndCountsIt(t *testing.T) {
+	dir := t.TempDir()
+	res, err := Run(dir, config.GateConfig{Commands: []string{"false", "true"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Passed {
+		t.Error("failing command should fail the gate")
+	}
+	if res.CommandsRun != 1 {
+		t.Errorf("CommandsRun = %d, want 1 (stop at first failure)", res.CommandsRun)
+	}
+}

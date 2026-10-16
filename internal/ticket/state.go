@@ -21,13 +21,22 @@ const (
 )
 
 type State struct {
-	ID                       string `json:"id"`
-	Description              string `json:"description"`
-	Phase                    Phase  `json:"phase"`
-	Branch                   string `json:"branch"`
-	WorktreePath             string `json:"worktree_path"`
-	Trivial                  bool   `json:"trivial"`
-	CurrentStepExpectedLines int    `json:"current_step_expected_lines"`
+	ID           string `json:"id"`
+	Description  string `json:"description"`
+	Phase        Phase  `json:"phase"`
+	Branch       string `json:"branch"`
+	WorktreePath string `json:"worktree_path"`
+	// BranchBaseSHA is the exact commit the worktree was created from, when
+	// the base was pinned at creation (--base / --base-sha). Empty for
+	// tickets scaffolded from an unpinned HEAD. Epic child tickets must
+	// have it set: a child that starts from whatever HEAD happened to
+	// contain is not guaranteed to include its integrated predecessors.
+	BranchBaseSHA string `json:"branch_base_sha,omitempty"`
+	// AcceptanceCommands are an epic child's approved acceptance commands;
+	// the gate runs them after gate.commands.
+	AcceptanceCommands       []string `json:"acceptance_commands,omitempty"`
+	Trivial                  bool     `json:"trivial"`
+	CurrentStepExpectedLines int      `json:"current_step_expected_lines"`
 	// IssueNumber and IssueURL link this ticket to a GitHub issue (set by
 	// `golem ticket new --from-issue` and refreshed by `golem issue sync`).
 	// Zero/empty means the ticket has no linked issue.

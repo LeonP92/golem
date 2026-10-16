@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -24,6 +25,10 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	fromIssue := fs.Int("from-issue", 0, "create the ticket from GitHub issue <n>, using its title and body as the description")
 	backendConfig := fs.String("backend-config", "", "path to a backend config document")
 	backend := fs.String("backend", "", "registered adapter name")
+	base := fs.String("base", "", "git ref the worktree is created from (e.g. origin/main); resolved and pinned to an exact commit")
+	baseSHA := fs.String("base-sha", "", "already-resolved commit the worktree is created from; verified to exist before use")
+	var accept stringList
+	fs.Var(&accept, "accept", "acceptance command the gate runs after gate.commands (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -84,7 +89,28 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		s.IssueNumber = issueNumber
 		s.IssueURL = issueURL
 	}
-	worktreePath, err := workspace.Create(*repo, *id, workingBranch, "HEAD")
+	// The base is pinned to an exact commit, never left as a floating ref:
+	// "origin/main" moves between the resolve and the checkout often enough
+	// that a ticket can silently start one commit behind the base its
+	// reviewers and predecessors assume. --base-sha exists for callers that
+	// already pinned the commit themselves (the shem resolves origin/<base>
+	// after fetching); it is verified here all the same, because the
+	// worktree is only as reproducible as the commit it starts from.
+	baseRef := "HEAD"
+	pinnedSHA := ""
+	if *base != "" || *baseSHA != "" {
+		resolve := *base
+		if *baseSHA != "" {
+			resolve = *baseSHA
+		}
+		sha, err := resolveCommitSHA(*repo, resolve)
+		if err != nil {
+			fmt.Fprintf(stderr, "resolving worktree base: %v\n", err)
+			return 1
+		}
+		baseRef, pinnedSHA = sha, sha
+	}
+	worktreePath, err := workspace.Create(*repo, *id, workingBranch, baseRef)
 	if err != nil {
 		fmt.Fprintf(stderr, "creating worktree: %v\n", err)
 		return 1
@@ -95,6 +121,8 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	}
 	s.Branch = workingBranch
 	s.WorktreePath = worktreePath
+	s.BranchBaseSHA = pinnedSHA
+	s.AcceptanceCommands = accept
 
 	ticketDir := filepath.Join(*repo, ".golem", "tickets", *id)
 	if err := s.Save(ticketDir); err != nil {
@@ -116,3 +144,22 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "created ticket %s on branch %s\n", *id, workingBranch)
 	return 0
 }
+
+// resolveCommitSHA verifies that ref names a commit in repo and returns its
+// full SHA. The ^{commit} peel keeps an annotated tag or a non-commit ref
+// from passing the check by accident.
+func resolveCommitSHA(repo, ref string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", ref+"^{commit}")
+	cmd.Dir = repo
+	out, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("%q does not resolve to a commit: %w", ref, err)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ", ") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }

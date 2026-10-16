@@ -48,7 +48,7 @@ func TestTicketReviewRunsGateAndSetsReadyForReview(t *testing.T) {
 	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
 	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
 	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
-	fakeClaudeOnPath(t, "attested: convention=pass spec=pass correctness=pass scope-minimality=pass")
+	fakeClaudeOnPath(t, "attested: convention=pass spec=pass correctness=pass scope-minimality=pass\nVERDICT: PASS")
 
 	var stdout, stderr bytes.Buffer
 	code := TicketReview([]string{"--repo", repo, "--ticket", ticketID}, &stdout, &stderr)
@@ -69,7 +69,7 @@ func TestTicketReviewSetsNeedsAttentionOnGateFailure(t *testing.T) {
 	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
 	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
 	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"false\"\n"), 0o644)
-	fakeClaudeOnPath(t, "attested: convention=pass spec=pass correctness=pass scope-minimality=pass")
+	fakeClaudeOnPath(t, "attested: convention=pass spec=pass correctness=pass scope-minimality=pass\nVERDICT: PASS")
 
 	var stdout, stderr bytes.Buffer
 	code := TicketReview([]string{"--repo", repo, "--ticket", ticketID}, &stdout, &stderr)

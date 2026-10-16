@@ -56,6 +56,30 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: pause for a human after brainstorm and after plan.
 	ManualApproval bool `json:"manual_approval"`
+	// Epic is the run context for a materialized child, nil on ordinary
+	// tickets. The worker uses it to resolve its exact base SHA against
+	// the run's base branch when the integration ref does not exist on
+	// the remote yet (run start — the first finishing child creates it).
+	Epic *EpicClaim `json:"epic,omitempty"`
+}
+
+// EpicClaim carries what a worker needs to run an epic child correctly:
+// which run and node it is, and the run's base branch to fall back to for
+// base resolution. Requirement texts and acceptance commands travel in
+// the ticket Description (composed verbatim from the approved plan at
+// materialization), so they cannot drift from what the human approved.
+type EpicClaim struct {
+	EpicID       string `json:"epic_id"`
+	NodeKey      string `json:"node_key"`
+	PlanRevision int    `json:"plan_revision"`
+	BaseFallback string `json:"base_fallback"`
+	// TesterRequired tells the worker to run the tester stage on the
+	// finished head and post the verdict: the lane merges nothing for
+	// this epic without it.
+	TesterRequired bool `json:"tester_required"`
+	// AcceptanceCommands are the node's approved acceptance commands, run
+	// by the gate after the repo's own.
+	AcceptanceCommands []string `json:"acceptance_commands,omitempty"`
 }
 
 // ClaimTicket atomically claims a ticket for shemID. Exactly one concurrent
@@ -116,6 +140,7 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	result := h.DB.Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'unassigned' AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			epicGatePool+" AND "+
 			"(model_backend = '' OR model_backend = ?) AND models = ?", ticketID, shem.Backend, ticket.Models).
 		// The phase change also ends any reaped record (Ticket.BeforeUpdate),
 		// so the shem it was reaped from cannot take it from the new owner.
@@ -203,7 +228,8 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 	var tickets []db.Ticket
 	h.DB.Where(
 		"assigned_shem = ? AND phase NOT IN ? AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			epicGateResume,
 		shem.ID,
 		// needs-attention is excluded for the reason the phase exists: it
 		// means a run failed and a human has to look. Resuming it
@@ -333,6 +359,7 @@ func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 	repo := r.URL.Query().Get("repo")
 	query := h.DB.Where("phase = 'unassigned' AND "+
 		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+		epicGatePool+" AND "+
 		"(model_backend = '' OR model_backend = ?)", shem.Backend)
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
@@ -393,7 +420,8 @@ func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, er
 	var ticket db.Ticket
 	result := h.DB.
 		Where("id = ? AND phase = 'revising' AND assigned_shem = ? AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			epicGateResume,
 			ticketID, shemID).
 		First(&ticket)
 	if result.Error != nil {
@@ -555,7 +583,9 @@ func (h *Handlers) writeTicketOwnership(w http.ResponseWriter, r *http.Request, 
 // flows must see no outbox activity at all.
 func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) error {
 	if ticket.IssueNumber == nil {
-		return nil
+		// Unlinked epic children still need their pull request.
+		ticket.Phase = phase
+		return enqueuePRIfReady(tx, ticket)
 	}
 	// ticket must be the row as re-read inside tx after this transaction's own
 	// phase write — every caller does that — or the label's transition ordinal

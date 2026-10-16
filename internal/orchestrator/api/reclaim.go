@@ -14,7 +14,8 @@ import (
 // gate ClaimTicket applies: a GitHub ticket whose issue body changed after
 // approval must not go back to work on the strength of the old approval.
 const reclaimablePredicate = "reaped_from_shem = ? AND phase = 'unassigned' AND assigned_shem IS NULL AND " +
-	"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))"
+	"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND " +
+	epicGateResume
 
 // reapedTickets lists the tickets the reaper released from the calling shem.
 // The shem intersects this with what it is still running and reclaims those.

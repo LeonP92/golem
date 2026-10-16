@@ -57,6 +57,15 @@ github:
   # because no CLI command writes to GitHub at all; a future write-capable
   # command has to check it itself.
   write: true
+# How the tester stage starts this app and exercises it: the documented
+# fallback after the tester infers startup from the repository itself.
+# Fill these in when inference is likely to struggle (unusual ports,
+# seed-data steps); leave them empty to rely on inference.
+runbook:
+  start: ""
+  e2e: ""
+  ports: ""
+  seed_data: ""
 `
 
 const golemGitignore = "index/\ntickets/\n"

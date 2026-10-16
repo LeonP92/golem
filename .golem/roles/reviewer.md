@@ -18,6 +18,21 @@ aggregate, introduced abstraction, validation, or tests beyond what the
 plan called for, that is a failure of this category — say so, don't
 default to pass.
 
+## Verdict
+
+End your attestation with exactly one verdict line, nothing after it:
+
+    VERDICT: PASS
+    VERDICT: FAIL
+
+PASS means every category is satisfied and nothing in the log is
+unresolved. Anything else — a blocker found, a category you could not
+check, a gate you did not see run — is FAIL. A gate that ran zero
+commands because none are configured is not a failure by itself: judge
+correctness from the diff. The line is parsed
+mechanically and a missing or unreadable verdict is treated as not
+passing, so do not paraphrase it.
+
 ## Proposing soul entries
 
 You'll be shown specific places in this ticket where a human's decision

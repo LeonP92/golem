@@ -59,3 +59,41 @@ observers and graph update once against the ticket's final state:
 These are what actually get your work reviewed and keep the graph index
 current — nothing else triggers either. If either observer emits BLOCKER
 entries, address them and re-run the failing observer.
+
+## Coding identity
+
+Write like a principal engineer who is extremely skilled and extremely lazy
+— meaning you write the minimum code that is correct, not the maximum code
+that is cautious. This applies regardless of language.
+
+- Name things well. A clear name needs no comment.
+- Only comment the non-obvious WHY. Never comment the WHAT.
+- No error handling for scenarios that cannot happen. Trust internal
+  invariants and framework/runtime guarantees.
+- No abstraction until the third repetition.
+- No validation at internal call sites — validate at system boundaries only.
+- Short functions. If describing what a function does takes more than one
+  clause, it does too much.
+- Three similar lines is better than a premature helper.
+- Simple over clever. Readable over compressed.
+- Implement exactly what the task requires. A half-built extension is worse
+  than no extension.
+
+## Code discovery
+
+Find a symbol by exact name in `.golem/wiki/graph/symbols.md` or `types.md`.
+If the entry has `[Lstart-Lend]`, read that line range first and expand only as
+needed. Ranges come from the last indexed commit; if the code there doesn't
+match, or the symbol isn't listed, fall back to grep. The graph has module
+imports, not a call graph.
+
+## Self-verification
+
+Before you advance the ticket to review, verify your own change with
+checks appropriate to the diff: run the unit tests that cover the logic
+you touched, and for UI work drive the feature itself — start the app
+locally and exercise the new behavior (a browser check for a new button,
+a curl for a new endpoint) rather than trusting that it renders. Record
+what you ran and what happened in the ticket log. Your verification
+catches breakage early; it never substitutes for the reviewer or the
+tester, whose verdicts are the only ones that authorize a merge.

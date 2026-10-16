@@ -9,6 +9,7 @@ import (
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/epics"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 )
 
@@ -66,7 +67,7 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		entries = []db.LogEntry{}
 	}
 	backend, resolved := h.resolveForShem(t, shem)
-	return &ClaimResponse{
+	resp := &ClaimResponse{
 		TicketID:        t.ID,
 		Branch:          t.Branch,
 		BaseBranch:      t.BaseBranch,
@@ -80,6 +81,23 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		Models:          resolved,
 		ManualApproval:  t.ManualApproval,
 	}
+	if t.EpicID != nil {
+		resp.Epic = &EpicClaim{EpicID: *t.EpicID, NodeKey: t.EpicNodeKey,
+			PlanRevision: t.EpicPlanRevision}
+		var e db.Epic
+		if err := h.DB.First(&e, "id = ?", *t.EpicID).Error; err == nil {
+			resp.Epic.BaseFallback = e.BaseBranch
+			resp.Epic.TesterRequired = e.TesterRequired
+			if plan, _, perr := epics.LoadPlan(h.DB, e.ID, t.EpicPlanRevision); perr == nil {
+				for _, n := range plan.Nodes {
+					if n.Key == t.EpicNodeKey {
+						resp.Epic.AcceptanceCommands = n.AcceptanceCommands
+					}
+				}
+			}
+		}
+	}
+	return resp
 }
 
 // shemRow loads one shem row by id. A zero row would read as "matches every

@@ -2,6 +2,7 @@ package observer
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 
@@ -52,7 +53,7 @@ func (o *Observer) IsInFlight(role, commitSHA string) bool {
 
 func alreadyLogged(entries []blog.Entry, role, commitSHA string) bool {
 	for _, e := range entries {
-		if e.Role == role && e.CommitSHA == commitSHA && (e.Type == blog.TypeFinding || e.Type == blog.TypeBlocker) {
+		if e.Role == role && e.CommitSHA == commitSHA && (e.Type == blog.TypeFinding || e.Type == blog.TypeBlocker || e.Type == blog.TypeStatus) {
 			return true
 		}
 	}
@@ -91,9 +92,11 @@ func (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) e
 		return err
 	}
 
-	entryType := classify(result.Output)
+	// Silence is a valid outcome (spec: Roles — staying in scope); it is
+	// logged as a STATUS so the reviewer can see the check ran.
+	entryType, msg := classify(result.Output), result.Output
 	if entryType == "" {
-		return nil // silence is a valid outcome (spec: Roles — staying in scope)
+		entryType, msg = blog.TypeStatus, fmt.Sprintf("%s reviewed %s: no findings", role, commitSHA)
 	}
 
 	w, err := blog.NewWriter(o.logPath)
@@ -102,7 +105,7 @@ func (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) e
 	}
 	defer func() { _ = w.Close() }()
 
-	e := blog.NewEntry(role, entryType, result.Output)
+	e := blog.NewEntry(role, entryType, msg)
 	e.CommitSHA = commitSHA
 	e.Model = result.Model
 	return w.Append(e)

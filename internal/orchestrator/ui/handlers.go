@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
@@ -125,6 +126,9 @@ func loadTemplatesFromFS(fs embed.FS) (map[string]*template.Template, error) {
 		"ticket_detail":   "templates/ticket_detail.html",
 		"users":           "templates/users.html",
 		"settings":        "templates/settings.html",
+		"epics":           "templates/epics.html",
+		"epic_new":        "templates/epic_new.html",
+		"epic_detail":     "templates/epic_detail.html",
 	}
 
 	out := make(map[string]*template.Template, len(pages))
@@ -151,6 +155,11 @@ type Handlers struct {
 	// so a Handlers built without it (every test that does not care) behaves
 	// as before. Set from config.GitHubConfig.TriggerLabel.
 	GitHubDefaultLabel string
+
+	// GH is the GitHub client the epic final merge acts through. Nil when
+	// GitHub sync is not configured; the merge-final route refuses with an
+	// error message in that case rather than panicking.
+	GH github.Client
 
 	// Hub is the websocket hub used to ask a shem to run a graph build. Nil
 	// in tests that do not exercise it, and the handler reports that rather
@@ -206,6 +215,16 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 		h.sessionWriteRoute(rbac.PermShemManage, h.retryParkedOutboxRow))
 	mux.Handle("POST /settings/github/graph-build",
 		h.sessionWriteRoute(rbac.PermShemManage, h.buildGraph))
+	mux.Handle("GET /epics", h.sessionRoute(rbac.PermTicketView, h.epicsList))
+	mux.Handle("GET /epics/new", h.sessionRoute(rbac.PermTicketCreate, h.epicNewForm))
+	mux.Handle("POST /epics/new", h.sessionWriteRoute(rbac.PermTicketCreate, h.epicNewSubmit))
+	mux.Handle("GET /epics/{id}", h.sessionRoute(rbac.PermTicketView, h.epicDetail))
+	mux.Handle("POST /epics/{id}/revisions", h.sessionWriteRoute(rbac.PermTicketCreate, h.epicRevisionSubmit))
+	mux.Handle("POST /epics/{id}/approve", h.sessionWriteRoute(rbac.PermTicketManage, h.epicApproveSubmit))
+	mux.Handle("POST /epics/{id}/start", h.sessionWriteRoute(rbac.PermTicketManage, h.epicStartSubmit))
+	mux.Handle("POST /epics/{id}/merge-final", h.sessionWriteRoute(rbac.PermTicketManage, h.epicMergeFinalSubmit))
+	mux.Handle("POST /epics/{id}/pause", h.sessionWriteRoute(rbac.PermTicketManage, h.epicPauseSubmit))
+	mux.Handle("POST /epics/{id}/resume", h.sessionWriteRoute(rbac.PermTicketManage, h.epicResumeSubmit))
 	mux.Handle("GET /tickets/new", h.sessionRoute(rbac.PermTicketCreate, h.ticketNewForm))
 	mux.Handle("POST /tickets/new", h.sessionWriteRoute(rbac.PermTicketCreate, h.ticketNewSubmit))
 	mux.Handle("GET /tickets/model-selects", h.sessionRoute(rbac.PermTicketCreate, h.modelSelects))
