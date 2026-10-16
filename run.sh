@@ -14,11 +14,33 @@ set -a
 . ./.env
 set +a
 
-# Validate required vars.
-if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-  echo "Error: set one of CLAUDE_HOME, CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_API_KEY in .env" >&2
-  exit 1
-fi
+# Validate required vars. The credential check follows the selected backend;
+# claude-code is the default and matches the stack's original behaviour.
+GOLEM_BACKEND="${GOLEM_BACKEND:-claude-code}"
+case "$GOLEM_BACKEND" in
+  claude-code)
+    if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_HOME" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+      echo "Error: set one of CLAUDE_HOME, CLAUDE_CODE_OAUTH_TOKEN, or ANTHROPIC_API_KEY in .env" >&2
+      exit 1
+    fi
+    ;;
+  codex)
+    if [ -z "$CODEX_API_KEY" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$CODEX_HOME" ]; then
+      echo "Error: set one of CODEX_HOME, CODEX_API_KEY, or OPENAI_API_KEY in .env" >&2
+      exit 1
+    fi
+    ;;
+  opencode)
+    if [ -z "$OPENCODE_HOME" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
+      echo "Error: set OPENCODE_HOME or a provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY) in .env" >&2
+      exit 1
+    fi
+    ;;
+  *)
+    echo "Error: unknown GOLEM_BACKEND '$GOLEM_BACKEND' (known: claude-code, codex, opencode)" >&2
+    exit 1
+    ;;
+esac
 : "${GOLEM_ADMIN_PASSWORD:?Set GOLEM_ADMIN_PASSWORD in .env}"
 
 # Length is checked here, not just by the orchestrator, because the failure is
@@ -42,36 +64,40 @@ fi
 
 export GOLEM_SHEM_API_KEY
 
-# Convert a Windows path (C:/Users/...) to the /c/Users/... format Docker expects.
-if [ -n "$CLAUDE_HOME" ]; then
-  case "$CLAUDE_HOME" in
-    [A-Za-z]:*)
-      drive=$(echo "$CLAUDE_HOME" | cut -c1 | tr 'A-Z' 'a-z')
-      rest=$(echo "$CLAUDE_HOME" | cut -c3- | sed 's|\\|/|g; s|^/||')
-      CLAUDE_HOME="/$drive/$rest"
-      export CLAUDE_HOME
-      ;;
-  esac
+# Convert a Windows path (C:/Users/...) to the /c/Users/... format Docker expects,
+# for each backend session mount that is set.
+for home_var in CLAUDE_HOME CODEX_HOME OPENCODE_HOME; do
+  eval "home_path=\$$home_var"
+  if [ -n "$home_path" ]; then
+    case "$home_path" in
+      [A-Za-z]:*)
+        drive=$(echo "$home_path" | cut -c1 | tr 'A-Z' 'a-z')
+        rest=$(echo "$home_path" | cut -c3- | sed 's|\\|/|g; s|^/||')
+        home_path="/$drive/$rest"
+        eval "$home_var=\"$home_path\""
+        eval "export $home_var"
+        ;;
+    esac
 
-  # Checked here because Docker's own message for a missing bind-mount source
-  # is actively misleading: it reports the path as "not shared from the host"
-  # and points at Preferences -> Resources -> File Sharing, which diagnoses a
-  # permissions problem when the real one is that the directory does not
-  # exist. That sends people to configure sharing for a path they never meant
-  # to mount.
-  if [ ! -d "$CLAUDE_HOME" ]; then
-    echo "Error: CLAUDE_HOME points at $CLAUDE_HOME, which is not a directory." >&2
-    if [ "$CLAUDE_HOME" != "${CLAUDE_HOME#/c/Users/YourName}" ]; then
-      echo "       That is the placeholder from .env.example. Set it to your own" >&2
-      echo "       ~/.claude directory, or comment it out and use" >&2
-      echo "       CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY instead." >&2
-    else
-      echo "       Set it to your ~/.claude directory, or comment it out to use a" >&2
-      echo "       throwaway volume with CLAUDE_CODE_OAUTH_TOKEN or ANTHROPIC_API_KEY." >&2
+    # Checked here because Docker's own message for a missing bind-mount source
+    # is actively misleading: it reports the path as "not shared from the host"
+    # and points at Preferences -> Resources -> File Sharing, which diagnoses a
+    # permissions problem when the real one is that the directory does not
+    # exist. That sends people to configure sharing for a path they never meant
+    # to mount.
+    if [ ! -d "$home_path" ]; then
+      echo "Error: $home_var points at $home_path, which is not a directory." >&2
+      if [ "$home_path" != "${home_path#/c/Users/YourName}" ]; then
+        echo "       That is the placeholder from .env.example. Set it to your own" >&2
+        echo "       session directory, or comment it out and use an API key instead." >&2
+      else
+        echo "       Set it to your session directory, or comment it out to use a" >&2
+        echo "       throwaway volume with an API key instead." >&2
+      fi
+      exit 1
     fi
-    exit 1
   fi
-fi
+done
 
 docker compose up -d
 

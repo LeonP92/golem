@@ -13,7 +13,12 @@ import (
 	"github.com/leonp92/golem/internal/roles"
 )
 
-var supportedBackends = []string{"claude-code"}
+// supportedBackends are the adapters `golem init --backend` accepts, sourced
+// from the agentrunner registry so registering an adapter is the only step
+// needed to make it initialisable. The list used to be a second hardcoded
+// copy here, which rejected new backends even after their adapter was
+// registered.
+var supportedBackends = agentrunner.Names()
 
 // The github: block emits the two keys that are actually REQUIRED (repo and
 // label) alongside write, which is not. It used to emit write alone, which

@@ -1,0 +1,26 @@
+# The opencode model catalog. Ids are "provider/model" as `opencode run
+# --model` expects. The defaults reuse the Anthropic provider so an operator
+# coming from claude-code needs no new credential (ANTHROPIC_API_KEY works,
+# as does `opencode auth login`). For any OpenAI-compatible endpoint, add a
+# provider block with "npm": "@ai-sdk/openai-compatible" and a baseURL to the
+# opencode config (global ~/.config/opencode/opencode.json, project
+# opencode.json, or OPENCODE_CONFIG_CONTENT), then override this catalog in
+# shem.yaml with that provider's ids. `golem models probe` verifies what a
+# configured endpoint answers. Model ids verified against models.dev,
+# October 2026.
+supports_selection: true
+tiers: [small, medium, large]
+models:
+  - {id: anthropic/claude-haiku-4-5,  label: "Claude Haiku 4.5 — fastest, cheapest", tier: small}
+  - {id: anthropic/claude-sonnet-4-6, label: "Claude Sonnet 4.6 — balanced",         tier: medium}
+  - {id: anthropic/claude-opus-4-5,   label: "Claude Opus 4.5 — most capable",       tier: large}
+stage_defaults:
+  brainstorm: large
+  plan: large
+  review: large
+  implement: medium
+  revise: medium
+  validate: medium
+  observe: small
+  pr-description: small
+  graph: small

@@ -1,0 +1,22 @@
+# The codex model catalog. Ids are the GPT-5.6 family Codex recommends as of
+# October 2026 (https://developers.openai.com/codex/models): terra is the
+# fast/cheap one, sol the balanced default, luna the most capable. `codex
+# exec --model` accepts these ids directly. Operators serving another
+# provider through [model_providers.*] override this catalog in shem.yaml;
+# `golem models probe` verifies what a configured endpoint actually answers.
+supports_selection: true
+tiers: [small, medium, large]
+models:
+  - {id: gpt-5.6-terra, label: "GPT-5.6 Terra — fastest, cheapest", tier: small}
+  - {id: gpt-5.6-sol,   label: "GPT-5.6 Sol — balanced",          tier: medium}
+  - {id: gpt-5.6-luna,  label: "GPT-5.6 Luna — most capable",     tier: large}
+stage_defaults:
+  brainstorm: large
+  plan: large
+  review: large
+  implement: medium
+  revise: medium
+  validate: medium
+  observe: small
+  pr-description: small
+  graph: small
