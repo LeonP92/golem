@@ -320,11 +320,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 func golemTicketNewArgs(ticketID, branch, description, backendConfig, baseSHA string, accept ...string) []string {
 	args := []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch,
 		"--backend-config", backendConfig}
-	// --base-sha precedes the separator: it is resolved locally from git
+	// --base precedes the separator: it is resolved locally from git
 	// (never from the untrusted description), so it is safe in the flag
 	// region the separator protects.
 	if baseSHA != "" {
-		args = append(args, "--base-sha", baseSHA)
+		args = append(args, "--base", baseSHA)
 	}
 	for _, c := range accept {
 		args = append(args, "--accept", c)
@@ -337,7 +337,7 @@ func golemTicketNewArgs(ticketID, branch, description, backendConfig, baseSHA st
 func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description, remote, baseBranch, baseFallback string, accept []string) error {
 	baseSHA := ""
 	if baseBranch != "" {
-		sha, err := resolveBaseSHAWithFallback(ctx, repoPath, remote, baseBranch, baseFallback)
+		sha, err := resolveBaseSHA(ctx, repoPath, remote, baseBranch, baseFallback)
 		if err != nil {
 			return err
 		}
@@ -354,33 +354,23 @@ func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketI
 	return nil
 }
 
-// resolveBaseSHAWithFallback pins baseBranch to an exact commit, falling
-// back to a second ref when the first is unresolvable. The case that
-// needs it: an epic child targets the run's integration ref, which does
-// not exist on the remote until the first finishing child creates it. At
-// run start the right base is the run's own base branch; the fallback
-// keeps that first child starting from the intended commit instead of
-// failing the run at the gate. An ordinary ticket passes no fallback and
-// fails on the first error, exactly as before.
-func resolveBaseSHAWithFallback(ctx context.Context, repoPath, remote, baseBranch, baseFallback string) (string, error) {
+// resolveBaseSHA pins a fresh ticket's base to an exact commit. When the
+// base cannot be resolved, an epic child falls back to the run's base
+// branch (its integration ref does not exist until the first child
+// creates it) and an ordinary ticket starts from HEAD, as before pinning.
+func resolveBaseSHA(ctx context.Context, repoPath, remote, baseBranch, epicFallback string) (string, error) {
 	sha, err := resolveClaimBaseSHA(ctx, repoPath, remote, baseBranch)
 	if err == nil {
 		return sha, nil
 	}
-	if baseFallback == "" && remote == "" {
-		// Local-only ordinary ticket: start from HEAD, as before pinning.
-		if head, herr := resolveClaimBaseSHA(ctx, repoPath, "", "HEAD"); herr == nil {
-			log.Printf("executor: %s not found locally; starting from HEAD", baseBranch)
-			return head, nil
-		}
+	if epicFallback == "" {
+		log.Printf("executor: base %s unresolvable (%v); starting from HEAD", baseBranch, err)
+		return revParse(ctx, repoPath, "HEAD")
 	}
-	if baseFallback == "" || baseFallback == baseBranch {
-		return "", fmt.Errorf("resolving base branch %s: %w", baseBranch, err)
-	}
-	log.Printf("executor: %s not resolvable; resolving base from %s", baseBranch, baseFallback)
-	sha, ferr := resolveClaimBaseSHA(ctx, repoPath, remote, baseFallback)
+	log.Printf("executor: base %s unresolvable; resolving from %s", baseBranch, epicFallback)
+	sha, ferr := resolveClaimBaseSHA(ctx, repoPath, remote, epicFallback)
 	if ferr != nil {
-		return "", fmt.Errorf("resolving base branch %s (fallback for %s): %w", baseFallback, baseBranch, ferr)
+		return "", fmt.Errorf("resolving base %s (fallback for %s): %w", epicFallback, baseBranch, ferr)
 	}
 	return sha, nil
 }
@@ -394,32 +384,26 @@ func baseFetchRemote(noPush bool, remote string) string {
 	return remote
 }
 
-// resolveClaimBaseSHA pins the ticket's base branch to an exact commit
-// before the worktree is created. Scaffolding from HEAD instead meant a
-// child ticket could start from whatever the mirror happened to point at —
-// for an epic child, potentially missing the predecessors it depends on.
-// The fetch is fatal here (unlike in the revising path, where it is
-// best-effort): a fresh ticket built on a stale or wrong base is wrong in a
-// way no later step detects, so the ticket fails now and parks in
-// needs-attention with the cause named.
+// resolveClaimBaseSHA fetches baseBranch (when there is a remote) and
+// returns origin/<base>, else the local branch.
 func resolveClaimBaseSHA(ctx context.Context, repoPath, remote, baseBranch string) (string, error) {
-	// An empty remote is a local-only setup (no_push without a mirror):
-	// there is nothing to fetch from, and failing here would break tickets
-	// that worked before the base was pinned. Resolve local refs instead.
 	if remote != "" {
 		if err := fetchBranchForAgent(ctx, repoPath, remote, baseBranch); err != nil {
 			return "", err
 		}
 	}
-	// origin/<base> is what the fetch above just refreshed; the bare branch
-	// name covers setups whose base only exists locally.
 	for _, ref := range []string{"refs/remotes/origin/" + baseBranch, baseBranch} {
-		cmd := asAgent(exec.CommandContext(ctx, "git", "-C", repoPath, "rev-parse", "--verify", ref+"^{commit}"))
-		if out, err := cmd.Output(); err == nil {
-			return strings.TrimSpace(string(out)), nil
+		if sha, err := revParse(ctx, repoPath, ref); err == nil {
+			return sha, nil
 		}
 	}
 	return "", fmt.Errorf("no commit found for %q locally or on origin", baseBranch)
+}
+
+// revParse resolves ref to a commit SHA, as the agent.
+func revParse(ctx context.Context, dir, ref string) (string, error) {
+	out, err := asAgent(exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", ref+"^{commit}")).Output()
+	return strings.TrimSpace(string(out)), err
 }
 
 // runGolemAdvance advances the local ticket to the given phase.
@@ -469,48 +453,43 @@ func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID
 	return nil
 }
 
-// selfVerify runs `golem ticket verify` — the worker's own checks ahead
-// of the review gate. A failure bounces the implementer exactly once with
-// the check output as feedback: catching breakage here costs one local
-// run, the same breakage found by the reviewer costs a full loop. The
-// bounce is bounded at one because an implementer that cannot fix its own
-// test failure in one pass belongs in front of the reviewer (or a human),
-// not in a private retry loop. The review gate runs the same commands
-// again afterwards either way — self-verification never substitutes for
-// the independent gates.
+// selfVerify runs an epic child's gate and acceptance commands (`golem
+// ticket verify`) before the review gate and, when a check fails, gives
+// the implementer one pass to fix it. The review gate reruns the same
+// commands either way. Ordinary tickets skip it, as before.
 func (e *GolemExecutor) selfVerify(ctx context.Context, c *client.Client,
 	claim *client.ClaimResponse, repoPath, ticketDir, ticketID, model string) {
-	out, err := e.runGolemVerify(ctx, repoPath, ticketID)
-	if err == nil {
+	if claim.Epic == nil {
 		return
 	}
-	postStatus(c, ticketID, "Self-verification failed; the implementer gets one pass to fix it: "+
-		firstLineOf(err.Error()))
-	log.Printf("executor: self-verification for %s: %v", ticketID, err)
-	if runErr := e.runPhase(ctx, repoPath,
+	out, failed := e.runGolemVerify(ctx, repoPath, ticketID)
+	if !failed {
+		return
+	}
+	postStatus(c, ticketID, "Self-verification failed; the implementer gets one pass to fix it")
+	if err := e.runPhase(ctx, repoPath,
 		buildImplementPrompt(ticketID, claim.Branch, claim.Description)+
 			"\n\nYour own verification just failed with this output — fix the cause before anything else:\n"+out,
-		ticketDir, "implement", model); runErr != nil {
-		log.Printf("executor: self-verify bounce for %s: %v", ticketID, runErr)
+		ticketDir, "implement", model); err != nil {
+		log.Printf("executor: self-verify fix pass for %s: %v", ticketID, err)
 		return
 	}
-	// Second run records the evidence; the outcome is left to the review
-	// gate, which is the authoritative rerun of the same checks.
-	if _, verr := e.runGolemVerify(ctx, repoPath, ticketID); verr != nil {
+	if _, failed := e.runGolemVerify(ctx, repoPath, ticketID); failed {
 		postStatus(c, ticketID, "Self-verification still failing after the fix pass; the review gate decides")
 	}
 }
 
-// runGolemVerify returns the check output alongside any failure so the
-// caller can hand it to the implementer as feedback.
-func (e *GolemExecutor) runGolemVerify(ctx context.Context, repoPath, ticketID string) (string, error) {
+// runGolemVerify reports failed only when a check failed (exit 2), not
+// when verification could not run.
+func (e *GolemExecutor) runGolemVerify(ctx context.Context, repoPath, ticketID string) (string, bool) {
 	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "verify", "--ticket", ticketID))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return string(out), fmt.Errorf("%w\n%s", err, out)
+	var exit *exec.ExitError
+	if err != nil && !(errors.As(err, &exit) && exit.ExitCode() == 2) {
+		log.Printf("executor: self-verification for %s did not run: %v\n%s", ticketID, err, out)
 	}
-	return string(out), nil
+	return string(out), errors.As(err, &exit) && exit.ExitCode() == 2
 }
 
 func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, baseBranch, model string) error {
@@ -729,24 +708,6 @@ func forwardNewLines(logPath string, ticketID string, forwarded *int, c *client.
 	}
 }
 
-// readBranchBaseSHA returns the exact commit the ticket's worktree was
-// created from (M0 pinned it at claim). "" on old state files and any
-// read error — the caller treats that as "cannot safely create a remote
-// ref" and skips.
-func readBranchBaseSHA(ticketDir string) string {
-	data, err := os.ReadFile(filepath.Join(ticketDir, "state.json")) //nolint:gosec
-	if err != nil {
-		return ""
-	}
-	var state struct {
-		BranchBaseSHA string `json:"branch_base_sha"`
-	}
-	if err := json.Unmarshal(data, &state); err != nil {
-		return ""
-	}
-	return state.BranchBaseSHA
-}
-
 // readState reads .golem/tickets/<id>/state.json and returns (phase, sha, error).
 func readState(ticketDir string) (string, string, error) {
 	statePath := filepath.Join(ticketDir, "state.json")
@@ -791,17 +752,9 @@ func withoutPushCredential(env []string) []string {
 	return out
 }
 
-// ensureRemoteBaseRef creates the epic's integration ref on the remote
-// when it is missing, pointing at the pinned base SHA the worktree was
-// built from — the first finishing child of a run creates it, every
-// later child finds it and does nothing. It never advances or rewrites
-// an existing ref: existence is checked first, and the pushed object is
-// the exact pinned commit, not whatever the fallback branch has moved
-// to since the claim.
-//
-// The fetch and push run in the credential-carrying push mirror (the
-// agent's repo never sees the token), reusing the same mirror
-// pushTicketBranch maintains.
+// ensureRemoteBaseRef creates createRef on the remote at sha (the pinned
+// base) when it does not exist yet; an existing ref is never touched. Runs
+// in the credential-carrying push mirror, like pushTicketBranch.
 func ensureRemoteBaseRef(ctx context.Context, repoPath, remote, fetchRef, createRef, sha string) error {
 	if remote == "" || createRef == "" || sha == "" || fetchRef == "" || fetchRef == createRef {
 		return nil

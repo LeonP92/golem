@@ -211,7 +211,7 @@ func TestTicketNewBasePinsWorktreeToCommit(t *testing.T) {
 func TestTicketNewRejectsUnresolvableBase(t *testing.T) {
 	repo := initRepoForCLI(t)
 	var stdout, stderr bytes.Buffer
-	for _, flag := range []string{"--base", "--base-sha"} {
+	for _, flag := range []string{"--base"} {
 		code := TicketNew([]string{"--repo", repo, "--id", "tb", flag, "does-not-exist", "add-widget"}, &stdout, &stderr)
 		if code == 0 {
 			t.Errorf("TicketNew with %s does-not-exist: expected failure, got exit 0", flag)

@@ -67,8 +67,7 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: stop after brainstorm and after plan until a human approves.
 	ManualApproval bool `json:"manual_approval"`
-	// Epic is non-nil when this ticket is the materialized child of an
-	// epic run. See api.EpicClaim.
+	// Epic is set only for an epic child (api.EpicClaim).
 	Epic *EpicClaim `json:"epic,omitempty"`
 }
 
@@ -76,7 +75,6 @@ type ClaimResponse struct {
 type EpicClaim struct {
 	EpicID             string   `json:"epic_id"`
 	NodeKey            string   `json:"node_key"`
-	PlanRevision       int      `json:"plan_revision"`
 	BaseFallback       string   `json:"base_fallback"`
 	TesterRequired     bool     `json:"tester_required"`
 	AcceptanceCommands []string `json:"acceptance_commands,omitempty"`

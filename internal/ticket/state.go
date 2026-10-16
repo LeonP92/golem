@@ -27,7 +27,7 @@ type State struct {
 	Branch       string `json:"branch"`
 	WorktreePath string `json:"worktree_path"`
 	// BranchBaseSHA is the exact commit the worktree was created from, when
-	// the base was pinned at creation (--base / --base-sha). Empty for
+	// the base was pinned at creation (--base). Empty for
 	// tickets scaffolded from an unpinned HEAD. Epic child tickets must
 	// have it set: a child that starts from whatever HEAD happened to
 	// contain is not guaranteed to include its integrated predecessors.

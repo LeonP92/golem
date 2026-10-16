@@ -29,7 +29,7 @@ func TestTicketVerifyRecordsEvidence(t *testing.T) {
 	}
 	found := false
 	for _, e := range entries {
-		if strings.Contains(e.Message, "self-verification: true") {
+		if strings.Contains(e.Message, "self-verification: passed=true") {
 			found = true
 		}
 	}
@@ -50,7 +50,7 @@ func TestTicketVerifyFailsWithEvidence(t *testing.T) {
 	entries, _ := blog.ReadAll(filepath.Join(repo, ".golem", "tickets", ticketID, "log.jsonl"))
 	found := false
 	for _, e := range entries {
-		if strings.Contains(e.Message, "self-verification: false") {
+		if strings.Contains(e.Message, "self-verification: passed=false") {
 			found = true
 		}
 	}

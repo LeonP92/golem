@@ -87,9 +87,16 @@ func ObserverDispatch(args []string, stdout, stderr io.Writer) int {
 }
 
 func revExists(worktreePath, rev string) bool {
-	verify := exec.Command("git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
-	verify.Dir = worktreePath
-	return verify.Run() == nil
+	_, err := revSHA(worktreePath, rev)
+	return err == nil
+}
+
+// revSHA resolves rev to a commit SHA; the ^{commit} peel rejects non-commits.
+func revSHA(dir, rev string) (string, error) {
+	cmd := exec.Command("git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
+	cmd.Dir = dir
+	out, err := cmd.Output()
+	return strings.TrimSpace(string(out)), err
 }
 
 // reviewDiff is the one commit when base is empty, and otherwise the whole

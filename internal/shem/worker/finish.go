@@ -10,6 +10,7 @@ import (
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 // finishWorkPhase closes out an implement or revise run: it reads what the
@@ -66,13 +67,13 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
 		} else {
 			postStatus(c, ticketID, "Pushed "+branch+" to origin")
-			// An epic child's PR targets the run's integration ref; the
-			// first finishing child creates that ref on the remote at the
-			// pinned base SHA so the pull request has a base. Non-fatal:
-			// a later child retries it, and the orchestrator's PR writer
-			// fails loudly while the ref is genuinely absent.
+			// An epic child's PR targets the integration ref; the first
+			// child to finish creates it. Non-fatal: a later child retries.
 			if claim.Epic != nil {
-				baseSHA := readBranchBaseSHA(ticketDir)
+				var baseSHA string
+				if st, err := ticket.Load(ticketDir); err == nil {
+					baseSHA = st.BranchBaseSHA
+				}
 				if baseSHA == "" {
 					postStatus(c, ticketID, "No pinned base SHA recorded; leaving the "+
 						"integration ref to another child")
@@ -98,10 +99,7 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
 				log.Printf("executor: post branch-pushed: %v", pErr)
 			}
-			// An epic child whose run requires a tester verdict gets the
-			// tester stage against the exact head just pushed, so the
-			// integration lane's gate has its evidence. Runs after the PR
-			// report so a slow tester never delays the pull request.
+			// After the PR report, so a slow tester never delays the PR.
 			if claim.Epic != nil && claim.Epic.TesterRequired {
 				e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
 			}

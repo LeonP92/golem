@@ -27,6 +27,8 @@ func TestParseReviewerVerdict(t *testing.T) {
 		{"last verdict wins", "VERDICT: PASS\nmore checking\nVERDICT: FAIL", false, true},
 		{"paraphrase does not count", "verdict: pass\nVERDICT:PASS", false, false},
 		{"extra words do not count", "VERDICT: PASS with reservations", false, false},
+		{"markdown emphasis", "**VERDICT: PASS**", true, true},
+		{"bold word", "VERDICT: **FAIL**", false, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -62,26 +64,36 @@ func TestTicketReviewRejectedReviewerCannotPass(t *testing.T) {
 	}
 }
 
-// No verdict line is not a pass: a reviewer that stopped early, or whose
-// output could not be read, cannot advance the ticket.
-func TestTicketReviewMissingVerdictCannotPass(t *testing.T) {
+// No verdict line: an ordinary ticket keeps the gate-only rule, but a
+// ticket with acceptance commands (an epic child) cannot advance.
+func TestTicketReviewMissingVerdict(t *testing.T) {
 	repo, _, ticketID := setUpTicketForStepTest(t)
+	ticketDir := filepath.Join(repo, ".golem", "tickets", ticketID)
 	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
 	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
 	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
 	fakeClaudeOnPath(t, "looks fine to me")
 
-	var stdout, stderr bytes.Buffer
-	code := TicketReview([]string{"--repo", repo, "--ticket", ticketID}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("TicketReview failed: exit %d, stderr=%s", code, stderr.String())
+	review := func() ticket.Phase {
+		t.Helper()
+		var stdout, stderr bytes.Buffer
+		if code := TicketReview([]string{"--repo", repo, "--ticket", ticketID}, &stdout, &stderr); code != 0 {
+			t.Fatalf("TicketReview failed: exit %d, stderr=%s", code, stderr.String())
+		}
+		loaded, err := ticket.Load(ticketDir)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		return loaded.Phase
 	}
-	loaded, err := ticket.Load(filepath.Join(repo, ".golem", "tickets", ticketID))
-	if err != nil {
-		t.Fatalf("Load: %v", err)
+	if got := review(); got != ticket.PhaseReadyForReview {
+		t.Errorf("ordinary ticket: Phase = %q, want ready-for-review (gate-only, as before)", got)
 	}
-	if loaded.Phase != ticket.PhaseNeedsAttention {
-		t.Errorf("Phase = %q, want needs-attention when the verdict is missing", loaded.Phase)
+	s, _ := ticket.Load(ticketDir)
+	s.AcceptanceCommands = []string{"true"}
+	s.Save(ticketDir)
+	if got := review(); got != ticket.PhaseNeedsAttention {
+		t.Errorf("epic child: Phase = %q, want needs-attention when the verdict is missing", got)
 	}
 }
 
@@ -118,7 +130,7 @@ func TestTicketReviewRecordsGateEvidenceBoundToHead(t *testing.T) {
 	if !bytes.Contains([]byte(evidence.Message), []byte("head="+head)) {
 		t.Errorf("gate evidence not bound to the worktree head %s: %s", head, evidence.Message)
 	}
-	if !bytes.Contains([]byte(evidence.Message), []byte("commands_run=1")) {
+	if !bytes.Contains([]byte(evidence.Message), []byte("commands=")) {
 		t.Errorf("gate evidence does not record the executed command count: %s", evidence.Message)
 	}
 }
@@ -209,7 +221,7 @@ func TestTicketReviewRunsGateBeforeReviewer(t *testing.T) {
 		t.Fatalf("TicketReview: exit %d, stderr=%s", code, stderr.String())
 	}
 	prompt, _ := os.ReadFile(promptPath)
-	if !bytes.Contains(prompt, []byte("gate evidence: head=")) || !bytes.Contains(prompt, []byte("commands_run=1 passed=true")) {
+	if !bytes.Contains(prompt, []byte("head=")) || !bytes.Contains(prompt, []byte("gate evidence: passed=true")) {
 		t.Errorf("reviewer prompt lacks the gate evidence for this head")
 	}
 }

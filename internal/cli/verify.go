@@ -12,18 +12,9 @@ import (
 	"github.com/leonp92/golem/internal/ticket"
 )
 
-// TicketVerify is the worker's self-verification: it runs the configured
-// gate commands against the worktree BEFORE the review gate, and records
-// the outcome as a self-verification entry bound to the exact head. The
-// implementer catching its own breakage here costs one local run; the
-// same failure found by the reviewer or the tester costs a full loop.
-//
-// Self-verification never substitutes for the independent gates: the
-// review gate runs the same commands again at review time, and the tester
-// verdict stays the only auto-merge authorization. This command only
-// records evidence and answers "did the worker's own checks pass".
-//
-// Exit codes: 0 = checks passed, 1 = could not run, 2 = a check failed.
+// TicketVerify runs the gate (plus the ticket's acceptance commands) as
+// the worker's self-verification and logs the result. It never replaces
+// the review gate. Exit codes: 0 passed, 1 could not run, 2 a check failed.
 func TicketVerify(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("ticket verify", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -48,31 +39,11 @@ func TicketVerify(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "loading ticket %s: %v\n", *id, err)
 		return 1
 	}
-
-	res, err := gate.Run(s.WorktreePath, ticketGate(cfg, s))
+	res, err := runTicketGate(cfg, s, ticketDir, "worker", "self-verification")
 	if err != nil {
-		fmt.Fprintf(stderr, "running verification: %v\n", err)
+		fmt.Fprintln(stderr, err)
 		return 1
 	}
-
-	w, err := blog.NewWriter(filepath.Join(ticketDir, "log.jsonl"))
-	if err != nil {
-		fmt.Fprintf(stderr, "opening log: %v\n", err)
-		return 1
-	}
-	// The entry names the head so a later reader can tell verification of
-	// this code from verification of an ancestor — the same staleness rule
-	// the review gate's evidence follows.
-	entry := blog.NewEntry("worker", blog.TypeStatus, fmt.Sprintf(
-		"self-verification: %t (%d command(s)) at %s\n%s",
-		res.Passed, res.CommandsRun, res.HeadSHA, res.Output))
-	if err := w.Append(entry); err != nil {
-		closeLogWriter(w, stderr)
-		fmt.Fprintf(stderr, "recording verification: %v\n", err)
-		return 1
-	}
-	closeLogWriter(w, stderr)
-
 	fmt.Fprint(stdout, res.Output)
 	if !res.Passed {
 		return 2
@@ -80,9 +51,25 @@ func TicketVerify(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
-// ticketGate is the repo's gate plus the ticket's own acceptance commands.
-func ticketGate(cfg *config.Config, s *ticket.State) config.GateConfig {
+// runTicketGate runs the repo's gate commands plus the ticket's acceptance
+// commands and logs the result as evidence bound to the head it ran on.
+func runTicketGate(cfg *config.Config, s *ticket.State, ticketDir, role, label string) (gate.Result, error) {
 	g := cfg.Gate
 	g.Commands = append(append([]string{}, cfg.Gate.Commands...), s.AcceptanceCommands...)
-	return g
+	res, err := gate.Run(s.WorktreePath, g)
+	if err != nil {
+		return res, fmt.Errorf("running gate: %w", err)
+	}
+	head, _ := gitHead(s.WorktreePath)
+	w, err := blog.NewWriter(filepath.Join(ticketDir, "log.jsonl"))
+	if err != nil {
+		return res, fmt.Errorf("opening log: %w", err)
+	}
+	defer func() { _ = w.Close() }()
+	entry := blog.NewEntry(role, blog.TypeStatus, fmt.Sprintf("%s: passed=%t head=%s commands=%q\n%s",
+		label, res.Passed, head, g.Commands, res.Output))
+	if err := w.Append(entry); err != nil {
+		return res, fmt.Errorf("recording %s: %w", label, err)
+	}
+	return res, nil
 }

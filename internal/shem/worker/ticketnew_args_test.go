@@ -64,19 +64,19 @@ func TestGolemTicketNewArgs_BaseSHAPrecedesSeparator(t *testing.T) {
 	args := golemTicketNewArgs("t1", "golem/branch", "desc", "/run/backend.yaml", sha)
 
 	sep := slices.Index(args, "--")
-	idx := slices.Index(args, "--base-sha")
+	idx := slices.Index(args, "--base")
 	if idx == -1 || idx > sep {
-		t.Errorf("--base-sha is missing or after the separator: %q", args)
+		t.Errorf("--base is missing or after the separator: %q", args)
 	}
 	if args[idx+1] != sha {
-		t.Errorf("--base-sha value = %q, want %q", args[idx+1], sha)
+		t.Errorf("--base value = %q, want %q", args[idx+1], sha)
 	}
 }
 
 func TestGolemTicketNewArgs_NoBaseSHAOmitsFlag(t *testing.T) {
 	args := golemTicketNewArgs("t1", "golem/branch", "desc", "/run/backend.yaml", "")
-	if slices.Contains(args, "--base-sha") {
-		t.Errorf("--base-sha present without a value: %q", args)
+	if slices.Contains(args, "--base") {
+		t.Errorf("--base present without a value: %q", args)
 	}
 }
 

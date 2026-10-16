@@ -10,13 +10,13 @@ import (
 // still start from the intended commit, resolved from the run's base
 // branch. Once the ref exists, it wins — the child builds on its
 // predecessors.
-func TestResolveBaseSHAWithFallback(t *testing.T) {
+func TestResolveBaseSHA(t *testing.T) {
 	repo, _, _, origin := pushFixture(t)
 	ctx := context.Background()
 	mainSHA := strings.TrimSpace(git(t, repo, "rev-parse", "main"))
 
 	// epic/x missing -> fallback to main's commit.
-	sha, err := resolveBaseSHAWithFallback(ctx, repo, origin, "epic/x", "main")
+	sha, err := resolveBaseSHA(ctx, repo, origin, "epic/x", "main")
 	if err != nil {
 		t.Fatalf("fallback: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestResolveBaseSHAWithFallback(t *testing.T) {
 	epicSHA := strings.TrimSpace(git(t, work, "rev-parse", "epic/x"))
 	git(t, repo, "fetch", work, "+refs/heads/epic/x:refs/remotes/origin/epic/x")
 
-	sha, err = resolveBaseSHAWithFallback(ctx, repo, "", "epic/x", "main")
+	sha, err = resolveBaseSHA(ctx, repo, "", "epic/x", "main")
 	if err != nil {
 		t.Fatalf("direct: %v", err)
 	}
@@ -40,9 +40,10 @@ func TestResolveBaseSHAWithFallback(t *testing.T) {
 		t.Fatalf("direct sha = %s, want epic/x %s", sha, epicSHA)
 	}
 
-	// An ordinary ticket has no fallback: the miss is an error.
-	if _, err := resolveBaseSHAWithFallback(ctx, repo, origin, "epic/missing", ""); err == nil {
-		t.Fatal("missing base with no fallback resolved")
+	// An ordinary ticket whose base cannot be fetched starts from HEAD.
+	head := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))
+	if sha, err := resolveBaseSHA(ctx, repo, origin, "missing", ""); err != nil || sha != head {
+		t.Fatalf("missing base = %q, %v; want HEAD %q", sha, err, head)
 	}
 }
 
@@ -112,18 +113,18 @@ func TestBaseFetchRemote(t *testing.T) {
 	// And a local-only repo resolves its base with no remote at all.
 	repo, _, _, _ := pushFixture(t)
 	want := strings.TrimSpace(git(t, repo, "rev-parse", "main"))
-	got, err := resolveBaseSHAWithFallback(context.Background(), repo, baseFetchRemote(false, "local://test"), "main", "")
+	got, err := resolveBaseSHA(context.Background(), repo, baseFetchRemote(false, "local://test"), "main", "")
 	if err != nil || got != want {
 		t.Fatalf("local resolve = %q, %v; want %q", got, err, want)
 	}
 }
 
 // A local-only ordinary ticket whose base branch does not exist keeps the
-// pre-pinning behaviour: it starts from HEAD instead of failing.
+// pre-pinning behavior: it starts from HEAD instead of failing.
 func TestLocalOnlyMissingBaseUsesHEAD(t *testing.T) {
 	repo, _, _, _ := pushFixture(t)
 	head := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))
-	got, err := resolveBaseSHAWithFallback(context.Background(), repo, "", "no-such-branch", "")
+	got, err := resolveBaseSHA(context.Background(), repo, "", "no-such-branch", "")
 	if err != nil || got != head {
 		t.Fatalf("got %q, %v; want HEAD %q", got, err, head)
 	}
