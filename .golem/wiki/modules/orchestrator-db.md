@@ -20,27 +20,7 @@ machine rather than its liveness). `Backends` returns each backend's union
 catalog as a `BackendCatalog`, `Catalog` one by name, `Catalogs` all of them
 keyed by name, and `WaitingFor` why no shem can claim a ticket.
 
-## Leases
-
-`Lease` (`lease.go`) is a named, expiring lock with a monotonic fencing
-token: `AcquireLease` (grants only when free, expired, or re-acquired by the
-same holder — always bumping the token), `RenewLease`, `CheckFencing` (is
-this token still current — the write-side guard against stale holders) and
-`ReleaseLease` (holder+token checked; expires the row rather than deleting
-it, so tokens never reset). The ghsync drain loop holds the
-`ghsync-outbox-drain` lease while draining, enforcing the outbox's
-single-drainer assumption; the epic integration lane holds one lease per
-repo + target ref and checks its token before the merge call.
-
-Epic child columns on `Ticket`: `EpicID`/`EpicNodeKey`/`EpicPlanRevision`
-(unique together — one materialized ticket per plan node) and `EpicReady`
-(the orchestration-readiness flag, deliberately separate from `Phase`).
-All nullable/defaulted, so pre-epic databases migrate forward with every
-existing ticket reading as ordinary work. `EpicNode` rows carry the
-integration receipt (`IntegratedSHA`/`IntegratedRef`/`IntegratedAt`) and
-the node -> ticket mapping.
-
-### IntegrationAttempt
-One row per integration-lane merge attempt against a child pull request: written before the GitHub call and resolved after (a crash leaves a `merging` row the lane reconciles from the remote). Unique on (epic, node, head SHA); the final merge uses an empty node key. Failed states carry a named `cause`.
-
-`TesterVerdict` rows are append-only verdicts (epic, node key, head SHA, verdict, scenarios, evidence).
+Epic columns on `Ticket` (all nullable/defaulted, so pre-epic rows read as
+ordinary tickets): `EpicID`/`EpicNodeKey` (unique together), `EpicPlanRevision`,
+`EpicReady` (separate from `Phase`) and `EpicIntegratedSHA` (the receipt).
+Epic tables: `Epic`, `EpicPlanRevision`, `TesterVerdict` (append-only).

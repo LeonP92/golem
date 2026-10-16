@@ -77,7 +77,7 @@ The default roles below ship with `golem init`. Each is a markdown prompt in `.g
 | `convention-enforcer` | After the last plan-step commit | Naming, structure, project patterns |
 | `spec-adherence` | After the last plan-step commit | Scope creep, plan alignment |
 | `reviewer` | At `ticket review` | Full attestation; ends with `VERDICT: PASS` or `VERDICT: FAIL` |
-| `tester` | After an epic child is pushed (epic runs only) | Runs the app and acceptance scenarios; posts a structured verdict |
+| `tester` | After an epic child is pushed (epic runs only) | Judges the sandboxed acceptance results at the pushed head; posts a verdict |
 
 #### Observer
 
@@ -92,7 +92,7 @@ Each dispatch is fire-and-forget: the role reads the diff and ticket log, writes
 
 #### Gate
 
-`golem ticket review` runs the commands in your `gate.commands` config (plus an epic child's acceptance commands), logs the result for the exact head, then runs the reviewer on the log and the branch diff. The ticket reaches ready-for-review only if every command passes AND the reviewer ends with `VERDICT: PASS`.
+`golem ticket review` runs the commands in your `gate.commands` config (plus an epic child's acceptance commands), logs the result for the exact head, then runs the reviewer on the log and the branch diff. A failing command or a reviewer `VERDICT: FAIL` sends the ticket to needs-attention (for an epic child, so does a missing verdict).
 
 ```yaml
 gate:
@@ -184,9 +184,6 @@ github:
   repo: your-org/your-repo
   label: golem
   write: true
-
-runbook:              # optional: how the tester starts this app, if it cannot infer it
-  start: "make run"
 ```
 
 ### Commands
@@ -195,7 +192,7 @@ runbook:              # optional: how the tester starts this app, if it cannot i
 golem init --backend <name>                    initialise .golem in a repo
 
 golem ticket new "<description>"               create ticket, worktree, branch
-golem ticket new --base <ref> / --base-sha <sha>   pin the worktree to an exact commit
+golem ticket new --base <ref>                  pin the worktree to the exact commit <ref> names
 golem ticket new --accept "<cmd>"              acceptance command the gate also runs (repeatable)
 golem ticket advance --to <phase>
 golem ticket set-step --expected-lines <n>
@@ -285,9 +282,9 @@ An epic turns one specification into several dependent tickets (UI: **Epics**).
    (either one makes a tester pass mandatory), and auto-approve child phases
    (snapshotted into each child when it is created).
 2. **Plan**: paste a plan revision as JSON — requirements, nodes (title,
-   scope, `acceptance_commands`, `requirement_ids`, `branch_target`) and
-   dependency edges. It is validated (coverage, cycles, keys); every save is
-   a new immutable revision.
+   scope, `acceptance_commands`, `requirement_ids`) and dependency edges.
+   It is validated (coverage, cycles, keys); every save is a new immutable
+   revision.
 3. **Approve** the current revision (bound to its content hash), then
    **Start**: each node becomes an ordinary ticket. A child is claimable
    only while the run is `running` and all its predecessors are integrated.
@@ -297,7 +294,9 @@ An epic turns one specification into several dependent tickets (UI: **Epics**).
 5. **Integration**: with GitHub sync, a child's PR merged by a human — or by
    the integration lane when auto-merge is on, the PR is clean and the
    tester passed this exact head — writes a receipt that unblocks its
-   successors. Without GitHub sync, record receipts via
+   successors. A tester FAIL sends the child back to revising with the
+   evidence; an inconclusive verdict parks it in needs-attention. Without
+   GitHub sync, record receipts via
    `POST /api/epics/{id}/nodes/{key}/integrate`.
 6. **Pause/Resume** stops and restarts claims and merges. When every node
    is integrated the run waits for final review (`trunk-flags` completes
@@ -512,12 +511,20 @@ out; the orchestrator does not.
 
 `db.Open` accepts a PostgreSQL DSN, and the usual reason to reach for
 PostgreSQL is to run more than one process — so this is worth stating plainly
-rather than leaving it to be discovered. The GitHub write outbox is drained only
-while holding the `ghsync-outbox-drain` database lease, so a second process
-does not double-deliver it. Issue polling has no such guard: two orchestrators
-both poll, burning GitHub rate limit and doubling log volume for no benefit.
+rather than leaving it to be discovered. The GitHub write outbox is drained by
+a select that takes no lock and writes no claim: no `FOR UPDATE SKIP LOCKED`,
+no claim column, no lease. Two orchestrators against one database both select
+the same due rows and both deliver them.
 
-Note that
+What that looks like in practice: duplicate milestone comments on issues,
+duplicate label writes, and — because each process marks the row done
+afterwards without complaint — no error anywhere to tell you it happened. It
+burns GitHub rate limit on a feature whose whole design is built around
+conserving it. The issue polling has the same shape.
+
+This is a constraint, not a bug being worked around: fixing it means either
+`FOR UPDATE SKIP LOCKED` on the outbox select or a claimed-by column checked
+with `RowsAffected == 1` before delivery, and neither is in place. Note that
 the test suite structurally cannot catch a violation — `:memory:` SQLite pins
 the pool to a single connection, so every test serialises at the driver.
 

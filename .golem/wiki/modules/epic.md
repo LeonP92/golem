@@ -11,8 +11,8 @@ Persistence and execution: see orchestrator-epics.
   unknown endpoints, acyclic, requirement coverage in both directions,
   non-empty acceptance commands and branch targets, at most `MaxNodes`.
 - `Hash` is SHA-256 over canonical JSON; approvals bind to it.
-- `Ready(plan, State)` returns nodes whose predecessors are all integrated
-  (merged with a receipt), ordered by critical-path depth, then plan order.
+- `Ready(plan, integrated)` marks nodes not yet integrated whose
+  predecessors all are (merged with a receipt).
 
-Acceptance commands are carried into the child's description; they are
-not run by the gate (only `gate.commands` are).
+Acceptance commands are carried into the child's description and run by
+its gate (`ticket new --accept`).

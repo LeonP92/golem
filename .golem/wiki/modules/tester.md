@@ -13,6 +13,5 @@
 
 The tester stage itself lives in the shem worker (see shem-worker). It
 runs for epic children of runs with `tester_required`, uses the `tester`
-role and the `test` stage model, and quotes the repo's `runbook:` config
-(written empty by `golem init`) as the fallback after inferring startup
-from the repo.
+role and the `test` stage model. The agent does not run commands; it
+judges the sandboxed acceptance results and the code at the head.

@@ -8,21 +8,16 @@ catalog model against the vendor CLI and prints the verified `backend:` block.
 Both read a `shem.yaml` via `--config` or a standalone document via
 `--backend-config`.
 
-`golem ticket new` accepts `--base <ref>` / `--base-sha <sha>` (worktree
-created from the resolved exact commit, recorded as `branch_base_sha`;
-without them it uses `HEAD`) and repeatable `--accept <cmd>` (acceptance
-commands stored on the ticket and run by the gate after `gate.commands`).
+`golem ticket new --base <ref>` creates the worktree at the exact commit
+<ref> names (recorded as `branch_base_sha`; default `HEAD`); repeatable
+`--accept <cmd>` stores acceptance commands the gate runs after
+`gate.commands`.
 
-`golem ticket verify` is the worker's self-verification: runs the ticket's
-gate and records a `self-verification` entry bound to the head. Exit 0
-pass, 2 a check failed, 1 could not run.
-
-`golem ticket review` runs the gate first and logs `gate evidence:` (head,
-commands run, the command list and output), then the reviewer, which gets
-the log and the branch diff since `branch_base_sha`. Ready-for-review
-needs a passing gate AND the reviewer's `VERDICT: PASS`; a FAIL, missing or
-unreadable verdict parks the ticket in needs-attention. The verdict
-contract (`reviewerVerdictContract`) is appended to every invocation, so
-old or customized reviewer.md files keep working. Observers that find
-nothing log a `no findings` STATUS for the commit, so silence is visible
-evidence.
+`golem ticket verify` (epic children's self-verification) and `golem
+ticket review` both run that gate and log its result bound to the head.
+Review runs the gate first, then the reviewer on the log and the branch
+diff since `branch_base_sha`. A reviewer `VERDICT: FAIL` parks the ticket
+in needs-attention like a failing gate; a missing verdict does so only for
+tickets with acceptance commands. The verdict contract is appended to
+every reviewer invocation. Observers that find nothing log a `no findings`
+STATUS.

@@ -18,7 +18,7 @@ Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to
 1. Resolving the local repo path from `config.Repos` by normalized remote URL.
 2. Starting a `tailLog` goroutine that polls `.golem/tickets/<id>/log.jsonl` every 500 ms and POSTs new JSON-lines to `/api/tickets/{id}/log`.
 3. When `CheckpointPhase != nil`, calling `RecoverTicket` to restore local worktree state before resuming.
-4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. `golem ticket new` is invoked with `--branch claim.Branch` so the worktree is created on the server-computed slug branch instead of `golem ticket new`'s own `ticket/<id>` default. When the claim carries a `BaseBranch`, the worker fetches it and pins it to an exact commit (`resolveClaimBaseSHA`), passing `--base-sha` so the worktree starts from that commit — never a floating HEAD. A failed fetch or resolution fails the ticket rather than scaffolding it from a stale base. With no_push or a `local://` remote nothing is fetched and the base resolves locally; a local-only ordinary ticket whose base branch does not exist starts from HEAD, as before pinning. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
+4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. `golem ticket new` is invoked with `--branch claim.Branch` so the worktree is created on the server-computed slug branch instead of `golem ticket new`'s own `ticket/<id>` default. When the claim carries a `BaseBranch`, the worker fetches it and pins it to an exact commit (`resolveBaseSHA`), passing `--base <sha>`. With no_push or a `local://` remote nothing is fetched. If the base cannot be resolved, an ordinary ticket starts from HEAD (the pre-pinning behavior) and an epic child falls back to the run's base branch. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
 5. A `"revising"` phase case (reached only via `ReviseClaim`'s `CheckpointPhase: "revising"` sentinel, not a local ticket phase): consumes the pending `feedback` HumanInput, runs `buildRevisePrompt` in the existing worktree/branch (no plan restatement, no `golem ticket close`), then re-reads local state and posts the resulting phase (`ready-for-review` or `needs-attention`) back — same checkpoint/post-phase pattern as the `implement` case.
 6. After the CLI returns, reading `.golem/tickets/<id>/state.json` and posting a final checkpoint via `PostCheckpointWithRetry`.
 
@@ -61,12 +61,11 @@ can use, or `""` with a WARNING so the stage runs on the vendor default.
 ## Epic children on the worker
 
 The claim's optional `epic` block (`EpicClaim`) carries run id, node key,
-plan revision, base fallback, `tester_required` and the node's acceptance
+base fallback, `tester_required` and the node's acceptance
 commands.
 
 - Scaffold: the base resolves from the child's branch target; while the
-  run's `epic/<id>` ref does not exist yet, `resolveBaseSHAWithFallback`
-  uses the run's base branch. Acceptance commands go to
+  run's `epic/<id>` ref does not exist yet, `resolveBaseSHA` uses the run's base branch. Acceptance commands go to
   `golem ticket new --accept`, so verify and review run them after
   `gate.commands`.
 - Finish (after a successful push): `ensureRemoteBaseRef` creates the
@@ -77,8 +76,8 @@ commands.
   `tester` role on those results against the pushed head and posts the verdict to
   `POST /api/epics/{id}/verdicts` — the measured head, downgraded to
   inconclusive if the agent reports another head or the head moves.
-  Tester failures are reported and swallowed; the lane stays blocked.
+  Tester failures are reported and swallowed; the lane waits.
   Push is skipped under no_push, so the tester stage needs a pushable
   remote.
-- Self-verification (`golem ticket verify`) runs before the review gate;
-  one failure bounces the implementer once with the output.
+- Self-verification (`golem ticket verify`, epic children only) runs before
+  the review gate; a failed check bounces the implementer once with the output.

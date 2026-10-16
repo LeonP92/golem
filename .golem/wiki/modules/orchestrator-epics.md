@@ -1,66 +1,49 @@
 # orchestrator-epics
 
 `internal/orchestrator/epics` — the stateful half of an Epic Run. The pure
-plan core (schema, validation, hash, readiness order) is `internal/epic`.
+plan core (schema, validation, readiness) is `internal/epic`. Children are
+ordinary tickets; the run adds two tables (`epics`, `epic_plan_revisions`),
+the append-only `tester_verdicts`, and epic columns on `tickets`.
 
-States: `draft` → `awaiting-approval` → `running` ⇄ `paused` →
-`awaiting-final-review` → `completed`. `needs-attention` and `cancelled`
-are reserved (accepted by the gates, set by nothing yet).
+States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
+`paused` → `awaiting-final-review` → `completed`.
 
 ## Planning (epics.go)
-- `Create` validates branch strategy (`epic-branch` | `trunk-flags`) and
-  delivery target (`feature-branch` | `base-branch`; trunk-flags cannot use
-  feature-branch). Epic-branch runs integrate into `epic/<epic id>`.
-  Auto-merging children or the final PR forces `TesterRequired`.
-- `AddRevision` validates and stores an immutable revision (plus node/edge
-  snapshots) and clears any approval. Only before the run starts.
-- `Approve` binds the actor to the exact revision AND plan hash, and only
-  for the current revision of a run still awaiting approval
-  (`ErrNotCurrent` otherwise).
+- `Create` validates strategy (`epic-branch` | `trunk-flags`) and delivery
+  target (`feature-branch` | `base-branch`; trunk-flags needs base-branch).
+  Epic-branch runs integrate into `epic/<id>` (`TargetRef`). Any auto-merge
+  forces `TesterRequired`.
+- `AddRevision` stores an immutable revision and clears any approval; only
+  before start. A node's empty `branch_target` becomes `TargetRef`; any
+  other value is rejected.
+- `Approve` binds the username to the current revision AND its plan hash.
+- Errors: `ErrInvalid` (bad input), `ErrNotFound`, and the conflict
+  sentinels; `api.writeEpicResult` maps them to 422/404/409.
 
-## Running (start.go, pause.go)
-- `Start` materializes the approved revision into ordinary tickets, once:
-  ID `epic-<id8>-<lowercased key>`, `BaseBranch` = node branch target,
-  description composed verbatim from the plan, and
-  `ManualApproval = !AutoApprovePhases` snapshotted per child (later policy
-  changes never reach existing children).
-- Readiness (`EpicReady`) is derived from the plan plus receipts at start
-  and on every receipt. Claims re-check it in SQL (see orchestrator-api).
-- `RecordIntegration` writes the receipt readiness consumes (merge SHA,
-  ref, time). Identical repeats are one receipt; a different SHA fails
-  closed. Accepted while running, paused or needs-attention. The last
-  receipt moves the run to `awaiting-final-review`, or to `completed` under
-  trunk-flags (it already integrated into base).
-- `Pause`/`Resume`: running ⇄ paused. Every claim path requires `running`,
-  the lane no-ops otherwise, and the PR monitor leaves such children alone.
-  A phase already executing finishes. Resume refuses `needs-attention`.
+## Running (start.go)
+- `Start` materializes the approved revision into tickets once (ID
+  `epic-<id8>-<key>`, `BaseBranch` = `TargetRef`, description from the plan,
+  `ManualApproval = !AutoApprovePhases` snapshotted).
+- `RecordIntegration` sets the child's `EpicIntegratedSHA` (identical
+  repeat = no-op, different SHA = `ErrIntegrationConflict`), recomputes
+  every child's `EpicReady`, and on the last receipt moves the run to
+  `awaiting-final-review` (`completed` under trunk-flags).
+- `Pause`/`Resume`: running ⇄ paused. Claims and the lane need `running`.
 
 ## Integration lane (integrate.go)
-`AttemptMerge` is called by the PR monitor for a child whose PR has no
-failed checks. It merges only when the epic auto-merges children, the run
-is `running`, GitHub reports the PR mergeable and `clean`, the PR targets
-the plan's ref, and (when required) the newest tester verdict for this
-exact head is `pass`. Under a per repo+ref lease it reconciles stale
-`merging` rows from the remote, writes the attempt row before the merge
-call, checks its fencing token, and merges pinned to the head. Outcomes:
-`merged` (then a receipt), `failed-stale` (head moved), `failed-forbidden`
-(403), `failed-unknown` (retried on the same head), `failed-conflict`,
-`blocked-tester`. One attempt row per (epic, node, head).
-
-## Tester verdicts (verdict.go)
-`RecordVerdict` stores a verdict (pass/fail/inconclusive + head SHA) and
-deletes the `blocked-tester` row for that head so the lane re-evaluates.
-Verdicts are append-only and matched on head SHA; a verdict for another
-head is ignored.
+`MergeChild` is called by the PR monitor for a child PR with no failing
+checks. When the run auto-merges children, is `running`, the PR is
+`clean` and targets `TargetRef`, and (if required) the newest tester
+verdict for this exact head is `pass`, it merges pinned to the head and
+writes the receipt. It keeps no state of its own; it returns what the
+monitor applies through its existing paths: tester `fail` → `needsFixing`
+(back to revising with the evidence, bounded by the PR fix attempts);
+`inconclusive`, wrong base or a 403 → needs-attention. No verdict yet or a
+moved head → wait for the next pass.
 
 ## Final merge (finalmerge.go)
-`MergeFinal` (`POST /api/epics/{id}/merge-final`, run-view button) merges
-the `epic/<id>` → base PR for a base-branch run with `AutoMergeFinal`, in
-`awaiting-final-review`, given a current final-candidate pass (empty node
-key). Pinned to the head; `failed-unknown` retries, other terminal
-attempts are reported as errors; an already-merged PR converges to
-`completed`.
-
-Gap: nothing opens the final PR or produces a final-candidate verdict
-(shems may only post verdicts for node tickets they hold), so final
-auto-merge cannot complete on its own yet.
+`MergeFinal` (UI button / `POST /api/epics/{id}/merge-final`) merges the
+`epic/<id>` → base PR for a base-branch run with `AutoMergeFinal`, given a
+pass verdict for the final PR's head (empty node key). Nothing opens the
+final PR or produces that verdict yet — by design the final merge is a
+human step today.

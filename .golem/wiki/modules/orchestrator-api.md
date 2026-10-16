@@ -66,11 +66,15 @@ values, against the assigned shem's own catalog.
 
 Session + CSRF (writes need PermTicketCreate for create/revisions,
 PermTicketManage for the rest): `POST/GET /api/epics`, `GET /api/epics/{id}`,
-`POST /api/epics/{id}/revisions` (422 lists every validation problem),
+`POST /api/epics/{id}/revisions` (422 lists every validation problem;
+an empty node `branch_target` defaults to the run's target ref),
 `/approve` (exact revision + plan hash; 409 on a mismatch or a revision
 that is not current), `/start` (idempotent), `/pause`, `/resume`,
 `/merge-final`, and `/nodes/{key}/integrate` (manual receipt, for repos
 without GitHub sync).
+
+Errors map through `writeEpicResult` (404 / 422 invalid / 409 conflict / 500).
+Approvals record the username (UI and API alike).
 
 Shem API key: `POST /api/epics/{id}/verdicts` — needs `epic_node_key` and
 the calling shem must hold that node's ticket (`writeTicketOwnership`).
