@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -11,6 +12,7 @@ import (
 // A fake `codex` on PATH proves the whole invocation path: argv shape,
 // prompt on stdin, stdout captured as the result.
 func TestCodexRunAgentThroughFakeCLI(t *testing.T) {
+	skipOnWindows(t)
 	dir := t.TempDir()
 	record := filepath.Join(dir, "recorded")
 	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + ".argv\ncat > " + record + ".stdin\nprintf 'codex-answer'\n"
@@ -38,6 +40,7 @@ func TestCodexRunAgentThroughFakeCLI(t *testing.T) {
 
 // The same proof for `opencode run`.
 func TestOpenCodeRunAgentThroughFakeCLI(t *testing.T) {
+	skipOnWindows(t)
 	dir := t.TempDir()
 	record := filepath.Join(dir, "recorded")
 	fake := "#!/bin/sh\nprintf '%s\\n' \"$@\" > " + record + ".argv\ncat > " + record + ".stdin\nprintf 'opencode-answer'\n"
@@ -60,5 +63,12 @@ func TestOpenCodeRunAgentThroughFakeCLI(t *testing.T) {
 	stdin, _ := os.ReadFile(record + ".stdin")
 	if !strings.Contains(string(stdin), "ROLE") {
 		t.Errorf("prompt not on stdin: %q", stdin)
+	}
+}
+
+func skipOnWindows(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("the fake binary is a POSIX shell script")
 	}
 }
