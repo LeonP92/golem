@@ -16,8 +16,9 @@ import (
 
 // RecoverTicket ensures the local repo is in the correct state for resuming a
 // checkpointed ticket, then reconstructs the ticket's local state files.
+// setup is the adapter's WorktreeSetup, run on a newly created worktree.
 // Idempotent: safe to call on an already-present worktree.
-func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config.Config) error {
+func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config.Config, setup func(string) error) error {
 	if claim.CheckpointPhase == nil || claim.CheckpointSHA == nil {
 		return fmt.Errorf("RecoverTicket: claim has no checkpoint data")
 	}
@@ -35,17 +36,26 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 	worktreePath := filepath.Join(ticketDir, "worktree")
 	worktreeBranch := claim.Branch
 
+	created := false
 	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
 		// Fetch in case the branch was pushed; ignore errors (no_push mode has no remote branch).
 		_ = fetchBranchForAgent(ctx, repoPath, claim.RepoRemote, worktreeBranch)
 		if err := ensureWorktree(ctx, repoPath, worktreePath, worktreeBranch); err != nil {
 			return fmt.Errorf("RecoverTicket: worktree: %w", err)
 		}
+		created = true
 	}
 
 	if sha := safeDeref(claim.CheckpointSHA); sha != "" {
 		if err := gitRun(ctx, worktreePath, "reset", "--hard", sha); err != nil {
 			return fmt.Errorf("RecoverTicket: reset: %w", err)
+		}
+	}
+
+	// After the reset, which would otherwise undo it.
+	if created {
+		if err := setup(worktreePath); err != nil {
+			return fmt.Errorf("RecoverTicket: worktree setup: %w", err)
 		}
 	}
 

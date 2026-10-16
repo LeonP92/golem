@@ -146,48 +146,32 @@ func TestGenerateClaudeCodeArtifactsMergesExistingSettings(t *testing.T) {
 	}
 }
 
-func TestWorktreeSetupWritesSettingsWithDenyList(t *testing.T) {
-	dir := t.TempDir()
-	cc := ClaudeCode{opts: Options{RepoRoot: dir}}
-	if err := cc.WorktreeSetup(dir); err != nil {
-		t.Fatalf("WorktreeSetup: %v", err)
-	}
-
-	data, err := os.ReadFile(filepath.Join(dir, ".claude", "settings.json"))
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-
-	var settings struct {
-		Permissions struct {
-			Allow []string `json:"allow"`
-			Deny  []string `json:"deny"`
-		} `json:"permissions"`
-	}
-	if err := json.Unmarshal(data, &settings); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	if len(settings.Permissions.Deny) == 0 {
-		t.Error("WorktreeSetup settings.json has empty deny list")
-	}
-	for _, want := range claudeCodeDenyList {
-		found := false
-		for _, d := range settings.Permissions.Deny {
-			if d == want {
-				found = true
-				break
-			}
-		}
-		if !found {
-			t.Errorf("deny list missing %q", want)
-		}
-	}
-}
-
 func TestRunAgentInvokesClaudeCLI(t *testing.T) {
 	if _, err := exec.LookPath("claude"); err != nil {
 		t.Skip("claude CLI not on PATH, skipping live-invocation shape test")
 	}
 	// This test only validates command construction via a fake PATH binary;
 	// see helper below.
+}
+
+func TestWorktreeSetupSkipsWorktreeForTrackedSettings(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, ".claude"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".claude", "settings.json"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, args := range [][]string{{"init", "-q"}, {"add", ".claude/settings.json"}} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+	}
+	if err := (ClaudeCode{}).WorktreeSetup(dir); err != nil {
+		t.Fatal(err)
+	}
+	out, err := exec.Command("git", "-C", dir, "ls-files", "-v", ".claude/settings.json").Output()
+	if err != nil || !strings.HasPrefix(string(out), "S ") {
+		t.Errorf("ls-files -v = %q, %v; want skip-worktree flag", out, err)
+	}
 }
