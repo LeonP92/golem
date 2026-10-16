@@ -86,14 +86,3 @@ If the entry has `[Lstart-Lend]`, read that line range first and expand only as
 needed. Ranges come from the last indexed commit; if the code there doesn't
 match, or the symbol isn't listed, fall back to grep. The graph has module
 imports, not a call graph.
-
-## Self-verification
-
-Before you advance the ticket to review, verify your own change with
-checks appropriate to the diff: run the unit tests that cover the logic
-you touched, and for UI work drive the feature itself — start the app
-locally and exercise the new behavior (a browser check for a new button,
-a curl for a new endpoint) rather than trusting that it renders. Record
-what you ran and what happened in the ticket log. Your verification
-catches breakage early; it never substitutes for the reviewer or the
-tester, whose verdicts are the only ones that authorize a merge.

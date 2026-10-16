@@ -23,10 +23,7 @@ const (
 	StageReview        Stage = "review"
 	StagePRDescription Stage = "pr-description"
 	StageGraph         Stage = "graph"
-	// StageTest is the tester agent: it runs the merge candidate against
-	// the spec's acceptance criteria and returns the verdict that gates
-	// auto-merge. A distinct stage so it gets its own model selection,
-	// per the same per-stage controls as every other stage.
+	// StageTest is the epic tester, whose verdict gates auto-merge.
 	StageTest Stage = "test"
 )
 

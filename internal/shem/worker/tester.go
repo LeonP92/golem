@@ -19,18 +19,9 @@ import (
 	"github.com/leonp92/golem/internal/tester"
 )
 
-// runTesterStage runs the tester role against the exact head the worker
-// just finished, for epic children whose run requires a tester verdict
-// before the lane may merge. The tester is a separate invocation with its
-// own role and model — not the implementer grading its own work — and its
-// verdict is posted as evidence; the orchestrator's lane still matches
-// the head SHA before merging.
-//
-// Every failure here is reported on the ticket and swallowed: the ticket
-// still reaches ready-for-review, and the lane simply stays blocked until
-// a verdict exists. Making the lifecycle depend on the tester would turn
-// a broken tester into a broken ticket, which is the coupling the gate
-// exists to avoid.
+// runTesterStage runs the tester role on the head just pushed and posts
+// its verdict. Failures are reported on the ticket and swallowed: the
+// lane simply waits for a verdict.
 func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 	claim *client.ClaimResponse, repoPath, worktree, ticketDir string) {
 

@@ -95,11 +95,8 @@ type Client interface {
 	// reads: whether the branch still merges, whether CI is green, and
 	// whether the pull request is still open at all.
 	GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequestStatus, error)
-	// MergePullRequest merges the pull request, pinned to expectedHeadSHA:
-	// GitHub refuses the merge when the branch head moved after the caller
-	// validated it, which is what makes a stale validation fail closed
-	// instead of merging unreviewed commits. The returned SHA is the merge
-	// commit — what an integration receipt must name.
+	// MergePullRequest merges pinned to expectedHeadSHA (a moved head is
+	// refused) and returns the merge commit SHA.
 	MergePullRequest(ctx context.Context, owner, repo string, number int, expectedHeadSHA string) (string, error)
 	ListFailedChecks(ctx context.Context, owner, repo, ref string) ([]CheckFailure, error)
 }

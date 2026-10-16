@@ -1,21 +1,7 @@
-// Package tester holds the deterministic pieces of the independent tester:
-// the verdict contract and the sandbox the tester stage runs acceptance
-// commands in (the tester agent itself runs through the normal adapter).
-//
-// The rules:
-//
-//   - No secrets. Tester scenarios execute generated code. The environment
-//     starts from the agent allow-list (internal/agentenv), which already
-//     strips everything Golem-owned, and then removes what an agent needs
-//     but a test run does not: the model credentials and SDK configuration
-//     an agent CLI reads, and any GITHUB_/GH_ token the repository's own
-//     tooling might pick up.
-//   - No network by default. The proxy and CA variables that make egress
-//     work are stripped, so a scenario that tries to reach out fails rather
-//     than succeeding quietly. Command wraps the run in a network
-//     namespace when the platform offers one and reports whether it did, so
-//     a scenario that needs network can be marked inconclusive instead of
-//     being mistaken for a pass on a host that could not isolate it.
+// Package tester holds the tester stage's verdict contract and the sandbox
+// its acceptance commands run in: the agent allow-listed environment minus
+// model credentials, GitHub tokens and proxy settings, inside a network
+// namespace when the host can create one.
 package tester
 
 import (

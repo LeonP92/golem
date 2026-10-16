@@ -84,10 +84,7 @@ type PullRequestStatus struct {
 	MergeableState string
 	HeadSHA        string
 	BaseRef        string
-	// MergeCommitSHA is the commit the merge created on the base, present
-	// only once Merged is true. For a squash/rebase merge it differs from
-	// HeadSHA; it is the SHA an integration receipt should name, because
-	// it is what the target ref actually contains.
+	// MergeCommitSHA is set once Merged: the commit the base now contains.
 	MergeCommitSHA string
 }
 
@@ -311,21 +308,14 @@ func needsHumanConclusion(c string) bool {
 	return c == "action_required"
 }
 
-// ErrMergeConflictHead wraps the 409 the merge endpoint returns when
-// expectedHeadSHA no longer matches the branch head. It is a distinct
-// sentinel because the response is not a conflict-with-base: the merge was
-// refused before it could even be evaluated, and the caller must re-read and
-// re-validate the pull request rather than treat the change as conflicting.
+// ErrMergeConflictHead: the head moved after validation (409).
 var ErrMergeConflictHead = errors.New("github: pull request head moved before merge")
 
-// ErrMergeForbidden wraps a 403 from the merge endpoint: the token lacks
-// permission. A 405 (not mergeable yet, e.g. checks pending) is left a
-// plain error so the lane retries it.
+// ErrMergeForbidden: permissions or branch protection refused it (403).
+// A 405 (not mergeable yet) stays a plain, retryable error.
 var ErrMergeForbidden = errors.New("github: merge refused by permissions or branch protection")
 
-// MergePullRequest merges number into its base, pinned to expectedHeadSHA.
-// GitHub itself enforces the pin: a head that moved between validation and
-// the merge call is a 409, never a silent merge of the newer commits.
+// MergePullRequest merges number pinned to expectedHeadSHA.
 func (c *client) MergePullRequest(ctx context.Context, owner, repo string, number int, expectedHeadSHA string) (string, error) {
 	res, _, err := c.api.PullRequests.Merge(ctx, owner, repo, number, "", &gh.PullRequestOptions{
 		SHA:         expectedHeadSHA,

@@ -1,17 +1,9 @@
-// Package tester owns the tester stage's verdict contract: the block the
-// tester role must end its report with, and the parser that reads it.
-// Both the CLI and the shem worker parse the same output, so the contract
-// lives here once — two parsers is how the contract drifts.
 package tester
 
 import "strings"
 
-// Contract is appended to the tester role prompt at invocation time, not
-// only shipped in the role file: role files are unpacked once and owned
-// by the repo, so an install initialized before this contract existed —
-// or a repo that customized the file — would otherwise produce reports
-// with no verdict and park every auto-merge. The parsing contract must
-// not depend on an editable file.
+// Contract is appended to every tester prompt, so an old or customized
+// tester.md still yields a parseable verdict.
 const Contract = `
 
 ## Required report tail
@@ -21,11 +13,11 @@ End your report with exactly these lines, nothing after them:
     TESTER-VERDICT: PASS
     HEAD: <the exact head SHA you tested>
     BASE: <the base SHA you merged or compared against>
-    SCENARIOS: <scenario names you ran, comma-separated>
-    EVIDENCE: <one line: where the logs are, or what failed>
+    SCENARIOS: <what you checked, comma-separated>
+    EVIDENCE: <one line: what passed or what failed>
 
-The verdict word is PASS, FAIL or INCONCLUSIVE. A verdict you could not
-earn by running the candidate is INCONCLUSIVE, never a guess. These
+The verdict word is PASS, FAIL or INCONCLUSIVE. A verdict the evidence
+does not support is INCONCLUSIVE, never a guess. These
 lines are parsed mechanically: a missing or unreadable verdict is not
 passing, and a head SHA that does not match the candidate is ignored.
 `
@@ -39,10 +31,7 @@ type Verdict struct {
 	Evidence  string
 }
 
-// ParseVerdict extracts the verdict block. found reports whether a
-// recognizable verdict line exists at all. When several blocks appear,
-// the last one wins — a tester that first wrote PASS and then hit an
-// environment failure must not have its earlier word stand.
+// ParseVerdict reads the verdict block; the last one wins.
 func ParseVerdict(output string) (v Verdict, found bool) {
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
