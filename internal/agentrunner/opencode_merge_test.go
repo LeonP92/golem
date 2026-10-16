@@ -125,3 +125,16 @@ func TestOpenCodePermissionHasNoAsk(t *testing.T) {
 		t.Errorf("permission block contains an ask: %s", s)
 	}
 }
+
+// opencode writes $schema into a config that lacks it, so golem's file
+// carries it already.
+func TestOpenCodeConfigHasSchema(t *testing.T) {
+	dir := t.TempDir()
+	if err := writeOpenCodeConfig(dir); err != nil {
+		t.Fatal(err)
+	}
+	data, _ := os.ReadFile(filepath.Join(dir, "opencode.json"))
+	if !strings.Contains(string(data), `"$schema": "https://opencode.ai/config.json"`) {
+		t.Errorf("no $schema:\n%s", data)
+	}
+}

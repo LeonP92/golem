@@ -259,6 +259,10 @@ func writeOpenCodeConfig(dir string) error {
 		return nil
 	}
 	top = setField(top, "permission", perm)
+	// opencode adds $schema itself on first run, dirtying the checkout.
+	if _, ok := getField(top, "$schema"); !ok {
+		top = append([]jsonField{{"$schema", jsonString("https://opencode.ai/config.json")}}, top...)
+	}
 	var out bytes.Buffer
 	if err := json.Indent(&out, encodeObject(top), "", "  "); err != nil {
 		return err
