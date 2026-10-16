@@ -14,12 +14,12 @@ func TestCodexArgv(t *testing.T) {
 		model string
 		want  string
 	}{
-		{"no model, no extra args", Options{}, "", "codex exec --sandbox workspace-write -"},
-		{"model only", Options{}, "gpt-5.6-sol", "codex exec --sandbox workspace-write --model gpt-5.6-sol -"},
-		{"extra args only", Options{ExtraArgs: []string{"--ephemeral"}}, "", "codex exec --sandbox workspace-write --ephemeral -"},
+		{"no model, no extra args", Options{}, "", "codex exec --skip-git-repo-check --sandbox workspace-write -"},
+		{"model only", Options{}, "gpt-5.6-sol", "codex exec --skip-git-repo-check --sandbox workspace-write --model gpt-5.6-sol -"},
+		{"extra args only", Options{ExtraArgs: []string{"--ephemeral"}}, "", "codex exec --skip-git-repo-check --sandbox workspace-write --ephemeral -"},
 		{"model then extra args", Options{ExtraArgs: []string{"--ephemeral"}}, "gpt-5.6-sol",
-			"codex exec --sandbox workspace-write --model gpt-5.6-sol --ephemeral -"},
-		{"command override", Options{Command: "my-codex"}, "", "my-codex exec --sandbox workspace-write -"},
+			"codex exec --skip-git-repo-check --sandbox workspace-write --model gpt-5.6-sol --ephemeral -"},
+		{"command override", Options{Command: "my-codex"}, "", "my-codex exec --skip-git-repo-check --sandbox workspace-write -"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,7 +109,7 @@ func TestTrustCodexProject(t *testing.T) {
 func TestCodexSandboxFromEnv(t *testing.T) {
 	t.Setenv("GOLEM_CODEX_SANDBOX", "danger-full-access")
 	argv, err := (Codex{}).argv("")
-	if err != nil || strings.Join(argv, " ") != "codex exec --sandbox danger-full-access -" {
+	if err != nil || strings.Join(argv, " ") != "codex exec --skip-git-repo-check --sandbox danger-full-access -" {
 		t.Errorf("argv = %q, %v", argv, err)
 	}
 	t.Setenv("GOLEM_CODEX_SANDBOX", "bogus")

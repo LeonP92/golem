@@ -130,6 +130,7 @@ copy_from_mount() { # <src dir> <dest dir> <file>...
     [ -f "$src/$f" ] || continue
     mkdir -p "$dest"
     cp -f "$src/$f" "$dest/$f" || echo "shem: WARNING could not copy $src/$f to $dest" >&2
+    if [ "$f" = auth.json ]; then chmod 600 "$dest/$f" 2>/dev/null || true; fi
   done
 }
 if [ "$GOLEM_BACKEND" = "codex" ]; then

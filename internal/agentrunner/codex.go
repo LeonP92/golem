@@ -37,10 +37,10 @@ func (c Codex) Name() string { return "codex" }
 // ReservedArgs are the tokens this adapter sets itself. --json is reserved
 // because golem parses stdout as the agent's plain-text answer.
 func (c Codex) ReservedArgs() []string {
-	return []string{"exec", "--sandbox", "-s", "--model", "-m", "--json", "--config", "-c"}
+	return []string{"exec", "--skip-git-repo-check", "--sandbox", "-s", "--model", "-m", "--json", "--config", "-c"}
 }
 
-// argv builds `codex exec --sandbox <mode> [--model m] [extra] -`.
+// argv builds `codex exec --skip-git-repo-check --sandbox <mode> [--model m] [extra] -`.
 //
 // The mode is workspace-write unless GOLEM_CODEX_SANDBOX says otherwise.
 // exec defaults to read-only, which cannot do ticket work, so the flag is
@@ -61,7 +61,9 @@ func (c Codex) argv(model string) ([]string, error) {
 	default:
 		return nil, fmt.Errorf("GOLEM_CODEX_SANDBOX=%q is not a codex sandbox mode", sandbox)
 	}
-	args := []string{cmd, "exec", "--sandbox", sandbox}
+	// --skip-git-repo-check: `golem models probe` runs in a temp dir, which
+	// codex otherwise refuses; golem's own runs are always in a git repo.
+	args := []string{cmd, "exec", "--skip-git-repo-check", "--sandbox", sandbox}
 	if model != "" {
 		if !models.ValidModelID(model) {
 			return nil, fmt.Errorf("invalid model id %q", model)
