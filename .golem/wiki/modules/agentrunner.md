@@ -32,8 +32,10 @@ itself, an `env` name golem owns, and a structurally bad catalog. `NewAdapter` a
 ## Process construction
 
 `agentCmd` builds every agent subprocess: `agentenv.Environ` plus the block's
-own `env` minus golem's variables, with privileges dropped and pipe waits
-bounded.
+own `env` minus golem's variables, `PWD` set to the working directory
+(opencode trusts it over getcwd), privileges dropped and pipe waits bounded.
+`skipWorktree` keeps golem's edits to a tracked config file out of
+`git add -A`.
 
 ## ClaudeCode
 
@@ -42,3 +44,25 @@ Runs the `claude` CLI, authenticated on the host, storing no credentials. Its
 the flag. `PrepareHost` pre-accepts the workspace trust dialog for a repository
 (`claudecode_trust.go`); `GenerateArtifacts` writes the subagent definitions
 and commands. `DefaultCatalog` is `claudecode_catalog.yaml`.
+
+## Codex
+
+Runs `codex exec --skip-git-repo-check --sandbox <mode> [--model m] -`, the
+prompt on stdin. The mode is `workspace-write` unless `GOLEM_CODEX_SANDBOX`
+names another (the container sets `danger-full-access`: codex's bwrap sandbox
+cannot start under Docker). `GenerateArtifacts` and `WorktreeSetup` write
+`.codex/rules/golem.rules`, the claude allow/deny list as prefix rules;
+`PrepareHost` marks the repo trusted in `~/.codex/config.toml` for root and
+the agent account (`codex_trust.go`). `DefaultCatalog` is
+`codex_catalog.yaml`.
+
+## OpenCode
+
+Runs `opencode run [--model provider/model]`, the prompt on stdin.
+`WorktreeSetup` and `GenerateArtifacts` merge golem's `permission` block into
+`opencode.json`, keeping the operator's keys, rules and key order; bash is a
+`deny` catch-all, golem's allows, the operator's entries, then golem's denies
+(last match wins). Never `ask`: `opencode run` aborts on one. A file
+`encoding/json` cannot read (JSONC) is left alone. `GenerateArtifacts` also
+projects roles into `.opencode/agents/`. `PrepareHost` is a no-op.
+`DefaultCatalog` is `opencode_catalog.yaml`.

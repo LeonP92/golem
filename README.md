@@ -249,7 +249,7 @@ Browser ──► Orchestrator (dashboard, approval gates)
 ./run.sh
 ```
 
-On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` (8+ characters) and one Claude Code auth option, then run it again. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` are the ones to reach for. `CLAUDE_HOME`, which mounts your own `~/.claude`, does not carry your login on macOS — Claude Code keeps OAuth credentials in the system keychain rather than in that directory — and it also brings your hooks and MCP commands in with host absolute paths that do not resolve inside the container. See the comments in `.env.example`. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
+On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` (8+ characters) and one Claude Code auth option (or another backend's — see [Backends](#backends)), then run it again. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` are the ones to reach for. `CLAUDE_HOME`, which mounts your own `~/.claude`, does not carry your login on macOS — Claude Code keeps OAuth credentials in the system keychain rather than in that directory — and it also brings your hooks and MCP commands in with host absolute paths that do not resolve inside the container. See the comments in `.env.example`. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
 
 `GOLEM_GITHUB_TOKEN` in the same file is optional and turns on the GitHub Issues integration — see [GitHub Issues](#github-issues-1) below for what else it needs.
 
@@ -259,7 +259,7 @@ Create a ticket from the UI. The shem will pick it up within seconds and run bra
 
 1. You create a ticket in the UI with a description and target repo.
 2. A shem claims it atomically via the REST API.
-3. The shem runs `golem ticket new` to scaffold the worktree, then invokes Claude Code for the brainstorm phase.
+3. The shem runs `golem ticket new` to scaffold the worktree, then invokes the configured agent CLI (Claude Code by default) for the brainstorm phase.
 4. The shem posts the spec to the orchestrator and validates it. In manual mode it then waits for human approval.
 5. The shem runs the plan phase — same gate (human approval in manual mode, validation otherwise).
 6. Once cleared, the shem implements and reviews. When done, the ticket enters `ready-for-review`.
@@ -433,10 +433,11 @@ docker compose exec shem golem models probe --config /etc/golem/shem.yaml   # pa
 An absent `backend:` block means `claude-code` with its default catalog. A
 block without `models:` keeps the adapter's default models and overrides only
 the catalog keys it sets, so `supports_selection: false` alone turns selection
-off. Unknown keys are an error. The shipped container installs and
-authenticates only `claude`, so another adapter needs a different image.
-`--backend <name>` runs an agent-invoking subcommand against a registered
-adapter with no backend document.
+off. Unknown keys are an error. `--backend <name>` runs an agent-invoking
+subcommand against a registered adapter with no backend document.
+
+Registered adapters are `claude-code`, `codex` and `opencode`; see
+[Backends](#backends) for what each needs.
 
 #### Selecting a model
 
@@ -522,12 +523,43 @@ go build -o golem-shem ./cmd/shem
 
 ## Backends
 
-Golem's core never calls a backend directly — all execution goes through the `Runner` interface (`RunAgent` + `WorktreeSetup`). Adding a new backend means implementing those two methods.
+Golem's core never calls a backend directly — all execution goes through the `agentrunner.Adapter` interface.
 
-| Backend | Status |
-|---|---|
-| `claude-code` | Supported |
-| `gemini`, `codex`, others | Planned |
+| Adapter | CLI | Permissions golem writes | Auth (see `.env.example`) |
+|---|---|---|---|
+| `claude-code` (default) | `claude --print` | `.claude/settings.json` allow/deny | `CLAUDE_CODE_OAUTH_TOKEN`, `ANTHROPIC_API_KEY`, or `CLAUDE_HOME` |
+| `codex` | `codex exec` | `.codex/rules/golem.rules` prefix rules; repo trusted in `~/.codex/config.toml` | `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN`, or `CODEX_HOME` (ChatGPT login) |
+| `opencode` | `opencode run` | `permission` block merged into `opencode.json`; roles in `.opencode/agents/` | provider key (`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`), `OPENCODE_HOME`, or `OPENCODE_CONFIG_CONTENT` |
+
+To run codex or opencode in the compose stack:
+
+1. In `.env`, set `GOLEM_BACKENDS` (build arg: which CLIs the image installs,
+   e.g. `"claude-code codex opencode"`) and `GOLEM_BACKEND` (which one the
+   entrypoint authenticates), plus that backend's auth. Rebuild after changing
+   `GOLEM_BACKENDS`.
+2. Add a `backend:` block with that `adapter:` to `deploy/shem.yaml`, and
+   models if you are not using the adapter's default catalog.
+3. Check it: `docker compose exec shem golem models probe --config /etc/golem/shem.yaml`.
+
+Notes:
+
+- `CODEX_HOME` / `OPENCODE_HOME` are mounted read-only; their credential files
+  are copied in at start, so golem never edits your own config. A refreshed
+  codex login stays in the container.
+- Codex's own sandbox cannot start under Docker, so the container sets
+  `GOLEM_CODEX_SANDBOX=danger-full-access` (outside Docker the default is
+  `workspace-write`). Codex custom providers must speak the Responses API.
+- Opencode is the adapter for any OpenAI-compatible endpoint. Declare a
+  provider (`"npm": "@ai-sdk/openai-compatible"`, `baseURL`,
+  `"apiKey": "{env:OPENAI_API_KEY}"`) in `OPENCODE_CONFIG_CONTENT`, put the
+  key in `OPENAI_API_KEY`, and list `provider/model` ids under `models:`.
+  `.env.example` has a working Ollama Cloud example.
+- Unlisted commands are denied, not prompted: `opencode run` would abort on a
+  prompt. Codex rules match plain commands; a compound shell line can slip past
+  a forbidden prefix.
+
+Adding a backend means implementing `agentrunner.Adapter` and calling
+`Register` from an `init`.
 
 ---
 

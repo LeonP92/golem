@@ -242,7 +242,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
-			if revErr := e.runGolemReview(ctx, repoPath, ticketID, e.claimModel(c, claim, models.StageReview)); revErr != nil {
+			if revErr := e.runGolemReview(ctx, repoPath, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageReview)); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
@@ -274,7 +274,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
-			if revErr := e.runGolemReview(ctx, repoPath, ticketID, e.claimModel(c, claim, models.StageReview)); revErr != nil {
+			if revErr := e.runGolemReview(ctx, repoPath, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageReview)); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
 			}
@@ -377,8 +377,12 @@ func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID
 	return nil
 }
 
-func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, model string) error {
-	args := e.Agent.subcommandArgs([]string{"ticket", "review", "--ticket", ticketID}, model)
+func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, baseBranch, model string) error {
+	args := []string{"ticket", "review", "--ticket", ticketID}
+	if baseBranch != "" {
+		args = append(args, "--base", "origin/"+baseBranch)
+	}
+	args = e.Agent.subcommandArgs(args, model)
 	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()

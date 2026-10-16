@@ -41,11 +41,18 @@ ENTRYPOINT ["golem-orchestrator"]
 CMD ["/etc/golem/orchestrator.yaml"]
 
 # ── shem runtime ──────────────────────────────────────────────────────────────
-# The shem needs git, the golem CLI, and the Claude Code CLI (claude --print).
-# One of ANTHROPIC_API_KEY, CLAUDE_CODE_OAUTH_TOKEN, or a mounted CLAUDE_HOME
-# session is required at runtime — no interactive login needed when set;
-# claude --print uses it directly.
+# The shem needs git, the golem CLI, and the agent CLI for each backend the
+# image supports. GOLEM_BACKENDS is a space-separated list of adapter names
+# (claude-code, codex, opencode); the default builds the claude-code-only
+# image the stack has always shipped. docker-compose.yml passes it through
+# from .env.
+#
+# Auth at runtime depends on the backend; deploy/shem-entrypoint.sh prepares
+# whichever GOLEM_BACKEND selects. For claude-code: one of ANTHROPIC_API_KEY,
+# CLAUDE_CODE_OAUTH_TOKEN, or a mounted CLAUDE_HOME session. See .env.example
+# for codex and opencode.
 FROM node:22-alpine AS shem
+ARG GOLEM_BACKENDS=claude-code
 # Common runtimes and build tools for polyglot ticket support.
 # go is omitted (heavy); add it to a custom image if Go tickets are needed.
 RUN apk add --no-cache \
@@ -65,7 +72,16 @@ ENV SHELL=/bin/bash
 RUN addgroup -g 10001 golem-agent \
     && adduser -D -u 10001 -G golem-agent -h /home/golem-agent golem-agent
 ENV GOLEM_AGENT_USER=golem-agent
-RUN npm install -g @anthropic-ai/claude-code
+# Install the agent CLI for each requested backend. Unknown names fail the
+# build rather than producing an image that misses a CLI it claims to have.
+RUN for backend in $GOLEM_BACKENDS; do \
+      case "$backend" in \
+        claude-code) npm install -g @anthropic-ai/claude-code ;; \
+        codex)       npm install -g @openai/codex ;; \
+        opencode)    npm install -g opencode-ai ;; \
+        *) echo "unknown GOLEM_BACKENDS entry: $backend" >&2; exit 1 ;; \
+      esac; \
+    done
 COPY --from=builder /out/golem      /usr/local/bin/golem
 COPY --from=builder /out/golem-shem /usr/local/bin/golem-shem
 COPY deploy/shem-entrypoint.sh /usr/local/bin/shem-entrypoint.sh

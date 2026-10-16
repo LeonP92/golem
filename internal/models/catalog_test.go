@@ -114,7 +114,7 @@ func TestTierRef(t *testing.T) {
 }
 
 func TestValidModelID(t *testing.T) {
-	for _, ok := range []string{"opus", "claude-opus-4-7", "us.anthropic.x:1"} {
+	for _, ok := range []string{"opus", "claude-opus-4-7", "us.anthropic.x:1", "anthropic/claude-sonnet-4-6", "openai/gpt-5.6-sol"} {
 		if !ValidModelID(ok) {
 			t.Errorf("ValidModelID(%q) = false, want true", ok)
 		}

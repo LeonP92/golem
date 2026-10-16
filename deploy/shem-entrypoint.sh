@@ -1,8 +1,12 @@
 #!/bin/sh
 # Shem container entrypoint.
-# Prepares the Claude Code environment before starting golem-shem.
+# Prepares the agent backend's environment before starting golem-shem.
 #
-# Supported auth modes (auto-detected — no manual configuration required):
+# GOLEM_BACKEND (default: claude-code) selects which backend block below
+# runs; the image must have been built with that backend in GOLEM_BACKENDS
+# (see Dockerfile) for its CLI to exist.
+#
+# claude-code auth modes (auto-detected — no manual configuration required):
 #
 #   API key  — set ANTHROPIC_API_KEY in your .env file.
 #              The entrypoint bootstraps a minimal ~/.claude.json so
@@ -18,13 +22,27 @@
 #                CLAUDE_HOME=/home/you/.claude    (Linux/Mac)
 #                CLAUDE_HOME=C:\Users\you\.claude (Windows)
 #
-# All modes pass --dangerously-skip-permissions at runtime so Claude Code
-# can run tools unattended without per-call permission prompts.
+# codex and opencode auth: see .env.example. Host session dirs are mounted
+# read-only at /mnt/codex-home and /mnt/opencode-home; only their
+# credential files are copied in.
 set -e
+
+GOLEM_BACKEND="${GOLEM_BACKEND:-claude-code}"
+case "$GOLEM_BACKEND" in
+  claude-code|codex|opencode) ;;
+  *)
+    echo "shem: WARNING unknown GOLEM_BACKEND '$GOLEM_BACKEND' (known: claude-code, codex, opencode);" >&2
+    echo "shem:   no auth bootstrap or project trust will be prepared." >&2
+    ;;
+esac
 
 CLAUDE_JSON="${HOME}/.claude.json"
 CLAUDE_DIR="${HOME}/.claude"
+CODEX_DIR="${HOME}/.codex"
+OPENCODE_DIR="${HOME}/.local/share/opencode"
 
+# --- claude-code: auth --------------------------------------------------------
+if [ "$GOLEM_BACKEND" = "claude-code" ]; then
 # --- Auth mode: session (CLAUDE_HOME mounted) ---------------------------------
 # Restore .claude.json from the latest backup if it's missing.
 # This happens when CLAUDE_HOME is mounted but the .claude.json lives one
@@ -71,6 +89,41 @@ elif { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ 
   echo "shem:   is expired or its credentials live in the host keychain (macOS)," >&2
   echo "shem:   comment out CLAUDE_HOME in .env and recreate this container." >&2
 fi
+fi # GOLEM_BACKEND = claude-code
+
+# --- codex / opencode: auth -----------------------------------------------------
+# The host session is mounted read-only (docker-compose.yml) and found by its
+# files, not by CODEX_HOME / OPENCODE_HOME, which are host paths and are not
+# passed in. Only the credential files are copied, so nothing golem writes
+# later (trust entries) reaches the host.
+CODEX_MOUNT="${GOLEM_CODEX_MOUNT:-/mnt/codex-home}"
+OPENCODE_MOUNT="${GOLEM_OPENCODE_MOUNT:-/mnt/opencode-home}"
+copy_from_mount() { # <src dir> <dest dir> <file>...
+  src=$1; dest=$2; shift 2
+  for f in "$@"; do
+    [ -f "$src/$f" ] || continue
+    mkdir -p "$dest"
+    cp -f "$src/$f" "$dest/$f" || echo "shem: WARNING could not copy $src/$f to $dest" >&2
+    if [ "$f" = auth.json ]; then chmod 600 "$dest/$f" 2>/dev/null || true; fi
+  done
+}
+if [ "$GOLEM_BACKEND" = "codex" ]; then
+  copy_from_mount "$CODEX_MOUNT" "$CODEX_DIR" auth.json config.toml
+  if [ ! -f "$CODEX_DIR/auth.json" ] && [ -z "$CODEX_API_KEY" ] &&
+     [ -z "$CODEX_ACCESS_TOKEN" ] && [ -z "$OPENAI_API_KEY" ]; then
+    echo "shem: WARNING no codex credentials — every phase will fail. Mount a logged-in" >&2
+    echo "shem:   CODEX_HOME, or set CODEX_API_KEY, CODEX_ACCESS_TOKEN or OPENAI_API_KEY." >&2
+  fi
+fi
+if [ "$GOLEM_BACKEND" = "opencode" ]; then
+  copy_from_mount "$OPENCODE_MOUNT" "$OPENCODE_DIR" auth.json
+  if [ ! -f "$OPENCODE_DIR/auth.json" ] && [ -z "$ANTHROPIC_API_KEY" ] &&
+     [ -z "$OPENAI_API_KEY" ] && [ -z "$OPENCODE_CONFIG_CONTENT" ]; then
+    echo "shem: WARNING no opencode credentials — phases will fail. Mount a logged-in" >&2
+    echo "shem:   OPENCODE_HOME, or set ANTHROPIC_API_KEY, OPENAI_API_KEY or" >&2
+    echo "shem:   OPENCODE_CONFIG_CONTENT." >&2
+  fi
+fi
 
 # --- Agent account home -------------------------------------------------------
 # The agent runs as GOLEM_AGENT_USER (see Dockerfile) so it cannot read
@@ -83,31 +136,41 @@ if [ -n "$GOLEM_AGENT_USER" ]; then
   if [ -z "$agent_home" ]; then
     echo "shem: WARNING GOLEM_AGENT_USER=$GOLEM_AGENT_USER has no account; the agent will run as root" >&2
   else
-    mkdir -p "$agent_home/.claude"
-    # Session mode: the agent cannot read root's home, so give it a copy of
-    # the mounted session. Gated on the mounted DIRECTORY, not on
-    # .claude.json — that file lives beside ~/.claude, not inside it, so a
-    # host whose mount carries only the directory still has credentials to
-    # copy. Failures are reported: a silent one leaves the agent with a
-    # config that looks fine and no credentials in it.
-    if [ -n "$CLAUDE_HOME" ] && [ -d "$CLAUDE_DIR" ]; then
-      if ! cp -R "$CLAUDE_DIR/." "$agent_home/.claude/"; then
-        echo "shem: WARNING could not copy $CLAUDE_DIR into $agent_home/.claude" >&2
+    case "$GOLEM_BACKEND" in
+    claude-code)
+      mkdir -p "$agent_home/.claude"
+      # Session mode: the agent cannot read root's home, so give it a copy of
+      # the mounted session. Gated on the mounted DIRECTORY, not on
+      # .claude.json — that file lives beside ~/.claude, not inside it, so a
+      # host whose mount carries only the directory still has credentials to
+      # copy. Failures are reported: a silent one leaves the agent with a
+      # config that looks fine and no credentials in it.
+      if [ -n "$CLAUDE_HOME" ] && [ -d "$CLAUDE_DIR" ]; then
+        if ! cp -R "$CLAUDE_DIR/." "$agent_home/.claude/"; then
+          echo "shem: WARNING could not copy $CLAUDE_DIR into $agent_home/.claude" >&2
+        fi
+        if [ -f "$CLAUDE_JSON" ] && ! cp -f "$CLAUDE_JSON" "$agent_home/.claude.json"; then
+          echo "shem: WARNING could not copy $CLAUDE_JSON to $agent_home" >&2
+        fi
       fi
-      if [ -f "$CLAUDE_JSON" ] && ! cp -f "$CLAUDE_JSON" "$agent_home/.claude.json"; then
-        echo "shem: WARNING could not copy $CLAUDE_JSON to $agent_home" >&2
+      if [ ! -f "$agent_home/.claude.json" ]; then
+        printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$agent_home/.claude.json"
       fi
-    fi
-    if [ ! -f "$agent_home/.claude.json" ]; then
-      printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$agent_home/.claude.json"
-    fi
-    # Say so now rather than letting every phase fail with "Not logged in".
-    if [ ! -f "$agent_home/.claude/.credentials.json" ] &&
-       [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-      echo "shem: WARNING no credentials for $GOLEM_AGENT_USER — claude will report" >&2
-      echo "shem:   \"Not logged in\" and every phase will fail. Mount a logged-in" >&2
-      echo "shem:   CLAUDE_HOME, or set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN." >&2
-    fi
+      # Say so now rather than letting every phase fail with "Not logged in".
+      if [ ! -f "$agent_home/.claude/.credentials.json" ] &&
+         [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+        echo "shem: WARNING no credentials for $GOLEM_AGENT_USER — claude will report" >&2
+        echo "shem:   \"Not logged in\" and every phase will fail. Mount a logged-in" >&2
+        echo "shem:   CLAUDE_HOME, or set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN." >&2
+      fi
+      ;;
+    codex)
+      copy_from_mount "$CODEX_DIR" "$agent_home/.codex" auth.json config.toml
+      ;;
+    opencode)
+      copy_from_mount "$OPENCODE_DIR" "$agent_home/.local/share/opencode" auth.json
+      ;;
+    esac
     chown -R "$GOLEM_AGENT_USER" "$agent_home"
     echo "shem: prepared $agent_home for agent account $GOLEM_AGENT_USER"
   fi
@@ -134,7 +197,8 @@ if [ -n "$GOLEM_GITHUB_TOKEN" ]; then
   echo "shem: configured github.com push credential from GOLEM_GITHUB_TOKEN"
 fi
 
-# --- Workspace trust ----------------------------------------------------------
+# --- Workspace trust (claude-code) --------------------------------------------
+if [ "$GOLEM_BACKEND" = "claude-code" ]; then
 # Pre-accept the Claude Code workspace trust dialog for every repo the shem
 # will work on.  Without this, Claude Code ignores the project's allow-list
 # and warns on every invocation.
@@ -178,6 +242,32 @@ if changed:
 PYEOF
 fi
 done
+fi # GOLEM_BACKEND = claude-code
+
+# --- Project trust (codex) ------------------------------------------------------
+# Codex loads a project's .codex/ layer — including the rules file golem
+# writes — only when the project is trusted, and `codex exec` cannot answer
+# the trust prompt. Mark every repo under /repos/ trusted in both root's and
+# the agent's ~/.codex/config.toml, the codex equivalent of the claude
+# workspace-trust block above. Repositories cloned later are covered by the
+# codex adapter's PrepareHost.
+if [ "$GOLEM_BACKEND" = "codex" ]; then
+  trust_configs="$CODEX_DIR/config.toml"
+  if [ -n "$agent_home" ]; then
+    trust_configs="$trust_configs $agent_home/.codex/config.toml"
+  fi
+  repos=$(find /repos -mindepth 1 -maxdepth 1 -type d 2>/dev/null || true)
+  for trust_toml in $trust_configs; do
+    mkdir -p "$(dirname "$trust_toml")"
+    touch "$trust_toml"
+    for repo in $repos; do
+      if ! grep -qF "\"$repo\"" "$trust_toml"; then
+        printf '\n[projects."%s"]\ntrust_level = "trusted"\n' "$repo" >> "$trust_toml"
+        echo "shem: trusted codex project $repo"
+      fi
+    done
+  done
+fi
 
 # python3 above ran as root; hand the agent back its own files.
 if [ -n "$GOLEM_AGENT_USER" ] && [ -n "$agent_home" ]; then

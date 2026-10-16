@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
@@ -17,6 +18,13 @@ func agentCmd(ctx context.Context, o Options, dir string, args ...string) *exec.
 	// The prompt carries untrusted text, so the agent never gets golem's own
 	// environment.
 	cmd.Env = append(agentenv.Environ(), agentenv.FilterPairs(o.Env)...)
+	// An inherited PWD names golem's cwd, not dir, and opencode trusts it
+	// over getcwd. Appended last so it wins.
+	if dir != "" {
+		if abs, err := filepath.Abs(dir); err == nil {
+			cmd.Env = append(cmd.Env, "PWD="+abs)
+		}
+	}
 	// Unprivileged where configured: as root the agent could read golem's
 	// secrets from /proc/1/environ.
 	agentenv.DropPrivileges(cmd)

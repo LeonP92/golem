@@ -72,7 +72,7 @@ services:
         fi
         git init /repos/test
         cd /repos/test
-        golem init --backend claude-code
+        golem init --backend ${GOLEM_BACKEND:-claude-code}
         git add -A
         git commit -m "init: golem test repo"
         echo "test repo ready"
@@ -82,6 +82,11 @@ services:
     build:
       context: .
       target: shem
+      args:
+        # Space-separated adapter CLIs to install (claude-code, codex,
+        # opencode). The default builds the claude-code-only image the stack
+        # has always shipped; add the others when you use them.
+        GOLEM_BACKENDS: ${GOLEM_BACKENDS:-claude-code}
     # golem-shem runs as PID 1, and PID 1 inherits every orphaned process in
     # the namespace. The agent spawns claude, which spawns git, npm, hooks and
     # their own children; whenever one of those outlives its parent it is
@@ -123,6 +128,16 @@ services:
       # Leave CLAUDE_HOME unset to use a throwaway volume (OAuth-token/API-key
       # modes only).
       - ${CLAUDE_HOME:-shem-claude}:/root/.claude
+      # ── Auth mode: codex session (backend: codex) ───────────────────────────
+      # Your host ~/.codex, read-only. The entrypoint copies auth.json and
+      # config.toml from it, so golem's trust entries never land in your
+      # own config. Refreshed tokens stay in the container.
+      # Leave CODEX_HOME unset to use an empty volume with an API key.
+      - ${CODEX_HOME:-shem-codex}:/mnt/codex-home:ro
+      # ── Auth mode: opencode session (backend: opencode) ─────────────────────
+      # Your host opencode data dir (~/.local/share/opencode), read-only; the
+      # entrypoint copies its auth.json. Leave OPENCODE_HOME unset otherwise.
+      - ${OPENCODE_HOME:-shem-opencode}:/mnt/opencode-home:ro
     environment:
       # ── Auth mode: OAuth token (option B) ───────────────────────────────────
       # Set CLAUDE_CODE_OAUTH_TOKEN in .env (generated via `claude setup-token`)
@@ -132,6 +147,26 @@ services:
       # Set ANTHROPIC_API_KEY in .env and leave CLAUDE_HOME unset.
       # The entrypoint bootstraps a headless Claude Code config automatically.
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      # Session mode (option A): the entrypoint copies the mounted session
+      # for the agent only when this is set.
+      - CLAUDE_HOME=${CLAUDE_HOME:-}
+      # Which backend the entrypoint prepares. Must match a CLI installed via
+      # the GOLEM_BACKENDS build arg and the adapter in deploy/shem.yaml.
+      - GOLEM_BACKEND=${GOLEM_BACKEND:-claude-code}
+      # ── Auth mode: codex API key (backend: codex) ───────────────────────────
+      # `codex exec` reads CODEX_API_KEY directly — the headless path.
+      - CODEX_API_KEY=${CODEX_API_KEY:-}
+      # ChatGPT Business/Enterprise headless access token.
+      - CODEX_ACCESS_TOKEN=${CODEX_ACCESS_TOKEN:-}
+      # Codex's own sandbox needs user namespaces Docker does not grant, so
+      # workspace-write fails every write here; the container is the sandbox.
+      - GOLEM_CODEX_SANDBOX=${GOLEM_CODEX_SANDBOX:-danger-full-access}
+      # OpenAI SDK-style variables codex and opencode both read; also how a
+      # custom endpoint's env_key reaches the agent process.
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-}
+      # Inline opencode config (provider blocks, permissions) without a mount.
+      - OPENCODE_CONFIG_CONTENT=${OPENCODE_CONFIG_CONTENT:-}
       # Must match what the orchestrator was started with.
       - GOLEM_SHEM_API_KEY=${GOLEM_SHEM_API_KEY:-changeme-set-golem-shem-api-key-in-env}
       - GOLEM_SHEM_NAME=${GOLEM_SHEM_NAME:-default}
@@ -153,3 +188,5 @@ volumes:
   test-repo:
   shem-repos:    # repositories golem clones on demand (see the shem's /repos)
   shem-claude:   # fallback volume when CLAUDE_HOME is not set
+  shem-codex:    # fallback volume when CODEX_HOME is not set
+  shem-opencode: # fallback volume when OPENCODE_HOME is not set

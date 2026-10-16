@@ -290,8 +290,7 @@ func (c ClaudeCode) WorktreeSetup(worktreePath string) error {
 	if err := mergeClaudeCodeSettings(filepath.Join(worktreePath, ".claude", "settings.json")); err != nil {
 		return err
 	}
-	// Keep golem's additions out of `git add -A`; fails harmlessly when untracked.
-	_ = exec.Command("git", "-C", worktreePath, "update-index", "--skip-worktree", ".claude/settings.json").Run() //nolint:gosec
+	skipWorktree(worktreePath, ".claude/settings.json")
 	return nil
 }
 
@@ -352,4 +351,10 @@ func labelled(name, out string) string {
 			out[len(out)-maxCapturedStream:]
 	}
 	return "\n--- " + name + " ---\n" + out
+}
+
+// skipWorktree keeps golem's edits to a tracked file out of `git add -A`;
+// it fails harmlessly when the file is untracked.
+func skipWorktree(worktreePath, rel string) {
+	_ = exec.Command("git", "-C", worktreePath, "update-index", "--skip-worktree", rel).Run() //nolint:gosec
 }

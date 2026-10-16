@@ -86,6 +86,12 @@ func ObserverDispatch(args []string, stdout, stderr io.Writer) int {
 	return 0
 }
 
+func revExists(worktreePath, rev string) bool {
+	verify := exec.Command("git", "rev-parse", "--verify", "--quiet", rev+"^{commit}")
+	verify.Dir = worktreePath
+	return verify.Run() == nil
+}
+
 // reviewDiff is the one commit when base is empty, and otherwise the whole
 // branch: three dots diffs from the merge-base, so a base that has moved on
 // since the branch was cut contributes nothing of its own.
@@ -97,9 +103,13 @@ func reviewDiff(worktreePath, base, commit string, stderr io.Writer) (string, er
 	if base == "" {
 		return commitDiff(worktreePath, commit)
 	}
-	verify := exec.Command("git", "rev-parse", "--verify", "--quiet", base+"^{commit}")
-	verify.Dir = worktreePath
-	if verify.Run() != nil {
+	if !revExists(worktreePath, base) {
+		// A local:// repository has no origin; its base is the local branch.
+		if local, ok := strings.CutPrefix(base, "origin/"); ok && revExists(worktreePath, local) {
+			base = local
+		}
+	}
+	if !revExists(worktreePath, base) {
 		fmt.Fprintf(stderr, "base %s is not in this checkout; reviewing %s alone\n", base, commit)
 		return commitDiff(worktreePath, commit)
 	}

@@ -76,7 +76,10 @@ func TierRef(v string) (Tier, bool) {
 // TierValue is the Selections value that names t.
 func TierValue(t Tier) string { return tierPrefix + string(t) }
 
-var modelIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:-]*$`)
+var modelIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]*$`)
 
 // ValidModelID reports whether id is safe to pass as a single argv token.
+// "/" is allowed for provider-qualified ids (opencode's "provider/model"
+// form); it cannot start a flag, escape an argv element, or glob-expand
+// because adapters never pass model ids through a shell.
 func ValidModelID(id string) bool { return modelIDRE.MatchString(id) }

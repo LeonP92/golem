@@ -113,6 +113,12 @@ var envPrefixes = []string{
 	// are here because Claude Code reaches Bedrock and Vertex through them;
 	// on a host that uses neither, they are worth unsetting.
 	"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_",
+	// Codex CLI (CODEX_API_KEY, CODEX_HOME), OpenCode (OPENCODE_CONFIG and
+	// friends), and the OpenAI SDK-style variables both of them read
+	// (OPENAI_API_KEY, OPENAI_BASE_URL). Without these a codex or opencode
+	// backend had its credentials silently stripped from the agent's
+	// environment even when the operator set them.
+	"CODEX_", "OPENCODE_", "OPENAI_",
 	// Git identity and behaviour. Note that the shem's push credential is
 	// NOT here: deploy/shem-entrypoint.sh installs a helper that expands
 	// GOLEM_GITHUB_TOKEN at use time, and that name is denied above, so the

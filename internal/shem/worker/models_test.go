@@ -293,7 +293,7 @@ func TestSubcommandsCarryTheBackendDocument(t *testing.T) {
 	if err := e.runGolemValidate(ctx, repo, "t-1", "spec", "picked-validate"); err != nil {
 		t.Logf("validate: %v", err)
 	}
-	if err := e.runGolemReview(ctx, repo, "t-1", "picked-review"); err != nil {
+	if err := e.runGolemReview(ctx, repo, "t-1", "", "picked-review"); err != nil {
 		t.Logf("review: %v", err)
 	}
 	if _, err := e.generatePRDescription(ctx, repo, "t-1", "picked-pr"); err != nil {
