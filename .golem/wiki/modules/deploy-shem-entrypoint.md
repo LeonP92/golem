@@ -1,30 +1,25 @@
 # deploy/shem-entrypoint.sh
 
-Docker Compose entrypoint for the `shem` service. Bootstraps the Claude Code
-CLI's config before handing off to `golem-shem`.
+Entrypoint for the compose `shem` service: prepares the backend named by
+`GOLEM_BACKEND` (default `claude-code`), then execs `golem-shem`. Auth options
+are documented once, in `.env.example`.
 
 ## What it does
 
-Supports three mutually-compatible Claude Code auth modes, wired through
-`.env.example`, `docker-compose.yml`, `run.sh`, and `Dockerfile` comments:
+- **claude-code**: restores `.claude.json` from a backup when `CLAUDE_HOME` is
+  mounted, or bootstraps a minimal one for `CLAUDE_CODE_OAUTH_TOKEN` /
+  `ANTHROPIC_API_KEY`; trusts every `/repos/*` in `.claude.json`.
+- **codex**: copies `auth.json` and `config.toml` from the read-only mount at
+  `/mnt/codex-home` (`GOLEM_CODEX_MOUNT` in tests); warns when there is no
+  login, `CODEX_API_KEY`, `CODEX_ACCESS_TOKEN` or `OPENAI_API_KEY`; trusts
+  every `/repos/*` in the container's `~/.codex/config.toml`, never the host's.
+- **opencode**: copies `auth.json` from `/mnt/opencode-home`
+  (`GOLEM_OPENCODE_MOUNT`); warns when there is no login, provider key or
+  `OPENCODE_CONFIG_CONTENT`.
+- Copies the prepared files into the agent account's home (`GOLEM_AGENT_USER`)
+  and chowns them, since the agent runs unprivileged.
+- Installs a github.com credential helper when `GOLEM_GITHUB_TOKEN` is set.
 
-- **`CLAUDE_HOME`** — mounts the host's `~/.claude` session directory; the
-  entrypoint restores `.claude.json` from the newest backup if missing.
-- **`CLAUDE_CODE_OAUTH_TOKEN`** — long-lived token from `claude setup-token`
-  for a Pro/Max subscription, used headlessly.
-- **`ANTHROPIC_API_KEY`** — pay-as-you-go API key, used headlessly.
-
-For the two headless vars, if no `~/.claude.json` exists yet the entrypoint
-writes a minimal `{"hasCompletedSetup":true,"projects":{}}` so Claude Code
-skips its interactive first-run wizard. All three vars simply reach the
-`claude` subprocess via inherited environment — no Go code is involved;
-`internal/agentrunner` and `internal/shem/worker` spawn `claude` without
-overriding `cmd.Env`.
-
-`run.sh`'s startup validation passes if any of the three vars is set.
-
-## Why it exists
-
-Lets shems run headlessly (CI, remote nodes, containers without host
-`~/.claude` access) using either a subscription-backed OAuth token or a
-metered API key, without requiring the interactive Claude Code login flow.
+Session mounts are found by their files, not by `CODEX_HOME` /
+`OPENCODE_HOME`: those are host paths and compose does not pass them in.
+Tests: `deploy/entrypoint_*_test.go` run the script with `exec` stubbed out.

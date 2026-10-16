@@ -59,16 +59,18 @@ repos:
 # it sets, so `supports_selection: false` alone turns selection off. Unknown
 # keys stop the shem at startup.
 #
-# The shipped image installs and authenticates only `claude`; other adapters
-# need their CLI in the image (GOLEM_BACKENDS build arg), their auth in .env
-# (see .env.example), and GOLEM_BACKEND set so the entrypoint prepares them.
-# Registered adapters: claude-code, codex, opencode.
+# Other adapters (codex, opencode) need their CLI in the image and their auth
+# in .env; see README "Backends". For example:
 #
 # backend:
-#   adapter: codex
-#   ...uses the codex default catalog (gpt-5.6-terra/sol/luna) unless you
-#   declare models: here. For an OpenAI-compatible endpoint, prefer the
-#   opencode adapter and list that provider's "provider/model" ids here.
+#   adapter: codex             # default catalog: gpt-5.6-terra/sol/luna
+#
+# backend:
+#   adapter: opencode          # OpenAI-compatible provider from .env.example
+#   tiers: [small]
+#   models:
+#     - {id: ollama/kimi-k2.7-code, label: "Kimi K2.7 Code", tier: small}
+#   stage_defaults: {brainstorm: small, plan: small, implement: small, revise: small, validate: small, observe: small, review: small, pr-description: small, graph: small}
 #
 # `golem models list --config /etc/golem/shem.yaml` prints what this shem will
 # report; `golem models probe` with the same flag prints a block holding only

@@ -22,35 +22,9 @@
 #                CLAUDE_HOME=/home/you/.claude    (Linux/Mac)
 #                CLAUDE_HOME=C:\Users\you\.claude (Windows)
 #
-# codex auth modes:
-#
-#   API key  — set CODEX_API_KEY in your .env file. `codex exec` reads it
-#              directly; no bootstrap needed.
-#
-#   Access token — CODEX_ACCESS_TOKEN (ChatGPT Business/Enterprise).
-#
-#   Session  — mount your host ~/.codex via CODEX_HOME (read-only); its
-#              auth.json and config.toml are copied in. Token refreshes stay
-#              in the container.
-#
-#   Custom endpoint — a [model_providers.*] block (base_url, env_key) in
-#              the mounted config.toml. Custom providers
-#              must speak the Responses API; chat-completions-only servers
-#              do not work with codex.
-#
-# opencode auth modes:
-#
-#   Saved login — mount your host opencode data dir (~/.local/share/opencode)
-#              via OPENCODE_HOME (read-only); auth.json is copied in.
-#
-#   API key  — set a provider key in your .env file (ANTHROPIC_API_KEY,
-#              OPENAI_API_KEY, ...). Opencode reads provider env vars
-#              directly; no bootstrap needed.
-#
-#   Custom endpoint — put a provider block ("npm":
-#              "@ai-sdk/openai-compatible", options.baseURL) in a global or
-#              project opencode.json; OPENCODE_CONFIG_CONTENT can carry it
-#              inline, with "apiKey": "{env:OPENAI_API_KEY}" for the key.
+# codex and opencode auth: see .env.example. Host session dirs are mounted
+# read-only at /mnt/codex-home and /mnt/opencode-home; only their
+# credential files are copied in.
 set -e
 
 GOLEM_BACKEND="${GOLEM_BACKEND:-claude-code}"
