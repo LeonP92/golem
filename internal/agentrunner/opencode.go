@@ -172,11 +172,12 @@ func jsonString(s string) json.RawMessage {
 //
 // Opencode evaluates rules by pattern with the LAST match winning
 // (https://opencode.ai/docs/permissions), so bash order is load-bearing:
-// golem's "ask" catch-all and allows, then the operator's entries (theirs
-// win over golem's allows), then golem's denies, which always win — the
-// same precedence claude gives a deny. "ask" rather than "deny" for the
-// catch-all because `opencode run --auto` approves asks while honouring
-// explicit denies. Other permission keys keep the operator's value.
+// golem's "deny" catch-all and allows, then the operator's entries (theirs
+// win over golem's), then golem's denies, which always win — the same
+// precedence claude gives a deny. Never "ask": `opencode run` auto-rejects
+// an ask and ends the whole run, while a deny is returned to the model as a
+// tool error, as claude --print does for an unlisted command. Other
+// permission keys keep the operator's value.
 func mergeOpenCodePermission(existing json.RawMessage) (json.RawMessage, error) {
 	var perm []jsonField
 	if len(existing) > 0 {
@@ -185,7 +186,7 @@ func mergeOpenCodePermission(existing json.RawMessage) (json.RawMessage, error) 
 			return nil, fmt.Errorf("permission: %w", err)
 		}
 	}
-	bash := []jsonField{{"*", jsonString("ask")}}
+	bash := []jsonField{{"*", jsonString("deny")}}
 	for _, g := range opencodeBashAllow {
 		bash = setField(bash, g, jsonString("allow"))
 	}
@@ -213,9 +214,13 @@ func mergeOpenCodePermission(existing json.RawMessage) (json.RawMessage, error) 
 		bash = append(bash, jsonField{g, jsonString("deny")})
 	}
 	perm = setField(perm, "bash", encodeObject(bash))
-	// edit mirrors claude's Edit(**); webfetch stays "ask" so network
-	// egress is never silently granted.
-	for _, d := range []jsonField{{"edit", jsonString("allow")}, {"webfetch", jsonString("ask")}} {
+	// edit mirrors claude's Edit(**); webfetch is denied as claude denies
+	// an unlisted WebFetch. The rest default to "ask" in opencode, so pin
+	// them to deny for the reason above.
+	for _, d := range []jsonField{
+		{"edit", jsonString("allow")}, {"webfetch", jsonString("deny")},
+		{"external_directory", jsonString("deny")}, {"doom_loop", jsonString("deny")},
+	} {
 		if _, ok := getField(perm, d.Key); !ok {
 			perm = append(perm, d)
 		}

@@ -117,3 +117,11 @@ func TestOpenCodeWorktreeSetupSkipsWorktreeForTrackedConfig(t *testing.T) {
 		t.Errorf("ls-files -v = %q, %v; want skip-worktree flag", out, err)
 	}
 }
+
+// `opencode run` auto-rejects an "ask" and ends the run, so golem's block
+// must never produce one.
+func TestOpenCodePermissionHasNoAsk(t *testing.T) {
+	if s := string(opencodePermissionJSON()); strings.Contains(s, `"ask"`) {
+		t.Errorf("permission block contains an ask: %s", s)
+	}
+}

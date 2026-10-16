@@ -60,8 +60,8 @@ func TestOpenCodePermissionOrder(t *testing.T) {
 	if !(catchAll < allowGit && allowGit < denyPush) {
 		t.Errorf("rule order is not catch-all < allow < deny: %s", text)
 	}
-	if perm.Bash["*"] != "ask" {
-		t.Errorf(`bash["*"] = %q, want "ask"`, perm.Bash["*"])
+	if perm.Bash["*"] != "deny" {
+		t.Errorf(`bash["*"] = %q, want "deny"`, perm.Bash["*"])
 	}
 	if perm.Bash["git push --force *"] != "deny" {
 		t.Errorf("deny rule wrong: %q", perm.Bash["git push --force *"])
