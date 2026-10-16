@@ -105,3 +105,15 @@ func TestTrustCodexProject(t *testing.T) {
 		}
 	}
 }
+
+func TestCodexSandboxFromEnv(t *testing.T) {
+	t.Setenv("GOLEM_CODEX_SANDBOX", "danger-full-access")
+	argv, err := (Codex{}).argv("")
+	if err != nil || strings.Join(argv, " ") != "codex exec --sandbox danger-full-access -" {
+		t.Errorf("argv = %q, %v", argv, err)
+	}
+	t.Setenv("GOLEM_CODEX_SANDBOX", "bogus")
+	if _, err := (Codex{}).argv(""); err == nil {
+		t.Error("an unknown sandbox mode was accepted")
+	}
+}

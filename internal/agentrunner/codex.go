@@ -40,19 +40,28 @@ func (c Codex) ReservedArgs() []string {
 	return []string{"exec", "--sandbox", "-s", "--model", "-m", "--json", "--config", "-c"}
 }
 
-// argv builds `codex exec --sandbox workspace-write [--model m] [extra] -`.
+// argv builds `codex exec --sandbox <mode> [--model m] [extra] -`.
 //
-// workspace-write is the sandbox level that lets the agent build and test
-// the worktree while keeping writes inside it; it is the codex analogue of
-// claude's Edit(**) allowance. exec defaults to read-only, which cannot do
-// ticket work, so the flag is not optional. The trailing "-" makes codex
-// read the prompt from stdin.
+// The mode is workspace-write unless GOLEM_CODEX_SANDBOX says otherwise.
+// exec defaults to read-only, which cannot do ticket work, so the flag is
+// not optional. The shem container sets danger-full-access: its sandbox
+// needs user namespaces Docker does not grant, so workspace-write fails
+// every write there, and the container is the boundary. The trailing "-"
+// makes codex read the prompt from stdin.
 func (c Codex) argv(model string) ([]string, error) {
 	cmd := c.opts.Command
 	if cmd == "" {
 		cmd = "codex"
 	}
-	args := []string{cmd, "exec", "--sandbox", "workspace-write"}
+	sandbox := os.Getenv("GOLEM_CODEX_SANDBOX")
+	switch sandbox {
+	case "":
+		sandbox = "workspace-write"
+	case "read-only", "workspace-write", "danger-full-access":
+	default:
+		return nil, fmt.Errorf("GOLEM_CODEX_SANDBOX=%q is not a codex sandbox mode", sandbox)
+	}
+	args := []string{cmd, "exec", "--sandbox", sandbox}
 	if model != "" {
 		if !models.ValidModelID(model) {
 			return nil, fmt.Errorf("invalid model id %q", model)

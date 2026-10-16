@@ -27,19 +27,21 @@
 #   API key  — set CODEX_API_KEY in your .env file. `codex exec` reads it
 #              directly; no bootstrap needed.
 #
-#   Session  — mount your host ~/.codex into the container via CODEX_HOME.
-#              Codex reuses the saved login in auth.json and refreshes it in
-#              place. Headless equivalent: `codex login --with-api-key`.
+#   Access token — CODEX_ACCESS_TOKEN (ChatGPT Business/Enterprise).
 #
-#   Custom endpoint — mount a ~/.codex/config.toml with a [model_providers.*]
-#              block (base_url, env_key) via CODEX_HOME. Custom providers
+#   Session  — mount your host ~/.codex via CODEX_HOME (read-only); its
+#              auth.json and config.toml are copied in. Token refreshes stay
+#              in the container.
+#
+#   Custom endpoint — a [model_providers.*] block (base_url, env_key) in
+#              the mounted config.toml. Custom providers
 #              must speak the Responses API; chat-completions-only servers
 #              do not work with codex.
 #
 # opencode auth modes:
 #
 #   Saved login — mount your host opencode data dir (~/.local/share/opencode)
-#              via OPENCODE_HOME; auth.json is reused.
+#              via OPENCODE_HOME (read-only); auth.json is copied in.
 #
 #   API key  — set a provider key in your .env file (ANTHROPIC_API_KEY,
 #              OPENAI_API_KEY, ...). Opencode reads provider env vars
@@ -48,7 +50,7 @@
 #   Custom endpoint — put a provider block ("npm":
 #              "@ai-sdk/openai-compatible", options.baseURL) in a global or
 #              project opencode.json; OPENCODE_CONFIG_CONTENT can carry it
-#              inline.
+#              inline, with "apiKey": "{env:OPENAI_API_KEY}" for the key.
 set -e
 
 GOLEM_BACKEND="${GOLEM_BACKEND:-claude-code}"
@@ -115,6 +117,39 @@ elif { [ -n "$ANTHROPIC_API_KEY" ] || [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; } && [ 
 fi
 fi # GOLEM_BACKEND = claude-code
 
+# --- codex / opencode: auth -----------------------------------------------------
+# The host session is mounted read-only (docker-compose.yml) and found by its
+# files, not by CODEX_HOME / OPENCODE_HOME, which are host paths and are not
+# passed in. Only the credential files are copied, so nothing golem writes
+# later (trust entries) reaches the host.
+CODEX_MOUNT="${GOLEM_CODEX_MOUNT:-/mnt/codex-home}"
+OPENCODE_MOUNT="${GOLEM_OPENCODE_MOUNT:-/mnt/opencode-home}"
+copy_from_mount() { # <src dir> <dest dir> <file>...
+  src=$1; dest=$2; shift 2
+  for f in "$@"; do
+    [ -f "$src/$f" ] || continue
+    mkdir -p "$dest"
+    cp -f "$src/$f" "$dest/$f" || echo "shem: WARNING could not copy $src/$f to $dest" >&2
+  done
+}
+if [ "$GOLEM_BACKEND" = "codex" ]; then
+  copy_from_mount "$CODEX_MOUNT" "$CODEX_DIR" auth.json config.toml
+  if [ ! -f "$CODEX_DIR/auth.json" ] && [ -z "$CODEX_API_KEY" ] &&
+     [ -z "$CODEX_ACCESS_TOKEN" ] && [ -z "$OPENAI_API_KEY" ]; then
+    echo "shem: WARNING no codex credentials — every phase will fail. Mount a logged-in" >&2
+    echo "shem:   CODEX_HOME, or set CODEX_API_KEY, CODEX_ACCESS_TOKEN or OPENAI_API_KEY." >&2
+  fi
+fi
+if [ "$GOLEM_BACKEND" = "opencode" ]; then
+  copy_from_mount "$OPENCODE_MOUNT" "$OPENCODE_DIR" auth.json
+  if [ ! -f "$OPENCODE_DIR/auth.json" ] && [ -z "$ANTHROPIC_API_KEY" ] &&
+     [ -z "$OPENAI_API_KEY" ] && [ -z "$OPENCODE_CONFIG_CONTENT" ]; then
+    echo "shem: WARNING no opencode credentials — phases will fail. Mount a logged-in" >&2
+    echo "shem:   OPENCODE_HOME, or set ANTHROPIC_API_KEY, OPENAI_API_KEY or" >&2
+    echo "shem:   OPENCODE_CONFIG_CONTENT." >&2
+  fi
+fi
+
 # --- Agent account home -------------------------------------------------------
 # The agent runs as GOLEM_AGENT_USER (see Dockerfile) so it cannot read
 # GOLEM_GITHUB_TOKEN out of /proc/1/environ. That account has its own HOME,
@@ -155,38 +190,10 @@ if [ -n "$GOLEM_AGENT_USER" ]; then
       fi
       ;;
     codex)
-      # Session mode: copy the mounted ~/.codex (auth.json, config.toml) into
-      # the agent's home. Headless API-key mode needs nothing on disk:
-      # `codex exec` reads CODEX_API_KEY from the environment directly.
-      if [ -n "$CODEX_HOME" ] && [ -d "$CODEX_DIR" ]; then
-        mkdir -p "$agent_home/.codex"
-        if ! cp -R "$CODEX_DIR/." "$agent_home/.codex/"; then
-          echo "shem: WARNING could not copy $CODEX_DIR into $agent_home/.codex" >&2
-        fi
-      fi
-      if [ ! -f "$agent_home/.codex/auth.json" ] &&
-         [ -z "$CODEX_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
-        echo "shem: WARNING no codex credentials for $GOLEM_AGENT_USER — codex will" >&2
-        echo "shem:   report an auth error and every phase will fail. Mount a logged-in" >&2
-        echo "shem:   CODEX_HOME, or set CODEX_API_KEY or OPENAI_API_KEY in .env." >&2
-      fi
+      copy_from_mount "$CODEX_DIR" "$agent_home/.codex" auth.json config.toml
       ;;
     opencode)
-      # Session mode: copy the mounted opencode data dir (auth.json) into the
-      # agent's home. API-key mode needs nothing on disk: opencode reads
-      # provider keys (ANTHROPIC_API_KEY, OPENAI_API_KEY, ...) from the env.
-      if [ -n "$OPENCODE_HOME" ] && [ -d "$OPENCODE_DIR" ]; then
-        mkdir -p "$agent_home/.local/share"
-        if ! cp -R "$OPENCODE_DIR" "$agent_home/.local/share/opencode"; then
-          echo "shem: WARNING could not copy $OPENCODE_DIR into $agent_home/.local/share" >&2
-        fi
-      fi
-      if [ ! -f "$agent_home/.local/share/opencode/auth.json" ] &&
-         [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
-        echo "shem: WARNING no opencode credentials for $GOLEM_AGENT_USER — phases will" >&2
-        echo "shem:   fail. Mount a logged-in OPENCODE_HOME, or set a provider key such" >&2
-        echo "shem:   as ANTHROPIC_API_KEY or OPENAI_API_KEY in .env." >&2
-      fi
+      copy_from_mount "$OPENCODE_DIR" "$agent_home/.local/share/opencode" auth.json
       ;;
     esac
     chown -R "$GOLEM_AGENT_USER" "$agent_home"

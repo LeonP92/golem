@@ -25,14 +25,14 @@ case "$GOLEM_BACKEND" in
     fi
     ;;
   codex)
-    if [ -z "$CODEX_API_KEY" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$CODEX_HOME" ]; then
-      echo "Error: set one of CODEX_HOME, CODEX_API_KEY, or OPENAI_API_KEY in .env" >&2
+    if [ -z "$CODEX_API_KEY" ] && [ -z "$CODEX_ACCESS_TOKEN" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$CODEX_HOME" ]; then
+      echo "Error: set one of CODEX_HOME, CODEX_API_KEY, CODEX_ACCESS_TOKEN, or OPENAI_API_KEY in .env" >&2
       exit 1
     fi
     ;;
   opencode)
-    if [ -z "$OPENCODE_HOME" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ]; then
-      echo "Error: set OPENCODE_HOME or a provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY) in .env" >&2
+    if [ -z "$OPENCODE_HOME" ] && [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$OPENAI_API_KEY" ] && [ -z "$OPENCODE_CONFIG_CONTENT" ]; then
+      echo "Error: set OPENCODE_HOME, OPENCODE_CONFIG_CONTENT, or a provider key (ANTHROPIC_API_KEY, OPENAI_API_KEY) in .env" >&2
       exit 1
     fi
     ;;

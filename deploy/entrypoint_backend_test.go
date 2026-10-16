@@ -91,3 +91,57 @@ func TestEntrypointWarnsOnUnknownBackend(t *testing.T) {
 		t.Errorf("no warning for an unknown backend:\n%s", out)
 	}
 }
+
+// The session mount is found by its contents, not by CODEX_HOME, which
+// compose does not pass in; and the host's config is only read.
+func TestEntrypointCodexCopiesMountedSession(t *testing.T) {
+	mount := t.TempDir()
+	for name, body := range map[string]string{"auth.json": "{}", "config.toml": "model = \"x\"\n"} {
+		if err := os.WriteFile(filepath.Join(mount, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, home := runEntrypointForBackend(t, "codex", map[string]string{"GOLEM_CODEX_MOUNT": mount})
+	if _, err := os.Stat(filepath.Join(home, ".codex", "auth.json")); err != nil {
+		t.Errorf("auth.json not copied from the mount: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "no codex credentials") {
+		t.Errorf("warned about credentials with a mounted session:\n%s", out)
+	}
+	if got, _ := os.ReadFile(filepath.Join(mount, "config.toml")); string(got) != "model = \"x\"\n" {
+		t.Errorf("the mounted host config was modified: %q", got)
+	}
+}
+
+func TestEntrypointCodexAccessTokenCounts(t *testing.T) {
+	out, _ := runEntrypointForBackend(t, "codex", map[string]string{
+		"GOLEM_CODEX_MOUNT": t.TempDir(), "CODEX_ACCESS_TOKEN": "tok",
+	})
+	if strings.Contains(out, "no codex credentials") {
+		t.Errorf("CODEX_ACCESS_TOKEN not accepted as a credential:\n%s", out)
+	}
+	out, _ = runEntrypointForBackend(t, "codex", map[string]string{
+		"GOLEM_CODEX_MOUNT": t.TempDir(), "CODEX_API_KEY": "", "OPENAI_API_KEY": "", "CODEX_ACCESS_TOKEN": "",
+	})
+	if !strings.Contains(out, "no codex credentials") {
+		t.Errorf("no warning without any codex credential:\n%s", out)
+	}
+}
+
+func TestEntrypointOpencodeCopiesMountedAuth(t *testing.T) {
+	mount := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mount, "auth.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, home := runEntrypointForBackend(t, "opencode", map[string]string{"GOLEM_OPENCODE_MOUNT": mount})
+	if _, err := os.Stat(filepath.Join(home, ".local", "share", "opencode", "auth.json")); err != nil {
+		t.Errorf("auth.json not copied from the mount: %v\n%s", err, out)
+	}
+	// Inline provider config can carry its own key.
+	out, _ = runEntrypointForBackend(t, "opencode", map[string]string{
+		"GOLEM_OPENCODE_MOUNT": t.TempDir(), "OPENCODE_CONFIG_CONTENT": "{}",
+	})
+	if strings.Contains(out, "no opencode credentials") {
+		t.Errorf("OPENCODE_CONFIG_CONTENT not accepted:\n%s", out)
+	}
+}
