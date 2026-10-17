@@ -531,6 +531,10 @@ type ticketForm struct {
 	Backend     string
 	// ManualApproval is the "require my approval after spec and plan" box.
 	ManualApproval bool
+	// TesterRequired is the "run the tester on the pushed head" box.
+	TesterRequired bool
+	// VerifyDisabled is the "skip the worker's self-verification" box.
+	VerifyDisabled bool
 }
 
 // shemsRepos returns the deduplicated union of repos registered by all shems.
@@ -585,6 +589,8 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		Backend:     backend,
 		// A checkbox is absent from the body when unticked.
 		ManualApproval: r.FormValue("manual_approval") != "",
+		TesterRequired: r.FormValue("tester_required") != "",
+		VerifyDisabled: r.FormValue("verify_disabled") != "",
 	}
 	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
 		h.renderTicketNew(w, r, form, "All fields are required.")
@@ -601,6 +607,8 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		Description:    form.Description,
 		Phase:          "unassigned",
 		ManualApproval: form.ManualApproval,
+		TesterRequired: form.TesterRequired,
+		VerifyDisabled: form.VerifyDisabled,
 	}
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID
@@ -685,6 +693,22 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 		pending = &found[0]
 	}
 
+	// The latest tester verdict for this ticket, if the tester stage has
+	// run. Find rather than First: most tickets have no verdict, and First
+	// logs "record not found" at error level on a page that polls.
+	var verdicts []db.TesterVerdict
+	verdictQuery := h.DB.Where("ticket_id = ?", rawID)
+	if ticket.EpicID != nil {
+		verdictQuery = h.DB.Where("epic_id = ? AND epic_node_key = ?", *ticket.EpicID, ticket.EpicNodeKey)
+	}
+	if err := verdictQuery.Order("id desc").Limit(1).Find(&verdicts).Error; err != nil {
+		log.Printf("ui: load tester verdict for %s: %v", rawID, err)
+	}
+	var testerVerdict *db.TesterVerdict
+	if len(verdicts) > 0 {
+		testerVerdict = &verdicts[0]
+	}
+
 	// nav="" keeps the ticket detail page's current nav-less layout.
 	fleet, err := db.LoadFleet(h.DB)
 	if err != nil {
@@ -721,6 +745,7 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	data["WaitingFor"] = fleet.WaitingFor(ticket)
 	data["CreatedByName"] = createdBy
 	data["LogEntries"] = logEntries
+	data["TesterVerdict"] = testerVerdict
 	data["PendingInput"] = pending
 	data["Spec"] = spec
 	data["Plan"] = plan

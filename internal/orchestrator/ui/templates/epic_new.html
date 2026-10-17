@@ -41,7 +41,7 @@
           <span class="label-text font-medium">Delivery target</span>
           <select name="delivery_target" class="select select-bordered">
             <option value="feature-branch" {{if eq .Form.DeliveryTarget "feature-branch"}}selected{{end}}>Feature branch (final review is yours)</option>
-            <option value="base-branch" {{if eq .Form.DeliveryTarget "base-branch"}}selected{{end}}>Base branch (tester-gated auto-merge)</option>
+            <option value="base-branch" {{if eq .Form.DeliveryTarget "base-branch"}}selected{{end}}>Base branch</option>
           </select>
           <span class="label-text-alt">Trunk + flags delivers slices to base; it has no final feature-branch handoff.</span>
         </label>
@@ -52,14 +52,10 @@
           <span class="label-text">Auto-merge child PRs into the integration branch (requires the tester gate)</span>
         </label>
         <label class="label cursor-pointer justify-start gap-3">
-          <input type="checkbox" name="auto_merge_final" class="checkbox" {{if .Form.AutoMergeFinal}}checked{{end}}>
-          <span class="label-text">Auto-merge the final PR to base (only with the base-branch delivery target)</span>
-        </label>
-        <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" name="auto_approve_phases" class="checkbox" {{if .Form.AutoApprovePhases}}checked{{end}}>
           <span class="label-text">Auto-approve child phases (children skip the human spec/plan approval; each child can still be overridden)</span>
         </label>
-        <p class="label-text-alt pl-10">Turning either auto-merge on makes the tester verdict required; nothing merges without it. Phase auto-approval is inherited when a child is created — later policy changes never alter an existing child.</p>
+        <p class="label-text-alt pl-10">Auto-merging child PRs makes the tester verdict required; no child merges without it. The final merge to base is always yours. Phase auto-approval is inherited when a child is created — later policy changes never alter an existing child.</p>
       </div>
       <div class="card-actions justify-end">
         <button type="submit" class="btn btn-primary">Create epic</button>

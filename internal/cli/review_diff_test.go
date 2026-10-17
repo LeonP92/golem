@@ -13,9 +13,7 @@ import (
 // "the provided diff is empty, I cannot attest correctness".
 func TestTicketReviewGivesTheReviewerTheBranchDiff(t *testing.T) {
 	repo, worktree, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands: []\n"), 0o644)
+	writeReviewerSetup(t, repo)
 	os.WriteFile(filepath.Join(worktree, "feature.go"), []byte("package feature\n"), 0o644)
 	for _, args := range [][]string{{"add", "feature.go"}, {"commit", "-q", "-m", "feature"}} {
 		if out, err := exec.Command("git", append([]string{"-C", worktree}, args...)...).CombinedOutput(); err != nil {

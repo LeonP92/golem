@@ -65,6 +65,16 @@ func TestPreEpicDatabaseKeepsWorking(t *testing.T) {
 	if w.Code != http.StatusOK || strings.Contains(w.Body.String(), `"epic"`) {
 		t.Fatalf("claim: %d %s", w.Code, w.Body.String())
 	}
+	// The tester gate is opt-in: a ticket written before the flag existed
+	// migrates forward with it off and claims exactly as before.
+	if !strings.Contains(w.Body.String(), `"tester_required":false`) {
+		t.Fatalf("legacy ticket gained the tester gate: %s", w.Body.String())
+	}
+	// Self-verification became the default for every ticket: a ticket
+	// written before the opt-out existed migrates forward with it on.
+	if !strings.Contains(w.Body.String(), `"verify_disabled":false`) {
+		t.Fatalf("legacy ticket lost self-verification: %s", w.Body.String())
+	}
 	if w := call(http.MethodPost, "/api/tickets/old-revising/revise-claim"); w.Code != http.StatusOK {
 		t.Fatalf("revise-claim: %d %s", w.Code, w.Body.String())
 	}

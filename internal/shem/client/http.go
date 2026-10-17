@@ -67,6 +67,13 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: stop after brainstorm and after plan until a human approves.
 	ManualApproval bool `json:"manual_approval"`
+	// TesterRequired: run the tester stage on the pushed head and record a
+	// structured verdict — ticket-level, set for any ticket that asks and
+	// for epic children whose run requires it.
+	TesterRequired bool `json:"tester_required"`
+	// VerifyDisabled: skip the worker's self-verification before the
+	// review gate (opt-out; verification is the default).
+	VerifyDisabled bool `json:"verify_disabled"`
 	// Epic is set only for an epic child (api.EpicClaim).
 	Epic *EpicClaim `json:"epic,omitempty"`
 }
@@ -649,6 +656,29 @@ func (c *Client) PostGraphBuildResult(repoRemote, buildErr string) error {
 // never an order.
 func (c *Client) PostEpicVerdict(epicID string, v EpicVerdictPayload) error {
 	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/verdicts", epicID), v)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return statusError(resp)
+}
+
+// TicketVerdictPayload is the standalone-ticket counterpart of
+// EpicVerdictPayload: the same structured verdict without the epic node
+// key, because the ticket itself is the scope.
+type TicketVerdictPayload struct {
+	HeadSHA   string `json:"head_sha"`
+	BaseSHA   string `json:"base_sha"`
+	Verdict   string `json:"verdict"`
+	Scenarios string `json:"scenarios"`
+	Evidence  string `json:"evidence"`
+	Backend   string `json:"backend"`
+}
+
+// PostTicketVerdict records the tester stage's structured verdict for a
+// standalone ticket. It is evidence on the ticket, never an order.
+func (c *Client) PostTicketVerdict(ticketID string, v TicketVerdictPayload) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/tester-verdict", ticketID), v)
 	if err != nil {
 		return err
 	}

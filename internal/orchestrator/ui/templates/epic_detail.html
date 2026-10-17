@@ -102,15 +102,7 @@
     </div>
     {{else if eq $.Epic.State "awaiting-final-review"}}
     <div class="card-actions justify-end items-center gap-3 mt-4">
-      {{if and (eq $.Epic.DeliveryTarget "base-branch") $.Epic.AutoMergeFinal}}
-      <span class="text-sm opacity-70">All nodes integrated. Merges after a current tester pass.</span>
-      <form method="POST" action="/epics/{{$.Epic.ID}}/merge-final">
-        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
-        <button type="submit" class="btn btn-primary btn-sm">Merge final PR</button>
-      </form>
-      {{else}}
       <span class="text-sm opacity-70">All nodes integrated. The final review and merge are yours.</span>
-      {{end}}
     </div>
     {{end}}
   </div>

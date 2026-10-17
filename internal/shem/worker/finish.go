@@ -100,7 +100,13 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 				log.Printf("executor: post branch-pushed: %v", pErr)
 			}
 			// After the PR report, so a slow tester never delays the PR.
-			if claim.Epic != nil && claim.Epic.TesterRequired {
+			// The tester is a ticket-level stage: it runs for any ticket
+			// that asked for it, with epics composing it by setting the
+			// flag on their children. The claim's epic-scoped flag keeps
+			// the gate when the claim comes from an orchestrator that
+			// predates the ticket-level flag; a current orchestrator
+			// already ORs the run's policy into the top-level field.
+			if claim.TesterRequired || (claim.Epic != nil && claim.Epic.TesterRequired) {
 				e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
 			}
 		}

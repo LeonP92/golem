@@ -178,3 +178,20 @@ func TestLaneRefusals(t *testing.T) {
 		t.Fatalf("moved head: fix=%q park=%q receipt=%q", fix, park, f.receipt())
 	}
 }
+
+func TestLaneRetainsChildTesterRequirement(t *testing.T) {
+	f := newLaneFixture(t, true)
+	if !f.ticket.TesterRequired {
+		t.Fatal("child did not snapshot tester requirement")
+	}
+	if err := f.gdb.Model(f.epic).Update("tester_required", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	if fix, park := f.run(t, f.clean()); fix != "" || park != "" || f.merged() {
+		t.Fatal("weaker run policy bypassed child tester requirement")
+	}
+	f.verdict("head1", "fail")
+	if fix, _ := f.run(t, f.clean()); !strings.Contains(fix, "tester failed") || f.merged() {
+		t.Fatal("child tester failure bypassed")
+	}
+}

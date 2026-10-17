@@ -75,6 +75,17 @@ type Ticket struct {
 	// ManualApproval makes the shem wait for a human to approve the spec and
 	// the plan. False keeps automatic validation as the only gate.
 	ManualApproval bool `gorm:"not null;default:false" json:"manual_approval"`
+	// TesterRequired runs the tester stage on the pushed head and records a
+	// structured verdict on the ticket. This is the ticket-level primitive:
+	// any ticket can ask for it, and an epic run composes it by setting the
+	// flag on every child at materialization. Default false keeps every
+	// pre-existing ticket on its old path.
+	TesterRequired bool `gorm:"not null;default:false" json:"tester_required"`
+	// VerifyDisabled opts the ticket out of the worker's self-verification
+	// (`golem ticket verify` before the review gate). Verification is the
+	// default for every ticket; a pre-existing ticket migrates forward
+	// with it on.
+	VerifyDisabled bool `gorm:"not null;default:false" json:"verify_disabled"`
 	// ApprovedBodyHash is the hex-encoded SHA-256 hash of Description at the
 	// moment actionStart set IntakeApproved, binding the approval to the
 	// exact text a human reviewed (spec Amendment 1 fix round 4). Without
@@ -430,9 +441,15 @@ type EpicPlanRevision struct {
 // candidate head. Only a pass for the candidate's current head authorizes
 // an auto-merge. EpicNodeKey is empty for the final PR.
 type TesterVerdict struct {
-	ID          uint   `gorm:"primaryKey" json:"id"`
+	ID uint `gorm:"primaryKey" json:"id"`
+	// EpicID and EpicNodeKey name the merge candidate for an epic child.
+	// TicketID names it for a standalone ticket: the verdict table serves
+	// both, because the tester is a ticket-level stage that epics compose,
+	// not an epic-only mechanism. Exactly one of the two is set; a row with
+	// neither is rejected at the write endpoints.
 	EpicID      string `gorm:"not null;index" json:"epic_id"`
 	EpicNodeKey string `gorm:"not null;default:'';index" json:"epic_node_key"`
+	TicketID    string `gorm:"not null;default:'';index" json:"ticket_id"`
 	HeadSHA     string `gorm:"not null" json:"head_sha"`
 	BaseSHA     string `gorm:"not null;default:''" json:"base_sha"`
 	Verdict     string `gorm:"not null" json:"verdict"` // pass, fail, inconclusive

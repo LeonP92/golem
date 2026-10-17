@@ -83,15 +83,29 @@ func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 			shortSHA(v.HeadSHA), shortSHA(head), shortSHA(after)))
 		verdict = "inconclusive"
 	}
-	if err := c.PostEpicVerdict(claim.Epic.EpicID, client.EpicVerdictPayload{
-		EpicNodeKey: claim.Epic.NodeKey,
-		HeadSHA:     head,
-		BaseSHA:     v.BaseSHA,
-		Verdict:     verdict,
-		Scenarios:   v.Scenarios,
-		Evidence:    v.Evidence,
-		Backend:     model,
-	}); err != nil {
+	// Epic children report to their run (the lane consumes the verdict);
+	// a standalone ticket records the same structured verdict on itself.
+	if claim.Epic != nil {
+		err = c.PostEpicVerdict(claim.Epic.EpicID, client.EpicVerdictPayload{
+			EpicNodeKey: claim.Epic.NodeKey,
+			HeadSHA:     head,
+			BaseSHA:     v.BaseSHA,
+			Verdict:     verdict,
+			Scenarios:   v.Scenarios,
+			Evidence:    v.Evidence,
+			Backend:     model,
+		})
+	} else {
+		err = c.PostTicketVerdict(claim.TicketID, client.TicketVerdictPayload{
+			HeadSHA:   head,
+			BaseSHA:   v.BaseSHA,
+			Verdict:   verdict,
+			Scenarios: v.Scenarios,
+			Evidence:  v.Evidence,
+			Backend:   model,
+		})
+	}
+	if err != nil {
 		postStatus(c, claim.TicketID, "Tester verdict could not be recorded: "+firstLineOf(err.Error()))
 		log.Printf("executor: post tester verdict for %s: %v", claim.TicketID, err)
 		return
@@ -116,7 +130,28 @@ func buildTesterPrompt(ctx context.Context, role string, claim *client.ClaimResp
 		return "", fmt.Errorf("reading candidate diff: %w", err)
 	}
 	evidence := fmt.Sprintf("Repository: %s\nHead SHA under test: %s\nBase SHA: %s\n\nAcceptance criteria:\n%s\n", claim.RepoRemote, head, state.BranchBaseSHA, claim.Description)
-	evidence += acceptanceEvidence(ctx, worktree, claim.Epic.AcceptanceCommands)
+	// Acceptance commands are plan-node data; a standalone ticket has no
+	// plan; its exact-head gate evidence is supplied below.
+	var acceptanceCommands []string
+	if claim.Epic != nil {
+		acceptanceCommands = claim.Epic.AcceptanceCommands
+	}
+	evidence += acceptanceEvidence(ctx, worktree, acceptanceCommands)
+	if claim.Epic == nil {
+		// Standalone tickets have repository gates rather than plan commands.
+		// Reuse the most recent result for this head, never a stale candidate.
+		entries, err := blog.ReadAll(filepath.Join(ticketDir, "log.jsonl"))
+		if err != nil {
+			return "", fmt.Errorf("reading verification evidence: %w", err)
+		}
+		for i := len(entries) - 1; i >= 0; i-- {
+			entry := entries[i]
+			if (entry.Role == "gate" || entry.Role == "worker") && strings.Contains(entry.Message, "head="+head) {
+				evidence += "\n## Verification recorded at this exact head\n" + entry.Message + "\n"
+				break
+			}
+		}
+	}
 	return agentrunner.BuildPrompt(agentrunner.Context{
 		RolePrompt: role + tester.Contract + "\nYou cannot run commands in this session. Judge the candidate diff and acceptance results supplied as data. A non-zero acceptance exit is a FAIL.\n",
 		Diff:       string(diff),

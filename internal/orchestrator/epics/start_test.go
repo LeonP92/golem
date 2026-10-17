@@ -222,3 +222,70 @@ func TestLegacyTicketsHaveNoEpicFields(t *testing.T) {
 		t.Fatalf("legacy ticket gained epic fields: %+v", got)
 	}
 }
+
+// The tester gate is a ticket-level flag the run composes: children of a
+// run that requires the tester are materialized with the flag set, as a
+// snapshot — like ManualApproval, a later policy edit never reaches them.
+func TestStartSnapshotsTesterFlag(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	e, err := Create(gdb, CreateParams{
+		RepoRemote: "https://github.com/org/repo", Title: "Auto-merged",
+		SpecMarkdown: "spec", AutoMergeChildren: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !e.TesterRequired {
+		t.Fatal("precondition: auto-merge forces the tester requirement")
+	}
+	if _, err := AddRevision(gdb, e.ID, diamondPlan(e.IntegrationRef), ""); err != nil {
+		t.Fatalf("AddRevision: %v", err)
+	}
+	_, rev, err := LoadPlan(gdb, e.ID, 1)
+	if err != nil {
+		t.Fatalf("LoadPlan: %v", err)
+	}
+	if err := Approve(gdb, e.ID, 1, rev.PlanHash, "leon"); err != nil {
+		t.Fatalf("Approve: %v", err)
+	}
+	if _, err := Start(gdb, e.ID); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	children := epicChildren(t, gdb, e.ID)
+	if len(children) == 0 {
+		t.Fatal("no children")
+	}
+	for _, c := range children {
+		if !c.TesterRequired {
+			t.Fatalf("child %s materialized without the tester flag", c.ID)
+		}
+	}
+	// The snapshot is the override: weakening the run's policy afterwards
+	// leaves the children's gate alone.
+	if err := gdb.Model(&db.Epic{}).Where("id = ?", e.ID).Update("tester_required", false).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range epicChildren(t, gdb, e.ID) {
+		if !c.TesterRequired {
+			t.Fatalf("policy edit reached child %s", c.ID)
+		}
+	}
+}
+
+// A run without auto-merge leaves its children on the default: no tester
+// stage, exactly like an ordinary ticket.
+func TestStartDefaultsChildrenToNoTester(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	e := approvedDiamond(t, gdb)
+	if e.TesterRequired {
+		t.Fatal("precondition: no auto-merge, no tester requirement")
+	}
+	if _, err := Start(gdb, e.ID); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	for _, c := range epicChildren(t, gdb, e.ID) {
+		if c.TesterRequired {
+			t.Fatalf("child %s gained the tester gate", c.ID)
+		}
+	}
+}

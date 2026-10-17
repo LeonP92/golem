@@ -3,7 +3,9 @@
 `internal/orchestrator/epics` — the stateful half of an Epic Run. The pure
 plan core (schema, validation, readiness) is `internal/epic`. Children are
 ordinary tickets; the run adds two tables (`epics`, `epic_plan_revisions`),
-the append-only `tester_verdicts`, and epic columns on `tickets`.
+the append-only `tester_verdicts` (scoped to an epic node or, for the
+ticket-level tester stage, to a standalone ticket), and epic columns on
+`tickets`.
 
 States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
 `paused` → `awaiting-final-review` → `completed`.
@@ -42,7 +44,7 @@ monitor applies through its existing paths: tester `fail` → `needsFixing`
 moved head → wait for the next pass.
 
 ## Final merge (finalmerge.go)
-`MergeFinal` (UI button / `POST /api/epics/{id}/merge-final`) merges the
+`MergeFinal` (`POST /api/epics/{id}/merge-final`; the UI no longer offers it) merges the
 `epic/<id>` → base PR for a base-branch run with `AutoMergeFinal`, given a
 pass verdict for the final PR's head (empty node key). Nothing opens the
 final PR or produces that verdict yet — by design the final merge is a

@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/ticket"
 	"os"
@@ -85,5 +86,49 @@ func TestRecoveryKeepsEpicGateState(t *testing.T) {
 	}
 	if state.BranchBaseSHA != base || len(state.AcceptanceCommands) != 1 {
 		t.Fatalf("cold recovery: %+v", state)
+	}
+}
+
+// A standalone ticket has no plan and no epic: the tester judges the
+// description, diff and exact-head gate evidence without touching
+// the epic claim.
+func TestTesterPromptWithoutEpic(t *testing.T) {
+	repo, _, _, _ := pushFixture(t)
+	base := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))
+	if err := os.WriteFile(filepath.Join(repo, "candidate.sh"), []byte("echo candidate\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, repo, "add", "candidate.sh")
+	git(t, repo, "commit", "-m", "candidate")
+	head := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))
+	ticketDir := t.TempDir()
+	state := ticket.State{ID: "solo", BranchBaseSHA: base}
+	if err := state.Save(ticketDir); err != nil {
+		t.Fatal(err)
+	}
+	w, err := blog.NewWriter(filepath.Join(ticketDir, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range []string{"gate evidence: passed=true head=" + head + " commands=[test] exact-head-test-passed", "gate evidence: passed=false head=old-head stale-test-failed"} {
+		if err := w.Append(blog.NewEntry("gate", blog.TypeStatus, msg)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	claim := &client.ClaimResponse{TicketID: "solo", Description: "candidate criteria"}
+	prompt, err := buildTesterPrompt(context.Background(), "tester role", claim, repo, ticketDir, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{base, head, "+echo candidate", "(no acceptance commands)", "exact-head-test-passed"} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("standalone tester prompt lacks %q", want)
+		}
+	}
+	if strings.Contains(prompt, "stale-test-failed") {
+		t.Fatal("stale gate evidence reached tester")
 	}
 }

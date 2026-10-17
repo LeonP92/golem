@@ -36,7 +36,7 @@ func MergeChild(ctx context.Context, gdb *gorm.DB, gh github.Client, owner, name
 		return "", fmt.Sprintf("Pull request #%d targets %s, but this epic integrates into %s; not merging.",
 			st.Number, st.BaseRef, target), nil
 	}
-	if e.TesterRequired {
+	if e.TesterRequired || t.TesterRequired {
 		v := LatestVerdict(gdb, e.ID, t.EpicNodeKey, st.HeadSHA)
 		switch {
 		case v == nil:
@@ -61,10 +61,12 @@ func MergeChild(ctx context.Context, gdb *gorm.DB, gh github.Client, owner, name
 	return "", "", RecordIntegration(gdb, e.ID, t.EpicNodeKey, sha)
 }
 
-// RecordVerdict stores a tester verdict (append-only).
+// RecordVerdict stores a tester verdict (append-only). A verdict is scoped
+// to its candidate: an epic node (EpicID + EpicNodeKey) or a standalone
+// ticket (TicketID) — exactly one of the two.
 func RecordVerdict(gdb *gorm.DB, v db.TesterVerdict) error {
-	if v.EpicID == "" || v.HeadSHA == "" {
-		return fmt.Errorf("%w: a verdict needs its epic and the tested head", ErrInvalid)
+	if (v.EpicID == "") == (v.TicketID == "") || v.HeadSHA == "" {
+		return fmt.Errorf("%w: a verdict needs exactly one scope (epic or ticket) and the tested head", ErrInvalid)
 	}
 	switch v.Verdict {
 	case "pass", "fail", "inconclusive":

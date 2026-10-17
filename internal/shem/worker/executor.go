@@ -157,87 +157,13 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	// needs-attention rather than waiting.
 	for phase := startPhase; ; {
 		switch phase {
-		case "brainstorm":
-			out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
-				"Brainstorm complete. Review the spec and approve to continue to planning.",
-				func(m string) { postStatus(c, ticketID, m) },
-				func() error {
-					feedback := consumeFeedback(ctx, c, claim.TicketID)
-					model := e.claimModel(c, claim, models.StageBrainstorm)
-					postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "brainstorm")
-					prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
-					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
-						return err
-					}
-					adoptStrayTicketFile(ticketDir, "spec.md")
-					postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
-					postStatus(c, ticketID, "Brainstorm complete — validating the spec")
-					if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", e.claimModel(c, claim, models.StageValidate)); err != nil {
-						return fmt.Errorf("spec validation: %w", err)
-					}
-					return nil
-				})
-			if gErr != nil {
-				return gErr
-			}
-			if out == approvalGone {
-				log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
+		case "brainstorm", "plan":
+			if stop, err := e.runDesignPhase(ctx, c, claim, repoPath, ticketDir, designPhases[phase]); err != nil {
+				return err
+			} else if stop {
 				return nil
 			}
-			postStatus(c, ticketID, "Spec cleared — advancing to planning")
-			PostCheckpointWithRetry(c, claim.TicketID, "brainstorm", "", 5) //nolint:errcheck
-			if err := runGolemAdvance(ctx, repoPath, ticketID, "plan"); err != nil {
-				log.Printf("executor: advance to plan: %v", err)
-			}
-			if phErr := c.PostPhase(claim.TicketID, "plan"); phErr != nil {
-				if errors.Is(phErr, client.ErrNotOwner) {
-					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-					return nil
-				}
-				log.Printf("executor: post phase error: %v", phErr)
-			}
-			phase = "plan"
-
-		case "plan":
-			out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
-				"Plan complete. Review the plan and approve to begin implementation.",
-				func(m string) { postStatus(c, ticketID, m) },
-				func() error {
-					feedback := consumeFeedback(ctx, c, claim.TicketID)
-					model := e.claimModel(c, claim, models.StagePlan)
-					postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "plan")
-					prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
-					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
-						return err
-					}
-					adoptStrayTicketFile(ticketDir, "plan.md")
-					postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
-					postStatus(c, ticketID, "Plan complete — validating the plan")
-					if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", e.claimModel(c, claim, models.StageValidate)); err != nil {
-						return fmt.Errorf("plan validation: %w", err)
-					}
-					return nil
-				})
-			if gErr != nil {
-				return gErr
-			}
-			if out == approvalGone {
-				log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-				return nil
-			}
-			postStatus(c, ticketID, "Plan cleared — starting implementation")
-			PostCheckpointWithRetry(c, claim.TicketID, "plan", "", 5) //nolint:errcheck
-			if err := runGolemAdvance(ctx, repoPath, ticketID, "implement"); err != nil {
-				log.Printf("executor: advance to implement: %v", err)
-			}
-			if phErr := c.PostPhase(claim.TicketID, "implement"); phErr != nil {
-				if errors.Is(phErr, client.ErrNotOwner) {
-					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-					return nil
-				}
-				log.Printf("executor: post phase error: %v", phErr)
-			}
-			phase = "implement"
+			phase = nextPhaseAfterCheckpoint(phase)
 
 		case "implement":
 			model := e.claimModel(c, claim, models.StageImplement)
@@ -453,13 +379,14 @@ func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID
 	return nil
 }
 
-// selfVerify runs an epic child's gate and acceptance commands (`golem
+// selfVerify runs the ticket's gate and acceptance commands (`golem
 // ticket verify`) before the review gate and, when a check fails, gives
 // the implementer one pass to fix it. The review gate reruns the same
-// commands either way. Ordinary tickets skip it, as before.
+// commands either way. Every ticket verifies by default; a ticket
+// created with verify_disabled skips it.
 func (e *GolemExecutor) selfVerify(ctx context.Context, c *client.Client,
 	claim *client.ClaimResponse, repoPath, ticketDir, ticketID, model string) {
-	if claim.Epic == nil {
+	if claim.VerifyDisabled {
 		return
 	}
 	out, failed := e.runGolemVerify(ctx, repoPath, ticketID)
@@ -541,6 +468,85 @@ func postDocumentEntry(c *client.Client, ticketID string, entryType, filePath st
 	if _, postErr := c.PostDocumentFile(ticketID, entryType, "developer", filePath); postErr != nil {
 		log.Printf("executor: post %s entry: %v", entryType, postErr)
 	}
+}
+
+// designPhase describes the brainstorm and plan phases, which share one gated
+// shape: run the agent, adopt the document it wrote, validate it, and — in
+// manual-approval mode — wait for a human before advancing to the next phase.
+type designPhase struct {
+	name         string // phase, checkpoint and stage label
+	document     string // file the agent writes
+	docKind      string // log-entry kind for the document
+	validateKind string // argument to golem validate
+	gatePrompt   string // approval request text in manual-approval mode
+	validating   string // status posted while validation runs
+	cleared      string // status posted after the gate passes
+	buildPrompt  func(ticketID, description, feedback string) string
+}
+
+var designPhases = map[string]designPhase{
+	"brainstorm": {
+		name: "brainstorm", document: "spec.md", docKind: "SPEC", validateKind: "spec",
+		gatePrompt:  "Brainstorm complete. Review the spec and approve to continue to planning.",
+		validating:  "Brainstorm complete — validating the spec",
+		cleared:     "Spec cleared — advancing to planning",
+		buildPrompt: buildBrainstormPrompt,
+	},
+	"plan": {
+		name: "plan", document: "plan.md", docKind: "PLAN", validateKind: "plan",
+		gatePrompt:  "Plan complete. Review the plan and approve to begin implementation.",
+		validating:  "Plan complete — validating the plan",
+		cleared:     "Plan cleared — starting implementation",
+		buildPrompt: buildPlanPrompt,
+	},
+}
+
+// runDesignPhase executes one gated design phase and advances the ticket to
+// the next phase. stop reports that the ticket was requeued mid-phase and the
+// caller must return without error.
+func (e *GolemExecutor) runDesignPhase(ctx context.Context, c *client.Client,
+	claim *client.ClaimResponse, repoPath, ticketDir string, dp designPhase) (stop bool, err error) {
+	ticketID := claim.TicketID
+	out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
+		dp.gatePrompt,
+		func(m string) { postStatus(c, ticketID, m) },
+		func() error {
+			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			model := e.claimModel(c, claim, models.Stage(dp.name))
+			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, dp.name)
+			prompt := dp.buildPrompt(ticketID, claim.Description, feedback)
+			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, dp.name, model); err != nil {
+				return err
+			}
+			adoptStrayTicketFile(ticketDir, dp.document)
+			postDocumentEntry(c, claim.TicketID, dp.docKind, filepath.Join(ticketDir, dp.document))
+			postStatus(c, ticketID, dp.validating)
+			if err := e.runGolemValidate(ctx, repoPath, ticketID, dp.validateKind, e.claimModel(c, claim, models.StageValidate)); err != nil {
+				return fmt.Errorf("%s validation: %w", dp.validateKind, err)
+			}
+			return nil
+		})
+	if gErr != nil {
+		return false, gErr
+	}
+	if out == approvalGone {
+		log.Printf("executor: ticket %s was requeued, stopping", ticketID)
+		return true, nil
+	}
+	postStatus(c, ticketID, dp.cleared)
+	next := nextPhaseAfterCheckpoint(dp.name)
+	PostCheckpointWithRetry(c, claim.TicketID, dp.name, "", 5) //nolint:errcheck
+	if err := runGolemAdvance(ctx, repoPath, ticketID, next); err != nil {
+		log.Printf("executor: advance to %s: %v", next, err)
+	}
+	if phErr := c.PostPhase(claim.TicketID, next); phErr != nil {
+		if errors.Is(phErr, client.ErrNotOwner) {
+			log.Printf("executor: ticket %s was requeued, stopping", ticketID)
+			return true, nil
+		}
+		log.Printf("executor: post phase error: %v", phErr)
+	}
+	return false, nil
 }
 
 // toOrchestratorPhase maps the local golem state.json phase to the orchestrator

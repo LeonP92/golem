@@ -81,6 +81,8 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		Backend:         backend,
 		Models:          resolved,
 		ManualApproval:  t.ManualApproval,
+		TesterRequired:  t.TesterRequired,
+		VerifyDisabled:  t.VerifyDisabled,
 	}
 	if t.EpicID != nil {
 		resp.Epic = &EpicClaim{EpicID: *t.EpicID, NodeKey: t.EpicNodeKey}
@@ -96,6 +98,10 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		} else {
 			resp.Epic.BaseFallback = e.BaseBranch
 			resp.Epic.TesterRequired = e.TesterRequired
+			// The run's policy backs up the child's own flag: children
+			// materialized before the ticket-level tester flag existed keep
+			// their gate, and new children carry the flag themselves.
+			resp.TesterRequired = resp.TesterRequired || e.TesterRequired
 			for _, n := range plan.Nodes {
 				if n.Key == t.EpicNodeKey {
 					resp.Epic.AcceptanceCommands = n.AcceptanceCommands

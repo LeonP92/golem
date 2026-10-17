@@ -55,6 +55,10 @@ func Start(gdb *gorm.DB, epicID string) (int, error) {
 				EpicNodeKey:      n.Key,
 				EpicPlanRevision: e.ApprovedRevision,
 				ManualApproval:   !e.AutoApprovePhases, // snapshot; later policy edits never reach it
+				// The tester gate is a ticket-level flag the run composes:
+				// snapshotted like ManualApproval, so a later policy edit
+				// never silently changes an existing child's gate.
+				TesterRequired: e.TesterRequired,
 			})
 			if res.Error != nil {
 				return res.Error

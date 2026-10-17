@@ -76,6 +76,9 @@ without GitHub sync).
 Errors map through `writeEpicResult` (404 / 422 invalid / 409 conflict / 500).
 Approvals record the username (UI and API alike).
 
+Shem API key: `POST /api/tickets/{id}/tester-verdict` records the tester
+stage's verdict for a standalone ticket (same validated shape, ownership of
+the ticket; epic children are refused — they report to their run).
 Shem API key: `POST /api/epics/{id}/verdicts` — needs `epic_node_key` and
 the calling shem must hold that node's ticket (`writeTicketOwnership`).
 

@@ -45,9 +45,7 @@ func TestParseReviewerVerdict(t *testing.T) {
 // command passes.
 func TestTicketReviewRejectedReviewerCannotPass(t *testing.T) {
 	repo, _, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "true")
 	fakeClaudeOnPath(t, "attested: correctness=fail — the migration drops a column\nVERDICT: FAIL")
 
 	var stdout, stderr bytes.Buffer
@@ -69,9 +67,7 @@ func TestTicketReviewRejectedReviewerCannotPass(t *testing.T) {
 func TestTicketReviewMissingVerdict(t *testing.T) {
 	repo, _, ticketID := setUpTicketForStepTest(t)
 	ticketDir := filepath.Join(repo, ".golem", "tickets", ticketID)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "true")
 	fakeClaudeOnPath(t, "looks fine to me")
 
 	review := func() ticket.Phase {
@@ -101,9 +97,7 @@ func TestTicketReviewMissingVerdict(t *testing.T) {
 // later merge decision can tell a current pass from a stale one.
 func TestTicketReviewRecordsGateEvidenceBoundToHead(t *testing.T) {
 	repo, worktree, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "true")
 	fakeClaudeOnPath(t, "VERDICT: PASS")
 
 	var stdout, stderr bytes.Buffer
@@ -172,9 +166,7 @@ func TestTicketReviewAppendsVerdictContractToOldRoleFiles(t *testing.T) {
 // changes since the pinned base, not just the log.
 func TestTicketReviewGivesReviewerTheBranchDiff(t *testing.T) {
 	repo, worktree, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "true")
 	git := func(args ...string) string {
 		c := exec.Command("git", args...)
 		c.Dir = worktree
@@ -212,9 +204,7 @@ func TestTicketReviewGivesReviewerTheBranchDiff(t *testing.T) {
 // pass "a gate it saw run", so the gate runs and records first.
 func TestTicketReviewRunsGateBeforeReviewer(t *testing.T) {
 	repo, _, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "true")
 	promptPath := fakeClaudeRecordingPrompt(t, "VERDICT: PASS")
 	var stdout, stderr bytes.Buffer
 	if code := TicketReview([]string{"--repo", repo, "--ticket", ticketID}, &stdout, &stderr); code != 0 {

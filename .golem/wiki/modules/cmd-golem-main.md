@@ -13,7 +13,8 @@ Both read a `shem.yaml` via `--config` or a standalone document via
 `--accept <cmd>` stores acceptance commands the gate runs after
 `gate.commands`.
 
-`golem ticket verify` (epic children's self-verification) and `golem
+`golem ticket verify` (the worker's self-verification, run for every
+ticket unless it opted out) and `golem
 ticket review` both run that gate and log its result bound to the head.
 Review runs the gate first, then the reviewer on the log and the branch
 diff since `branch_base_sha`. A reviewer `VERDICT: FAIL` parks the ticket

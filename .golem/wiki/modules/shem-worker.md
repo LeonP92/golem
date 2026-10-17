@@ -71,13 +71,17 @@ commands.
 - Finish (after a successful push): `ensureRemoteBaseRef` creates the
   integration ref at the pinned base SHA if missing (never advances an
   existing one; fetch/push run in the push mirror), then the PR is
-  reported. With `tester_required` the tester stage (`tester.go`) runs the
+  reported. With `tester_required` (a ticket-level flag — the claim's
+  top-level field, with the epic block's flag as the fallback for children
+  materialized before it existed) the tester stage (`tester.go`) runs the
   node's acceptance commands in the `tester.Command` sandbox, then the
-  `tester` role on those results against the pushed head and posts the verdict to
-  `POST /api/epics/{id}/verdicts` — the measured head, downgraded to
+  `tester` role on those results against the pushed head and posts the verdict:
+  epic children to `POST /api/epics/{id}/verdicts`, standalone tickets to
+  `POST /api/tickets/{id}/tester-verdict` — the measured head, downgraded to
   inconclusive if the agent reports another head or the head moves.
   Tester failures are reported and swallowed; the lane waits.
   Push is skipped under no_push, so the tester stage needs a pushable
   remote.
-- Self-verification (`golem ticket verify`, epic children only) runs before
-  the review gate; a failed check bounces the implementer once with the output.
+- Self-verification (`golem ticket verify`) runs before the review gate for
+  every ticket, unless the ticket opted out at creation (`verify_disabled`);
+  a failed check bounces the implementer once with the output.

@@ -78,6 +78,15 @@ func setupActionTestWithHub(t *testing.T) (*api.Handlers, *http.ServeMux, *ws.Hu
 	return h, mux, hub, cookie
 }
 
+// seedActionTicket creates a ticket in the given phase with the placeholder
+// fields most action tests use.
+func seedActionTicket(t *testing.T, h *api.Handlers, phase string) db.Ticket {
+	t.Helper()
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: phase}
+	h.DB.Create(&ticket)
+	return ticket
+}
+
 // connectFakeShem registers a real WebSocket connection with the hub for shemID,
 // so tests can assert on messages pushed via Hub.Push.
 func connectFakeShem(t *testing.T, hub *ws.Hub, shemID uint) *websocket.Conn {
@@ -109,18 +118,11 @@ func connectFakeShem(t *testing.T, hub *ws.Hub, shemID uint) *websocket.Conn {
 func TestApproveTicket_TransitionsPhase(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "brainstorm")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "approve?"}
 	h.DB.Create(&hi)
 
-	body, _ := json.Marshal(map[string]string{"action": "approve"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "approve"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -146,18 +148,11 @@ func TestApproveTicket_TransitionsPhase(t *testing.T) {
 func TestApproveTicket_PlanToImplement(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "plan"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "plan")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "approve plan?"}
 	h.DB.Create(&hi)
 
-	body, _ := json.Marshal(map[string]string{"action": "approve"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "approve"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -174,16 +169,9 @@ func TestApproveTicket_PlanToImplement(t *testing.T) {
 func TestApproveTicket_WrongPhase(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "implement"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "implement")
 
-	body, _ := json.Marshal(map[string]string{"action": "approve"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "approve"})
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -195,22 +183,15 @@ func TestApproveTicket_WrongPhase(t *testing.T) {
 func TestAnswerHumanInput_ResolvesAndLogs(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "implement"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "implement")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "question_answer", Prompt: "which way?"}
 	h.DB.Create(&hi)
 
-	body, _ := json.Marshal(map[string]interface{}{
+	w := postAction(t, mux, cookie, ticket.ID, map[string]interface{}{
 		"action":   "answer",
 		"input_id": hi.ID,
 		"response": "go left",
 	})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -239,20 +220,13 @@ func TestAnswerHumanInput_ResolvesAndLogs(t *testing.T) {
 func TestAnswerHumanInput_MissingFields(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "implement"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "implement")
 
-	body, _ := json.Marshal(map[string]interface{}{
+	w := postAction(t, mux, cookie, ticket.ID, map[string]interface{}{
 		"action":   "answer",
 		"input_id": 0,
 		"response": "",
 	})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", w.Code)
@@ -268,13 +242,7 @@ func TestRequeueTicket_TransitionsToUnassigned(t *testing.T) {
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "needs-attention", AssignedShem: &shemID}
 	h.DB.Create(&ticket)
 
-	body, _ := json.Marshal(map[string]string{"action": "requeue", "feedback": "try harder"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "requeue", "feedback": "try harder"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -302,16 +270,9 @@ func TestRequeueTicket_WrongPhase(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			h, mux, cookie := setupActionTest(t)
 
-			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: phase}
-			h.DB.Create(&ticket)
+			ticket := seedActionTicket(t, h, phase)
 
-			b, _ := json.Marshal(map[string]string{"action": "requeue"})
-			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
-			req.Header.Set("Content-Type", "application/json")
-			withSession(req, cookie)
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
+			w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "requeue"})
 
 			if w.Code != http.StatusConflict {
 				t.Errorf("phase=%s: expected 409, got %d", phase, w.Code)
@@ -326,16 +287,9 @@ func TestRequeueTicket_AnyActivePhase(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			h, mux, cookie := setupActionTest(t)
 
-			ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: phase}
-			h.DB.Create(&ticket)
+			ticket := seedActionTicket(t, h, phase)
 
-			b, _ := json.Marshal(map[string]string{"action": "requeue"})
-			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(b))
-			req.Header.Set("Content-Type", "application/json")
-			withSession(req, cookie)
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
+			w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "requeue"})
 
 			if w.Code != http.StatusNoContent {
 				t.Errorf("phase=%s: expected 204, got %d: %s", phase, w.Code, w.Body.String())
@@ -348,16 +302,9 @@ func TestRequeueTicket_AnyActivePhase(t *testing.T) {
 func TestCloseTicket_TransitionsToClosed(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "ready-for-review"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "ready-for-review")
 
-	body, _ := json.Marshal(map[string]string{"action": "close"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "close"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -374,16 +321,9 @@ func TestCloseTicket_TransitionsToClosed(t *testing.T) {
 func TestCloseTicket_WrongPhase(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "closed"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "closed")
 
-	body, _ := json.Marshal(map[string]string{"action": "close"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "close"})
 
 	if w.Code != http.StatusConflict {
 		t.Errorf("expected 409, got %d", w.Code)
@@ -394,16 +334,9 @@ func TestCloseTicket_WrongPhase(t *testing.T) {
 func TestNeedsAttentionTicket(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "implement"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "implement")
 
-	body, _ := json.Marshal(map[string]string{"action": "needs-attention"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "needs-attention"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -421,8 +354,7 @@ func TestNeedsAttentionTicket(t *testing.T) {
 func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 	h, mux, apiKey := setupAPIKeyTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "brainstorm")
 	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	body, _ := json.Marshal(map[string]string{"kind": "approval", "prompt": "Please review the spec."})
@@ -454,8 +386,7 @@ func TestRequestApproval_CreatesHumanInput(t *testing.T) {
 func TestRequestApproval_EmptyPrompt(t *testing.T) {
 	h, mux, apiKey := setupAPIKeyTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "brainstorm")
 	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	body, _ := json.Marshal(map[string]string{"kind": "approval", "prompt": ""})
@@ -476,8 +407,7 @@ func TestRequestApproval_EmptyPrompt(t *testing.T) {
 func TestPendingApproval_ReturnsPending(t *testing.T) {
 	h, mux, apiKey := setupAPIKeyTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "brainstorm")
 	assignTicketToShem(t, h, ticket.ID, "test-shem")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "Review spec"}
 	h.DB.Create(&hi)
@@ -519,13 +449,7 @@ func TestActionRequestChanges_FromReadyForReview_MovesToRevisingAndPushes(t *tes
 
 	conn := connectFakeShem(t, hub, shemID)
 
-	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "please fix the bug"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "request-changes", "feedback": "please fix the bug"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -573,16 +497,9 @@ func TestActionRequestChanges_FromReadyForReview_MovesToRevisingAndPushes(t *tes
 func TestActionRequestChanges_FromReadyForReview_NoAssignedShem_Conflict(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "ready-for-review"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "ready-for-review")
 
-	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "fix it"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "request-changes", "feedback": "fix it"})
 
 	if w.Code != http.StatusConflict {
 		t.Errorf("expected 409, got %d: %s", w.Code, w.Body.String())
@@ -607,13 +524,7 @@ func TestActionRequestChanges_AlreadyRevising_FallsThroughTo404(t *testing.T) {
 	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "revising", AssignedShem: &shemID}
 	h.DB.Create(&ticket)
 
-	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "fix it"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "request-changes", "feedback": "fix it"})
 
 	// ticket.Phase == "revising" here, so actionRequestChanges falls through to
 	// the brainstorm/plan branch, which 404s because there's no pending approval.
@@ -634,18 +545,11 @@ func TestActionRequestChanges_AlreadyRevising_FallsThroughTo404(t *testing.T) {
 func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "brainstorm")
 	hi := db.HumanInput{TicketID: ticket.ID, Kind: "approval", Prompt: "approve?"}
 	h.DB.Create(&hi)
 
-	body, _ := json.Marshal(map[string]string{"action": "request-changes", "feedback": "needs more detail"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "request-changes", "feedback": "needs more detail"})
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
@@ -679,8 +583,7 @@ func TestActionRequestChanges_Brainstorm_ResolvesApprovalNoPhaseChange(t *testin
 func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 	h, mux, apiKey := setupAPIKeyTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "brainstorm"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "brainstorm")
 	assignTicketToShem(t, h, ticket.ID, "test-shem")
 
 	url := fmt.Sprintf("/api/tickets/%s/human-inputs?kind=approval&resolved=false", ticket.ID)

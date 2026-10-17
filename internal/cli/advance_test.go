@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -45,9 +44,7 @@ func TestTicketAdvanceRejectsUnknownPhase(t *testing.T) {
 
 func TestTicketReviewRunsGateAndSetsReadyForReview(t *testing.T) {
 	repo, _, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"true\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "true")
 	fakeClaudeOnPath(t, "attested: convention=pass spec=pass correctness=pass scope-minimality=pass\nVERDICT: PASS")
 
 	var stdout, stderr bytes.Buffer
@@ -66,9 +63,7 @@ func TestTicketReviewRunsGateAndSetsReadyForReview(t *testing.T) {
 
 func TestTicketReviewSetsNeedsAttentionOnGateFailure(t *testing.T) {
 	repo, _, ticketID := setUpTicketForStepTest(t)
-	os.MkdirAll(filepath.Join(repo, ".golem", "roles"), 0o755)
-	os.WriteFile(filepath.Join(repo, ".golem", "roles", "reviewer.md"), []byte("# reviewer\n"), 0o644)
-	os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte("backend: claude-code\ngate:\n  commands:\n    - \"false\"\n"), 0o644)
+	writeReviewerSetup(t, repo, "false")
 	fakeClaudeOnPath(t, "attested: convention=pass spec=pass correctness=pass scope-minimality=pass\nVERDICT: PASS")
 
 	var stdout, stderr bytes.Buffer

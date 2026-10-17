@@ -77,7 +77,7 @@ The default roles below ship with `golem init`. Each is a markdown prompt in `.g
 | `convention-enforcer` | After the last plan-step commit | Naming, structure, project patterns |
 | `spec-adherence` | After the last plan-step commit | Scope creep, plan alignment |
 | `reviewer` | At `ticket review` | Full attestation; ends with `VERDICT: PASS` or `VERDICT: FAIL` |
-| `tester` | After an epic child is pushed (epic runs only) | Judges the sandboxed acceptance results at the pushed head; posts a verdict |
+| `tester` | After a ticket with the tester gate is pushed (any ticket; an epic run sets it on every child) | Judges the sandboxed acceptance results at the pushed head; posts a verdict |
 
 #### Observer
 
@@ -278,9 +278,9 @@ An epic turns one specification into several dependent tickets (UI: **Epics**).
 1. **Create** with a repo, base branch and spec. Choose a branch strategy
    (`epic-branch` integrates children into `epic/<id>`; `trunk-flags` into
    base) and a delivery target (`feature-branch`: the final merge is yours;
-   `base-branch`). Options: auto-merge children, auto-merge the final PR
-   (either one makes a tester pass mandatory), and auto-approve child phases
-   (snapshotted into each child when it is created).
+   `base-branch`). Options: auto-merge children (makes a tester pass
+   mandatory) and auto-approve child phases (snapshotted into each child
+   when it is created).
 2. **Plan**: paste a plan revision as JSON — requirements, nodes (title,
    scope, `acceptance_commands`, `requirement_ids`) and dependency edges.
    It is validated (coverage, cycles, keys); every save is a new immutable
