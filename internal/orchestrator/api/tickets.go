@@ -183,15 +183,25 @@ func (h *Handlers) assignedTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var tickets []db.Ticket
 	h.DB.Where("assigned_shem = ? AND phase NOT IN ?", shem.ID, []string{"unassigned", "closed"}).
-		Select("id, phase, repo_remote").Find(&tickets)
+		Select("id, phase, repo_remote, branch, epic_id, epic_node_key, epic_integrated_sha").Find(&tickets)
 	type summary struct {
 		TicketID   string `json:"ticket_id"`
 		Phase      string `json:"phase"`
 		RepoRemote string `json:"repo_remote"`
+		// Branch and the epic coordinates let a restarted shem re-run the
+		// integration lane for a child it finished but never merged.
+		Branch            string `json:"branch,omitempty"`
+		EpicID            string `json:"epic_id,omitempty"`
+		EpicNodeKey       string `json:"epic_node_key,omitempty"`
+		EpicIntegratedSHA string `json:"epic_integrated_sha,omitempty"`
 	}
 	out := make([]summary, len(tickets))
 	for i, t := range tickets {
-		out[i] = summary{TicketID: t.ID, Phase: t.Phase, RepoRemote: t.RepoRemote}
+		out[i] = summary{TicketID: t.ID, Phase: t.Phase, RepoRemote: t.RepoRemote, Branch: t.Branch,
+			EpicNodeKey: t.EpicNodeKey, EpicIntegratedSHA: t.EpicIntegratedSHA}
+		if t.EpicID != nil {
+			out[i].EpicID = *t.EpicID
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(out) //nolint:errcheck
@@ -590,9 +600,10 @@ func (h *Handlers) writeTicketOwnership(w http.ResponseWriter, r *http.Request, 
 // flows must see no outbox activity at all.
 func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) error {
 	if ticket.IssueNumber == nil {
-		// Unlinked epic children still need their pull request.
-		ticket.Phase = phase
-		return enqueuePRIfReady(tx, ticket)
+		// Epic children get no pull request of their own (they merge into
+		// the run's target ref directly), so an unlinked ticket produces
+		// no outbox activity at all.
+		return nil
 	}
 	// ticket must be the row as re-read inside tx after this transaction's own
 	// phase write — every caller does that — or the label's transition ordinal

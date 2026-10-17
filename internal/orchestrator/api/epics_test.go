@@ -11,6 +11,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/api"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/sse"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
@@ -143,5 +144,24 @@ func TestEpicRoutesRequireSession(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 	if rec.Code == http.StatusCreated {
 		t.Error("anonymous request created an epic")
+	}
+}
+
+func TestManualIntegrationQueuesFinalPR(t *testing.T) {
+	h, mux, cookie := setupEpicTest(t)
+	e := seedRunningEpic(t, h.DB)
+	if err := h.DB.Create(&db.GitHubRepo{RepoRemote: e.RepoRemote, Owner: "org", Name: "repo", Enabled: true}).Error; err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"A", "B", "B"} {
+		rec := epicRequest(t, mux, cookie, "POST", "/api/epics/"+e.ID+"/nodes/"+key+"/integrate", map[string]string{"sha": "merged-" + key})
+		if rec.Code != http.StatusNoContent {
+			t.Fatalf("receipt=%d %s", rec.Code, rec.Body.String())
+		}
+	}
+	var n int64
+	h.DB.Model(&db.GitHubOutbox{}).Where("epic_id = ? AND kind = ?", e.ID, ghsync.KindPR).Count(&n)
+	if n != 1 {
+		t.Fatalf("final PR rows=%d", n)
 	}
 }

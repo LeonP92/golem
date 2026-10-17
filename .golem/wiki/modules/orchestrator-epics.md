@@ -26,26 +26,39 @@ States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
 - `Start` materializes the approved revision into tickets once (ID
   `epic-<id8>-<key>`, `BaseBranch` = `TargetRef`, description from the plan,
   `ManualApproval = !AutoApprovePhases` snapshotted).
-- `RecordIntegration` sets the child's `EpicIntegratedSHA` (identical
-  repeat = no-op, different SHA = `ErrIntegrationConflict`), recomputes
-  every child's `EpicReady`, and on the last receipt moves the run to
-  `awaiting-final-review` (`completed` under trunk-flags).
+- `RecordIntegration` writes a child's receipt (`EpicIntegratedSHA`),
+  recomputes every child's `EpicReady`, and on the last receipt moves the
+  run to `awaiting-final-review` (`completed` under trunk-flags). See the
+  lane section below for the full receipt semantics.
 - `Pause`/`Resume`: running ⇄ paused. Claims and the lane need `running`.
 
-## Integration lane (integrate.go)
-`MergeChild` is called by the PR monitor for a child PR with no failing
-checks. When the run auto-merges children, is `running`, the PR is
-`clean` and targets `TargetRef`, and (if required) the newest tester
-verdict for this exact head is `pass`, it merges pinned to the head and
-writes the receipt. It keeps no state of its own; it returns what the
-monitor applies through its existing paths: tester `fail` → `needsFixing`
-(back to revising with the evidence, bounded by the PR fix attempts);
-`inconclusive`, wrong base or a 403 → needs-attention. No verdict yet or a
-moved head → wait for the next pass.
+## Integration lane (gate.go)
+The merge lives on the shem that did the child's work (see
+shem-worker and forge); the orchestrator side is a gate plus a receipt.
+`GateIntegration` checks every precondition (run `running` and
+auto-merging, node in the plan, child `ready-for-review`, a tester pass
+for this exact head when required) and grants the per-run integration
+slot: one row per epic (`epic_integration_slots`, PK = epic, 5-minute
+TTL), taken by INSERT on an empty lane or by conditional UPDATE when the
+holder lapsed or is re-checking its own node; a live holder answers
+`wait` with its expiry as the retry hint. The slot is bound to
+(node, head SHA), so a takeover never merges a stale head under a fresh
+one's lease. Outcomes: `granted` (with `TargetRef` and the expiry),
+`wait`, `done` (receipt already recorded — crash retry).
 
-## Final merge (finalmerge.go)
-`MergeFinal` (`POST /api/epics/{id}/merge-final`; the UI no longer offers it) merges the
-`epic/<id>` → base PR for a base-branch run with `AutoMergeFinal`, given a
-pass verdict for the final PR's head (empty node key). Nothing opens the
-final PR or produces that verdict yet — by design the final merge is a
-human step today.
+`RecordIntegration` (start.go) writes the receipt: it frees the slot in
+the same transaction, is idempotent in any run state (an identical repeat
+is a no-op even after the run moved on, a different SHA is
+`ErrIntegrationConflict`), unblocks successors, and moves a fully
+integrated run on — carrying variadic emit hooks fired on the transition
+to `awaiting-final-review`, which is where the GitHub add-on hangs its
+final pull request (`ghsync.EnqueueFinalPR`). The core passes no hooks
+and behaves identically. `ReleaseIntegration` frees the slot when the
+lane ends without a receipt (conflict, moved head, error).
+
+## Final merge (complete.go)
+Always a human act. `CompleteFinal` (`POST /api/epics/{id}/merge-final`,
+or the dashboard's mark-completed form) is an attestation, not an action:
+the caller states the integration branch is merged to base and names the
+resulting head SHA, and the run closes on that word. Repeating the same
+attestation is a no-op; `AutoMergeFinal` is gone.

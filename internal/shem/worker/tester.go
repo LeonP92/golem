@@ -25,13 +25,15 @@ import (
 // runTesterStage runs the tester role on the head just pushed and posts
 // its verdict. Failures are reported on the ticket and swallowed: the
 // lane simply waits for a verdict.
+// It returns the verdict it recorded ("" when none could be recorded):
+// the epic merge lane keys off it.
 func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
-	claim *client.ClaimResponse, repoPath, worktree, ticketDir string) {
+	claim *client.ClaimResponse, repoPath, worktree, ticketDir string) string {
 
 	head, herr := worktreeHead(ctx, worktree)
 	if herr != nil || head == "" {
 		postStatus(c, claim.TicketID, "Tester stage skipped: no readable head in the worktree")
-		return
+		return ""
 	}
 
 	role, err := os.ReadFile(filepath.Join(repoPath, ".golem", "roles", "tester.md"))
@@ -42,21 +44,21 @@ func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 			role = def
 		} else {
 			postStatus(c, claim.TicketID, "Tester stage skipped: no tester role available")
-			return
+			return ""
 		}
 	}
 
 	prompt, err := buildTesterPrompt(ctx, string(role), claim, worktree, ticketDir, head)
 	if err != nil {
 		postStatus(c, claim.TicketID, "Tester stage could not read candidate evidence: "+firstLineOf(err.Error()))
-		return
+		return ""
 	}
 
 	logPath := filepath.Join(ticketDir, "agent-tester.log")
 	f, err := os.Create(logPath) //nolint:gosec
 	if err != nil {
 		postStatus(c, claim.TicketID, "Tester stage could not open its log: "+err.Error())
-		return
+		return ""
 	}
 	defer func() { _ = f.Close() }()
 	var buf bytes.Buffer
@@ -65,7 +67,7 @@ func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 	if err := e.Agent.Adapter.RunPhase(ctx, worktree, prompt, io.MultiWriter(f, &buf), model); err != nil {
 		postStatus(c, claim.TicketID, "Tester stage failed to run: "+firstLineOf(err.Error()))
 		log.Printf("executor: tester stage for %s: %v", claim.TicketID, err)
-		return
+		return ""
 	}
 
 	v, found := tester.ParseVerdict(buf.String())
@@ -73,7 +75,7 @@ func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 		// No readable verdict is not a pass: record nothing, and the lane
 		// stays blocked. The ticket log says why.
 		postStatus(c, claim.TicketID, "Tester stage produced no readable verdict; auto-merge stays blocked")
-		return
+		return ""
 	}
 	// The posted head is the one measured, never the agent's claim; a
 	// mismatch or a head that moved during the run is not a pass.
@@ -108,9 +110,10 @@ func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 	if err != nil {
 		postStatus(c, claim.TicketID, "Tester verdict could not be recorded: "+firstLineOf(err.Error()))
 		log.Printf("executor: post tester verdict for %s: %v", claim.TicketID, err)
-		return
+		return ""
 	}
 	postStatus(c, claim.TicketID, "Tester verdict recorded: "+verdict)
+	return verdict
 }
 
 // Supply the source as data: a tester that cannot run tools still needs the

@@ -392,9 +392,10 @@ func TestUpdatePhaseRace_ConcurrentBranchPushed_StillQueuesOnePR(t *testing.T) {
 	}
 }
 
-// An epic child has no issue, yet its pull request is what the lane
-// merges: branch pushed + ready-for-review queues one, with no "Closes".
-func TestPRQueuedForEpicChildWithoutIssue(t *testing.T) {
+// An epic child never gets a pull request: the shem-side lane merges it
+// into the run's target ref directly, and the add-on's only run-level
+// write is the final pull request (see ghsync.EnqueueFinalPR).
+func TestNoPRForEpicChild(t *testing.T) {
 	h, mux := setupPRTest(t)
 	h.RegisterEpicRoutes(mux)
 	shem := seedShem(t, h, "pr-shem", "prkey")
@@ -409,11 +410,9 @@ func TestPRQueuedForEpicChildWithoutIssue(t *testing.T) {
 	if code := doPhaseUpdateTo(t, mux, child.ID, "pr-shem", "prkey", "ready-for-review"); code != http.StatusNoContent {
 		t.Fatalf("phase status = %d", code)
 	}
-	var row db.GitHubOutbox
-	if err := h.DB.First(&row, "kind = ? AND ticket_id = ?", ghsync.KindPR, child.ID).Error; err != nil {
-		t.Fatalf("no PR queued for the epic child: %v", err)
-	}
-	if strings.Contains(row.Payload, "Closes #") || !strings.Contains(row.Payload, e.IntegrationRef) {
-		t.Fatalf("payload = %s", row.Payload)
+	var rows int64
+	h.DB.Model(&db.GitHubOutbox{}).Where("kind = ? AND ticket_id = ?", ghsync.KindPR, child.ID).Count(&rows)
+	if rows != 0 {
+		t.Fatal("a pull request was queued for an epic child")
 	}
 }

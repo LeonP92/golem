@@ -15,7 +15,7 @@
         <label class="form-control">
           <span class="label-text font-medium">Repository</span>
           <input type="text" name="repo_remote" value="{{.Form.RepoRemote}}" class="input input-bordered"
-                 list="epic-repos" placeholder="https://github.com/org/repo" required>
+                 list="epic-repos" placeholder="https://git.example.com/org/repo" required>
           <datalist id="epic-repos">{{range .AvailableRepos}}<option value="{{.}}">{{end}}</datalist>
         </label>
         <label class="form-control">
@@ -49,13 +49,13 @@
       <div class="space-y-1">
         <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" name="auto_merge_children" class="checkbox" {{if .Form.AutoMergeChildren}}checked{{end}}>
-          <span class="label-text">Auto-merge child PRs into the integration branch (requires the tester gate)</span>
+          <span class="label-text">Children merge into the integration branch automatically (requires the tester gate)</span>
         </label>
         <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" name="auto_approve_phases" class="checkbox" {{if .Form.AutoApprovePhases}}checked{{end}}>
           <span class="label-text">Auto-approve child phases (children skip the human spec/plan approval; each child can still be overridden)</span>
         </label>
-        <p class="label-text-alt pl-10">Auto-merging child PRs makes the tester verdict required; no child merges without it. The final merge to base is always yours. Phase auto-approval is inherited when a child is created — later policy changes never alter an existing child.</p>
+        <p class="label-text-alt pl-10">Auto-integrating children makes the tester verdict required; no child merges without it. The final merge to base is always yours. Phase auto-approval is inherited when a child is created — later policy changes never alter an existing child.</p>
       </div>
       <div class="card-actions justify-end">
         <button type="submit" class="btn btn-primary">Create epic</button>

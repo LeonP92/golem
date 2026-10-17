@@ -291,20 +291,29 @@ An epic turns one specification into several dependent tickets (UI: **Epics**).
 4. Children run the normal lifecycle. Their acceptance commands run in the
    gate; with the tester required, the shem runs the `tester` role on the
    pushed head and records its verdict.
-5. **Integration**: with GitHub sync, a child's PR merged by a human — or by
-   the integration lane when auto-merge is on, the PR is clean and the
-   tester passed this exact head — writes a receipt that unblocks its
-   successors. A tester FAIL sends the child back to revising with the
-   evidence; an inconclusive verdict parks it in needs-attention. Without
-   GitHub sync, record receipts via
+5. **Integration**: the shem that finished a child merges it into the
+   run's integration branch itself, through plain git — no GitHub, no
+   pull requests. Once the tester has passed the exact head, the shem
+   takes the run's integration slot (one merge at a time per run),
+   merges in a Golem-owned mirror, and pushes the integration branch.
+   With pushes enabled that push goes to the run's remote; with
+   `no_push` (or a `local://` repo) the merge lands in the local
+   repository, next to the ticket branches. The receipt unblocks
+   successors; a conflict sends the child back to revising with the
+   conflicted files as feedback (bounded by `GOLEM_FIX_ATTEMPTS`,
+   default 3). Each result consumes the unique lease for its tested
+   head; stale results cannot release newer work. The worker reconciles
+   unfinished integrations every 10 seconds, including after outages or
+   a restart. Paused runs wait without spending fix attempts. A human can also record a receipt by hand via
    `POST /api/epics/{id}/nodes/{key}/integrate`.
 6. **Pause/Resume** stops and restarts claims and merges. When every node
    is integrated the run waits for final review (`trunk-flags` completes
-   instead).
+   instead). With the GitHub add-on enabled for the repo, this is when
+   the integration branch's pull request to base is opened.
 
-Final auto-merge to base is gated on a tester pass for the final PR's head;
-nothing produces that verdict yet, so the final merge is currently a human
-step. Details: `.golem/wiki/modules/orchestrator-epics.md`.
+The final merge to base is always yours: mark the run completed (UI or
+`POST /api/epics/{id}/merge-final`) with the resulting base head SHA after merging the integration
+branch. Details: `.golem/wiki/modules/orchestrator-epics.md`.
 
 ### GitHub Issues
 

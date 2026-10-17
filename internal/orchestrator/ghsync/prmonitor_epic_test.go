@@ -2,7 +2,6 @@ package ghsync_test
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"gorm.io/gorm"
@@ -53,11 +52,13 @@ func seedEpicPRTicket(t *testing.T, gdb *gorm.DB, autoMerge bool) *db.Epic {
 	return e
 }
 
-// A merged child PR closes the ticket and writes the receipt that unblocks
-// the successor.
-func TestMonitorPRs_MergedChildWritesIntegrationReceipt(t *testing.T) {
+// Epic children carry no pull requests in the current flow — the shem
+// that did the work merges into the run's target ref directly — so the
+// monitor leaves every child alone, even one that still has a pr_number
+// from before: no receipt, no bounce, no close.
+func TestMonitorPRs_SkipsEpicChildren(t *testing.T) {
 	gdb, _ := db.Open(":memory:")
-	e := seedEpicPRTicket(t, gdb, false)
+	e := seedEpicPRTicket(t, gdb, true)
 	f := github.NewFake()
 	f.PRStatuses = map[int]github.PullRequestStatus{42: {
 		Number: 42, State: "closed", Merged: true,
@@ -66,57 +67,11 @@ func TestMonitorPRs_MergedChildWritesIntegrationReceipt(t *testing.T) {
 	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
 
 	tk := reload(t, gdb)
-	if tk.Phase != "closed" || tk.EpicIntegratedSHA != "merge999" {
-		t.Fatalf("phase = %q receipt = %q", tk.Phase, tk.EpicIntegratedSHA)
+	if tk.Phase != "ready-for-review" || tk.EpicIntegratedSHA != "" {
+		t.Fatalf("child touched: phase = %q receipt = %q", tk.Phase, tk.EpicIntegratedSHA)
 	}
-	var childB db.Ticket
-	gdb.First(&childB, "epic_id = ? AND epic_node_key = 'B'", e.ID)
-	if !childB.EpicReady {
-		t.Fatal("successor not unblocked by the receipt")
-	}
-}
-
-// A child merged somewhere other than the run's target ref is closed but
-// earns no receipt.
-func TestMonitorPRs_MergedIntoWrongBaseWritesNoReceipt(t *testing.T) {
-	gdb, _ := db.Open(":memory:")
-	seedEpicPRTicket(t, gdb, false)
-	f := github.NewFake()
-	f.PRStatuses = map[int]github.PullRequestStatus{42: {
-		Number: 42, State: "closed", Merged: true, HeadSHA: "abc123", BaseRef: "main", MergeCommitSHA: "m",
-	}}
-	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
-	if tk := reload(t, gdb); tk.Phase != "closed" || tk.EpicIntegratedSHA != "" {
-		t.Fatalf("phase = %q receipt = %q", tk.Phase, tk.EpicIntegratedSHA)
-	}
-}
-
-// The lane's outcomes go through the monitor's existing paths: a tester
-// FAIL sends the child back to revising with the evidence as feedback.
-func TestMonitorPRs_TesterFailSendsChildBackToRevising(t *testing.T) {
-	gdb, _ := db.Open(":memory:")
-	e := seedEpicPRTicket(t, gdb, true)
-	if err := epics.RecordVerdict(gdb, db.TesterVerdict{EpicID: e.ID, EpicNodeKey: "A",
-		HeadSHA: "abc123", Verdict: "fail", Evidence: "login 500s"}); err != nil {
-		t.Fatal(err)
-	}
-	f := github.NewFake()
-	f.PRStatuses = map[int]github.PullRequestStatus{42: {Number: 42, State: "open",
-		Mergeable: boolPtr(true), MergeableState: "clean", HeadSHA: "abc123", BaseRef: e.IntegrationRef}}
-	ghsync.NewSyncer(gdb, f).MonitorPullRequests(context.Background())
-
-	if tk := reload(t, gdb); tk.Phase != "revising" || tk.PRFixAttempts != 1 {
-		t.Fatalf("phase = %q attempts = %d, want revising/1", tk.Phase, tk.PRFixAttempts)
-	}
-	var in db.HumanInput
-	gdb.First(&in, "ticket_id = 't1' AND kind = 'feedback'")
-	if !strings.Contains(in.Prompt, "login 500s") {
-		t.Fatalf("feedback = %q", in.Prompt)
-	}
-	for _, c := range f.CallsSnapshot() {
-		if c == "MergePullRequest" {
-			t.Fatal("merged on a tester fail")
-		}
+	if len(f.CallsSnapshot()) != 0 {
+		t.Fatalf("the monitor called GitHub for a child: %v", f.CallsSnapshot())
 	}
 }
 

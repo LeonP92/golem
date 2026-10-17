@@ -134,7 +134,12 @@ func reconcileReadiness(tx *gorm.DB, epicID string, plan *epic.Plan) (allIntegra
 // RecordIntegration writes the receipt that a node's code merged into the
 // run's target ref, unblocks successors, and moves a fully integrated run
 // on. An identical repeat is a no-op; a different SHA is a conflict.
-func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string) error {
+//
+// The receipt releases the run's integration slot. emit hooks fire inside
+// the same transaction when the run reaches awaiting-final-review — the
+// GitHub add-on hangs its final-pull-request write on one; the core passes
+// none and behaves identically.
+func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string, emit ...func(tx *gorm.DB, e *db.Epic) error) error {
 	if sha == "" {
 		return fmt.Errorf("%w: integration receipt needs the merged SHA", ErrInvalid)
 	}
@@ -147,9 +152,6 @@ func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string) error {
 		if err != nil {
 			return err
 		}
-		if e.State != StateRunning && e.State != StatePaused {
-			return ErrWrongState
-		}
 		var child db.Ticket
 		if err := tx.Where("epic_id = ? AND epic_node_key = ?", epicID, nodeKey).First(&child).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -157,12 +159,22 @@ func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string) error {
 			}
 			return err
 		}
+		// The repeat check comes before the state check on purpose: an
+		// identical receipt is a no-op even after the run moved on — a
+		// shem retrying after a crash lands here, and retrying must never
+		// fail. A DIFFERENT sha still conflicts in any state.
 		switch child.EpicIntegratedSHA {
 		case sha:
 			return nil
 		case "":
 		default:
 			return ErrIntegrationConflict
+		}
+		if e.State != StateRunning && e.State != StatePaused {
+			return ErrWrongState
+		}
+		if err := tx.Where("epic_id = ? AND node_key = ?", epicID, nodeKey).Delete(&db.EpicIntegrationSlot{}).Error; err != nil {
+			return err
 		}
 		if err := tx.Model(&child).Update("epic_integrated_sha", sha).Error; err != nil {
 			return err
@@ -179,8 +191,19 @@ func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string) error {
 		if e.BranchStrategy == StrategyTrunkFlags {
 			next = StateCompleted // already on base: that was the delivery
 		}
-		return tx.Model(&db.Epic{}).Where("id = ? AND state IN ?", epicID, []string{StateRunning, StatePaused}).
-			Update("state", next).Error
+		if err := tx.Model(&db.Epic{}).Where("id = ? AND state IN ?", epicID, []string{StateRunning, StatePaused}).
+			Update("state", next).Error; err != nil {
+			return err
+		}
+		if next != StateAwaitingFinalReview {
+			return nil
+		}
+		for _, f := range emit {
+			if err := f(tx, e); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 

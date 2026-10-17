@@ -182,16 +182,25 @@ fi
 # credential — the orchestrator's token never reaches this container by any
 # other route.
 #
-# The helper reads GOLEM_GITHUB_TOKEN from the environment at use time instead
-# of baking it into ~/.gitconfig, so the token is never written to disk and
-# never appears in a `git config --list` dump. Scoped to github.com so it
-# cannot be offered to any other host.
+# GOLEM_PUSH_TOKEN is the general form: the shem merges epic children into
+# their run's integration branch itself, on whatever git remote the run is
+# on, so the helper is not scoped to one host. GOLEM_GITHUB_TOKEN remains
+# for deployments that only ever push to github.com, and stays scoped there
+# so the token cannot be offered to any other host.
 #
-# Doing nothing when the variable is empty is the supported default: with
+# The helper reads the variable from the environment at use time instead of
+# baking it into ~/.gitconfig, so the token is never written to disk and
+# never appears in a `git config --list` dump.
+#
+# Doing nothing when both variables are empty is the supported default: with
 # `no_push: true` in shem.yaml (the shipped setting) there is no push at all,
 # and a host that already has SSH keys or a credential manager keeps using
 # them.
-if [ -n "$GOLEM_GITHUB_TOKEN" ]; then
+if [ -n "$GOLEM_PUSH_TOKEN" ]; then
+  git config --global credential.helper \
+    '!f() { echo username=x-access-token; echo "password=$GOLEM_PUSH_TOKEN"; }; f'
+  echo "shem: configured push credential from GOLEM_PUSH_TOKEN"
+elif [ -n "$GOLEM_GITHUB_TOKEN" ]; then
   git config --global credential."https://github.com".helper \
     '!f() { echo username=x-access-token; echo "password=$GOLEM_GITHUB_TOKEN"; }; f'
   echo "shem: configured github.com push credential from GOLEM_GITHUB_TOKEN"

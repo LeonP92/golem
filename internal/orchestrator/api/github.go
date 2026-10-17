@@ -181,7 +181,11 @@ func (h *Handlers) manualSync(w http.ResponseWriter, r *http.Request) {
 // Both call sites use ghsync.PRKey, so a race between them yields exactly one
 // pull request.
 func enqueuePRIfReady(tx *gorm.DB, ticket db.Ticket) error {
-	if (ticket.IssueNumber == nil && ticket.EpicID == nil) || !ticket.BranchPushed || ticket.Phase != "ready-for-review" {
+	// Only standalone tickets get a pull request. Epic children merge into
+	// the run's target ref directly (the shem-side lane, no pull request);
+	// the add-on's run-level write is the final pull request, queued by
+	// ghsync.EnqueueFinalPR when the run reaches awaiting-final-review.
+	if ticket.IssueNumber == nil || !ticket.BranchPushed || ticket.Phase != "ready-for-review" {
 		return nil
 	}
 	base := ticket.BaseBranch
@@ -193,11 +197,7 @@ func enqueuePRIfReady(tx *gorm.DB, ticket db.Ticket) error {
 	// rather than trusted to the generator: the issue auto-closing on merge
 	// is load-bearing, and a role prompt is not a contract.
 	prBody := strings.TrimSpace(ticket.PRBody)
-	if ticket.IssueNumber == nil { // epic child: no issue to close
-		if prBody == "" {
-			prBody = "Opened by Golem."
-		}
-	} else if closes := fmt.Sprintf("Closes #%d", *ticket.IssueNumber); prBody == "" {
+	if closes := fmt.Sprintf("Closes #%d", *ticket.IssueNumber); prBody == "" {
 		prBody = closes + "\n\nOpened by Golem."
 	} else if !strings.Contains(prBody, closes) {
 		prBody += "\n\n" + closes

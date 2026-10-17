@@ -8,7 +8,7 @@
 
 - `running map[uint]context.CancelFunc` tracks active tickets by ID; a per-ticket cancel is stored there after claim, replacing an idle placeholder that prevents duplicate-claim races.
 - `tryClaimAndRun(ticketID)` — deduplicates by ticket ID, enforces `cfg.MaxConcurrent`, claims, then runs the executor in a goroutine.
-- `HandleMessage` also reacts to WS `ticket_revise` pushes (sent when a human requests changes on a `ready-for-review` ticket) by calling `tryReviseAndRun(ticketID)` — same dedupe/slot/cleanup structure as `tryClaimAndRun`, but calls `POST /api/tickets/{id}/revise-claim` (`client.ClaimRevision`) instead of `/claim`, since the ticket is already owned by this shem rather than unassigned. A 409 (requeued before reconnect) is a silent no-op.
+- `HandleMessage` also reacts to WS `ticket_revise` pushes (sent when a human requests changes on a `ready-for-review` ticket) by calling `tryReviseAndRun(ticketID)` — same dedupe/slot/cleanup structure as `tryClaimAndRun`, but calls `POST /api/tickets/{id}/revise-claim` (`client.ClaimRevision`) instead of `/claim`, since the ticket is already owned by this shem rather than unassigned. A 409 (requeued before reconnect) is a silent no-op. It also reacts to `epic_resumed` by re-running the integration lane for assigned children still waiting on their merge (`integrateAssigned`).
 
 Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to 10 minutes for the map to drain, then calls `Deregister`.
 
@@ -68,20 +68,34 @@ commands.
   run's `epic/<id>` ref does not exist yet, `resolveBaseSHA` uses the run's base branch. Acceptance commands go to
   `golem ticket new --accept`, so verify and review run them after
   `gate.commands`.
-- Finish (after a successful push): `ensureRemoteBaseRef` creates the
-  integration ref at the pinned base SHA if missing (never advances an
-  existing one; fetch/push run in the push mirror), then the PR is
-  reported. With `tester_required` (a ticket-level flag — the claim's
-  top-level field, with the epic block's flag as the fallback for children
-  materialized before it existed) the tester stage (`tester.go`) runs the
-  node's acceptance commands in the `tester.Command` sandbox, then the
-  `tester` role on those results against the pushed head and posts the verdict:
+- Finish: the branch is pushed unless no_push (a push failure is
+  non-fatal), the first child also creates the integration ref at the
+  pinned base SHA if missing (`ensureRemoteBaseRef`, never advances an
+  existing one), and the branch is reported. Then, in order: the phase
+  lands (the verdict handler bounces a failed child out of
+  ready-for-review, so the child must be there first), the tester stage
+  runs, and for an epic child this shem runs the merge lane itself
+  (`integrate.go`).
+- Tester stage (`tester.go`), gated by `tester_required` (a ticket-level
+  flag — the claim's top-level field, with the epic block's flag as the
+  fallback for children materialized before it existed): runs the
+  `tester` role against the measured worktree head and posts the verdict —
   epic children to `POST /api/epics/{id}/verdicts`, standalone tickets to
-  `POST /api/tickets/{id}/tester-verdict` — the measured head, downgraded to
-  inconclusive if the agent reports another head or the head moves.
-  Tester failures are reported and swallowed; the lane waits.
-  Push is skipped under no_push, so the tester stage needs a pushable
-  remote.
+  `POST /api/tickets/{id}/tester-verdict` — downgraded to inconclusive if
+  the agent reports another head or the head moves. Tester failures are
+  reported and swallowed; the lane waits.
+- Integration lane (`integrate.go`): pin the head from the lane remote
+  (`integrationRemote`: the claim's remote, or the local repository
+  itself under no_push / `local://` — the same place no_push routes the
+  agent's own pushes, so children merge into the epic branch locally with
+  no remote or credential), pass the gate (`CheckIntegrationGate`, which
+  grants the per-run slot), merge into the run's target ref via
+  `forge.Forge` in the push mirror (wired in `cmd/shem`), post the result. `wait` retries with
+  the gate's hint, bounded (`maxIntegrationWaits`, shared with moved-pin
+  re-runs — a branch that never settles IS the lane staying busy). Every
+  step is idempotent, so recovery is simply running the lane again:
+  `IntegrateAssigned` re-runs it from the startup sweep and the
+  `epic_resumed` WS push for assigned children still at ready-for-review.
 - Self-verification (`golem ticket verify`) runs before the review gate for
   every ticket, unless the ticket opted out at creation (`verify_disabled`);
   a failed check bounces the implementer once with the output.

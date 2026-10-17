@@ -221,6 +221,12 @@ type AssignedTicket struct {
 	TicketID   string `json:"ticket_id"`
 	Phase      string `json:"phase"`
 	RepoRemote string `json:"repo_remote"`
+	// Branch and the epic coordinates let a restarted shem re-run the
+	// integration lane for a child it finished but never merged.
+	Branch            string `json:"branch,omitempty"`
+	EpicID            string `json:"epic_id,omitempty"`
+	EpicNodeKey       string `json:"epic_node_key,omitempty"`
+	EpicIntegratedSHA string `json:"epic_integrated_sha,omitempty"`
 }
 
 // GetAssigned returns all tickets currently assigned to this shem (any active phase).
@@ -304,6 +310,63 @@ func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+
+// IntegrationGate is the orchestrator's answer to an integration gate
+// check (api.integrateCheckEpicNode).
+type IntegrationGate struct {
+	LeaseID        string `json:"lease_id"`
+	Outcome        string `json:"outcome"` // granted | wait | done
+	TargetRef      string `json:"target_ref"`
+	ExpiresAt      string `json:"expires_at"`
+	RetryAfterSecs int    `json:"retry_after_secs"`
+	Reason         string `json:"reason"`
+	MergeSHA       string `json:"merge_sha"`
+}
+
+// CheckIntegrationGate asks whether this shem may merge headSHA into the
+// run's target ref, and takes the per-run integration slot when it may.
+func (c *Client) CheckIntegrationGate(epicID, nodeKey, headSHA string) (*IntegrationGate, error) {
+	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/nodes/%s/integrate-check", epicID, nodeKey),
+		map[string]string{"head_sha": headSHA})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	var g IntegrationGate
+	if err := json.NewDecoder(resp.Body).Decode(&g); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
+// IntegrationResult reports what the merge into the run's target ref did.
+type IntegrationResult struct {
+	LocalOnly bool   `json:"local_only,omitempty"`
+	LeaseID   string `json:"lease_id"`
+	HeadSHA   string `json:"head_sha"`
+	Status    string `json:"status"` // merged | contained | conflict | moved | error
+	MergeSHA  string `json:"merge_sha,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// PostIntegrationResult posts the receipt end of the integration lane.
+func (c *Client) PostIntegrationResult(epicID, nodeKey string, r IntegrationResult) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/nodes/%s/integrate-result", epicID, nodeKey), r)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // PostPhase updates the phase of a ticket.

@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
@@ -155,11 +154,6 @@ type Handlers struct {
 	// so a Handlers built without it (every test that does not care) behaves
 	// as before. Set from config.GitHubConfig.TriggerLabel.
 	GitHubDefaultLabel string
-
-	// GH is the GitHub client the epic final merge acts through. Nil when
-	// GitHub sync is not configured; the merge-final route refuses with an
-	// error message in that case rather than panicking.
-	GH github.Client
 
 	// Hub is the websocket hub used to ask a shem to run a graph build. Nil
 	// in tests that do not exercise it, and the handler reports that rather

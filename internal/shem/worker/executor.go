@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/forge"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
@@ -25,8 +27,13 @@ import (
 // GolemExecutor runs tickets phase by phase. Per ticket, the spec and the plan
 // are either gated by a human (manual approval) or by automatic validation.
 type GolemExecutor struct {
-	repoMu sync.Map // keyed by repoPath, value *sync.Mutex
-	Agent  *Agent
+	repoMu      sync.Map // keyed by repoPath, value *sync.Mutex
+	integrating sync.Map // active ticket IDs; polling skips an in-flight lane
+	Agent       *Agent
+	// Forge merges a finished epic child into its run's target ref (plain
+	// git in the push mirror). Nil means forge.Git{}; tests substitute a
+	// fake. The worker depends on the operation, not on the git CLI.
+	Forge forge.Forge
 }
 
 func (e *GolemExecutor) repoMutex(repoPath string) *sync.Mutex {
@@ -94,7 +101,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	ticketDir := filepath.Join(repoPath, ".golem", "tickets", ticketID)
 	logPath := filepath.Join(ticketDir, "log.jsonl")
 
-	if cfg.NoPush {
+	if cfg.NoPush || strings.HasPrefix(claim.RepoRemote, "local://") {
 		setPushURL(repoPath, repoPath)
 		defer setPushURL(repoPath, "")
 	}
@@ -733,10 +740,10 @@ func readState(ticketDir string) (string, string, error) {
 	return state.Phase, state.SHA, nil
 }
 
-// pushCredentialEnv is the variable deploy/shem-entrypoint.sh's git
-// credential helper expands at use time. It is the one value in this
+// pushCredentialEnv are the variables deploy/shem-entrypoint.sh's git
+// credential helpers expand at use time. They are the one value in this
 // process's environment that is worth stealing.
-const pushCredentialEnv = "GOLEM_GITHUB_TOKEN"
+var pushCredentialEnv = []string{"GOLEM_PUSH_TOKEN", "GOLEM_GITHUB_TOKEN"}
 
 // pushMirrorPath is where Golem keeps its own bare clone of a repository, as
 // a sibling of the repository rather than a child of it. The agent works
@@ -751,10 +758,14 @@ func pushMirrorPath(repoPath string) string {
 func withoutPushCredential(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		if name, _, ok := strings.Cut(kv, "="); ok && name == pushCredentialEnv {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			out = append(out, kv)
 			continue
 		}
-		out = append(out, kv)
+		if !slices.Contains(pushCredentialEnv, name) {
+			out = append(out, kv)
+		}
 	}
 	return out
 }

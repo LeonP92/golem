@@ -165,16 +165,7 @@ func TestEditingApprovedContentInvalidatesApproval(t *testing.T) {
 
 func TestCreateAutoMergePolicy(t *testing.T) {
 	gdb, _ := db.Open(":memory:")
-	// Final auto-merge is only meaningful for a base-branch delivery
-	// target: a feature-branch handoff is always human-merged.
-	_, err := Create(gdb, CreateParams{
-		RepoRemote: "example.com/x/y", Title: "t", SpecMarkdown: "s",
-		DeliveryTarget: TargetFeatureBranch, AutoMergeFinal: true,
-	})
-	if err == nil {
-		t.Fatal("final auto-merge on feature-branch target must fail closed")
-	}
-	// Any auto-merge forces the tester gate on.
+	// Integrating children automatically forces the tester gate on.
 	e, err := Create(gdb, CreateParams{
 		RepoRemote: "example.com/x/y", Title: "t", SpecMarkdown: "s",
 		DeliveryTarget: TargetBaseBranch, AutoMergeChildren: true,
@@ -182,7 +173,7 @@ func TestCreateAutoMergePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !e.TesterRequired || !e.AutoMergeChildren || e.AutoMergeFinal {
+	if !e.TesterRequired || !e.AutoMergeChildren {
 		t.Fatalf("policy fields: %+v", e)
 	}
 	// Defaults stay fully off for older rows/clients.
@@ -192,7 +183,7 @@ func TestCreateAutoMergePolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if d.AutoMergeChildren || d.AutoMergeFinal || d.TesterRequired {
+	if d.AutoMergeChildren || d.TesterRequired {
 		t.Fatal("auto-merge defaults must be off")
 	}
 }

@@ -34,7 +34,7 @@
         </select>
         <input type="text" id="custom-repo" name="custom_repo_remote"
                class="input input-bordered mt-2 hidden"
-               placeholder="https://github.com/org/repo.git">
+               placeholder="https://git.example.com/org/repo.git">
         <script>
           document.querySelector('select[name=repo_remote]').addEventListener('change', function() {
             var custom = document.getElementById('custom-repo');
@@ -58,7 +58,7 @@
         {{else}}
         <input type="text" name="repo_remote" value="{{.Form.RepoRemote}}"
                class="input input-bordered" required
-               placeholder="https://github.com/org/repo.git">
+               placeholder="https://git.example.com/org/repo.git">
         <p class="text-sm text-base-content/50 mt-1">
           No shems registered yet. Enter a repo URL manually, or
           <a href="/shems" class="link">start a shem</a> first.

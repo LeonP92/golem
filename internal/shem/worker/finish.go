@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"path/filepath"
+	"strings"
 
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
@@ -58,17 +59,21 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 	}
 
 	postStatus(c, ticketID, what+" complete — ready for review")
+	worktree := filepath.Join(ticketDir, "worktree")
 
-	if !cfg.NoPush {
-		worktree := filepath.Join(ticketDir, "worktree")
+	if !cfg.NoPush && !strings.HasPrefix(claim.RepoRemote, "local://") {
 		if pushErr := pushTicketBranch(ctx, repoPath, worktree, branch, claim.RepoRemote); pushErr != nil {
-			// A failed push must not block the lifecycle: the ticket still
+			if claim.Epic != nil {
+				return fmt.Errorf("publishing epic child: %w", pushErr)
+			}
+			// A failed push must not block the ordinary ticket lifecycle: it still
 			// reaches ready-for-review, just without a pull request.
 			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
 		} else {
 			postStatus(c, ticketID, "Pushed "+branch+" to origin")
-			// An epic child's PR targets the integration ref; the first
-			// child to finish creates it. Non-fatal: a later child retries.
+			// The first child to finish creates the integration ref at the
+			// pinned base. Non-fatal: the lane creates a missing target at
+			// the pinned head, so a later child retries none of this.
 			if claim.Epic != nil {
 				var baseSHA string
 				if st, err := ticket.Load(ticketDir); err == nil {
@@ -77,39 +82,75 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 				if baseSHA == "" {
 					postStatus(c, ticketID, "No pinned base SHA recorded; leaving the "+
 						"integration ref to another child")
-				} else if err := ensureRemoteBaseRef(ctx, repoPath, claim.RepoRemote,
+				} else if err := ensureRemoteBaseRef(ctx, repoPath, integrationRemote(cfg, claim, repoPath),
 					claim.Epic.BaseFallback, claim.BaseBranch, baseSHA); err != nil {
 					postStatus(c, ticketID, "Could not create integration ref "+
 						claim.BaseBranch+": "+firstLineOf(err.Error()))
 					log.Printf("executor: ensure base ref for %s: %v", ticketID, err)
 				}
 			}
-			// Generated here, after the push and before the report, because
-			// the description is written from the branch's own diff and only
-			// this host has it. A failure is logged and the report goes out
-			// anyway: the orchestrator falls back to a minimal body, so a
-			// missing description costs a good write-up, not the pull
-			// request.
-			prBody, bodyErr := e.generatePRDescription(ctx, repoPath, ticketID, e.claimModel(c, claim, models.StagePRDescription))
-			if bodyErr != nil {
-				postStatus(c, ticketID, "Could not generate the pull request description: "+
-					firstLineOf(bodyErr.Error()))
-				log.Printf("executor: pr description for %s: %v", ticketID, bodyErr)
-			}
-			if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
+			// An epic child has no pull request, so no description is
+			// generated for it; the branch report still lands, because
+			// branch_pushed records that the lane has something to merge.
+			if claim.Epic == nil {
+				// Generated here, after the push and before the report, because
+				// the description is written from the branch's own diff and only
+				// this host has it. A failure is logged and the report goes out
+				// anyway: the orchestrator falls back to a minimal body, so a
+				// missing description costs a good write-up, not the pull
+				// request.
+				prBody, bodyErr := e.generatePRDescription(ctx, repoPath, ticketID, e.claimModel(c, claim, models.StagePRDescription))
+				if bodyErr != nil {
+					postStatus(c, ticketID, "Could not generate the pull request description: "+
+						firstLineOf(bodyErr.Error()))
+					log.Printf("executor: pr description for %s: %v", ticketID, bodyErr)
+				}
+				if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
+					log.Printf("executor: post branch-pushed: %v", pErr)
+				}
+			} else if pErr := c.PostBranchPushed(ticketID, ""); pErr != nil {
 				log.Printf("executor: post branch-pushed: %v", pErr)
 			}
-			// After the PR report, so a slow tester never delays the PR.
-			// The tester is a ticket-level stage: it runs for any ticket
-			// that asked for it, with epics composing it by setting the
-			// flag on their children. The claim's epic-scoped flag keeps
-			// the gate when the claim comes from an orchestrator that
-			// predates the ticket-level flag; a current orchestrator
-			// already ORs the run's policy into the top-level field.
-			if claim.TesterRequired || (claim.Epic != nil && claim.Epic.TesterRequired) {
-				e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
-			}
 		}
+	}
+
+	// The tester is a ticket-level stage: it runs for any ticket that
+	// asked for it, with epics composing it by setting the flag on their
+	// children. The claim's epic-scoped flag keeps the gate when the claim
+	// comes from an orchestrator that predates the ticket-level flag; a
+	// current orchestrator already ORs the run's policy into the top-level
+	// field. None of this hangs off the push: a no_push or local:// run
+	// merges from the local repository instead (integrationRemote), so an
+	// epic child integrates there with no remote involved at all.
+	testerRequired := claim.TesterRequired || (claim.Epic != nil && claim.Epic.TesterRequired)
+	if claim.Epic != nil {
+		// Epic child: the phase lands FIRST — the orchestrator's
+		// verdict handling bounces a failed child out of
+		// ready-for-review, so the child must be there before the
+		// verdict arrives — then the tester, then this shem merges
+		// the branch into the run's target ref itself.
+		if phErr := c.PostPhase(ticketID, orchPhase); phErr != nil {
+			if errors.Is(phErr, client.ErrNotOwner) {
+				log.Printf("executor: ticket %s was requeued, stopping", ticketID)
+				return nil
+			}
+			log.Printf("executor: post phase error: %v", phErr)
+			return nil
+		}
+		verdict := ""
+		if testerRequired {
+			verdict = e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
+		}
+		if testerRequired && verdict != "pass" {
+			// The orchestrator bounced the child to revising or
+			// parked it; the lane is not this shem's to take.
+			return nil
+		}
+		e.integrateEpicChild(ctx, cfg, c, claim, repoPath, branch)
+		return nil
+	}
+	if testerRequired {
+		e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
 	}
 
 	if phErr := c.PostPhase(ticketID, orchPhase); phErr != nil {

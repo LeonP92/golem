@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
@@ -31,10 +30,6 @@ type Handlers struct {
 	// missing) — the default install. Handlers must check for nil before
 	// calling it and respond 503, never let it reach a nil-pointer panic.
 	Sync SyncTrigger
-	// GH is the GitHub client the sync worker uses, shared with handlers
-	// that must act on GitHub directly (the epic final merge). Nil when
-	// GitHub sync is not configured; handlers respond 503, never panic.
-	GH github.Client
 	// ManualSyncCooldown is the minimum gap between manual syncs of one repo.
 	ManualSyncCooldown time.Duration
 	// GitHubTokenEnv is the NAME of the environment variable the GitHub token

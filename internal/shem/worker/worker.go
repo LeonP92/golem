@@ -128,6 +128,11 @@ func (w *Worker) Start() {
 	//
 	// The PHASE is the instruction; the push only makes it prompt.
 	w.reviseAssigned(assigned)
+	// A ready-for-review epic child on this shem was finished but maybe
+	// never merged — the shem can have died anywhere between the push and
+	// the receipt. The lane is idempotent at every step, so re-running it
+	// for a child whose receipt already landed costs one gate check.
+	w.integrateAssigned(assigned)
 
 	log.Printf("worker: poll loop started")
 	go w.pollLoop()
@@ -276,6 +281,54 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 	case "ticket_revise":
 		if msg.TicketID != nil {
 			go w.tryReviseAndRun(*msg.TicketID)
+		}
+	case "epic_resumed":
+		// Children whose lane wait spanned the pause are owed another pass.
+		if assigned, err := w.client.GetAssigned(); err == nil {
+			w.integrateAssigned(assigned)
+		}
+	}
+}
+
+// integrateAssigned re-runs the integration lane for assigned epic children
+// still waiting on their merge.
+func (w *Worker) integrateAssigned(assigned []client.AssignedTicket) {
+	for _, t := range assigned {
+		if t.Phase != "ready-for-review" || t.EpicID == "" || t.Branch == "" || t.EpicIntegratedSHA != "" {
+			continue
+		}
+		repoPath := repoLocalPath(w.cfg, t.RepoRemote)
+		if repoPath == "" {
+			continue
+		}
+		log.Printf("worker:   %s — phase: %s — epic child, re-running the integration lane", t.TicketID, t.Phase)
+		claim := &client.ClaimResponse{
+			TicketID:   t.TicketID,
+			RepoRemote: t.RepoRemote,
+			Epic:       &client.EpicClaim{EpicID: t.EpicID, NodeKey: t.EpicNodeKey},
+		}
+		if ex, ok := w.executor.(interface {
+			IntegrateAssigned(ctx context.Context, cfg *config.Config, c *client.Client, claim *client.ClaimResponse, repoPath, branch string)
+		}); ok {
+			w.mu.Lock()
+			select {
+			case <-w.stop:
+				w.mu.Unlock()
+				return
+			default:
+			}
+			if _, busy := w.running[t.TicketID]; busy || len(w.running) >= w.maxConcurrent() {
+				w.mu.Unlock()
+				continue
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			w.running[t.TicketID] = cancel
+			w.mu.Unlock()
+			go func() {
+				defer func() { cancel(); w.mu.Lock(); delete(w.running, t.TicketID); w.mu.Unlock() }()
+				ex.IntegrateAssigned(ctx, w.cfg, w.client, claim, repoPath, t.Branch)
+			}()
+
 		}
 	}
 }
@@ -432,6 +485,7 @@ func (w *Worker) pollLoop() {
 			w.reclaimReaped()
 			if assigned, err := w.client.GetAssigned(); err == nil {
 				w.reviseAssigned(assigned)
+				w.integrateAssigned(assigned)
 			}
 			// Resumable too, not only at startup. A ticket restored to an
 			// active phase — a human clicking "Start again" on a stopped
@@ -501,8 +555,10 @@ func (w *Worker) reclaimReaped() {
 }
 
 // Shutdown signals all running tickets to stop, waits up to 10 minutes for
-// them to exit, then closes the stop channel and deregisters from the orchestrator.
+// them to exit, then deregisters. Polling stops before cancellation, so it
+// cannot create fresh work while shutdown is waiting.
 func (w *Worker) Shutdown() {
+	close(w.stop)
 	w.mu.Lock()
 	for _, cancel := range w.running {
 		cancel()
@@ -519,8 +575,6 @@ func (w *Worker) Shutdown() {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-
-	close(w.stop)
 
 	if err := w.client.Deregister(); err != nil {
 		log.Printf("worker: deregister error: %v", err)

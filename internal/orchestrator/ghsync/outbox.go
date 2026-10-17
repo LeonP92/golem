@@ -5,6 +5,7 @@
 package ghsync
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strconv"
@@ -79,6 +80,46 @@ func CloseKey(ticketID string) string {
 // key, so a race between them yields exactly one pull request.
 func PRKey(ticketID string) string {
 	return ticketID + ":pr"
+}
+
+// EpicPRKey returns the idempotency key for a run's final pull request.
+func EpicPRKey(epicID string) string {
+	return "epic:" + epicID + ":pr"
+}
+
+// EnqueueFinalPR queues the integration branch's pull request to base. It is
+// the GitHub add-on's one hook into the run's core flow, hung on the
+// transition to awaiting-final-review (see epics.RecordIntegration), and a
+// no-op without the add-on: a trunk-flags run is already on base, and a run
+// on a remote with no enabled repository has nowhere to open a pull
+// request. The core behaves identically either way.
+func EnqueueFinalPR(tx *gorm.DB, e *db.Epic) error {
+	if e.IntegrationRef == "" {
+		return nil
+	}
+	var enabled int64
+	if err := tx.Model(&db.GitHubRepo{}).
+		Where("repo_remote = ? AND enabled", e.RepoRemote).Count(&enabled).Error; err != nil {
+		return err
+	}
+	if enabled == 0 {
+		return nil
+	}
+	payload, err := json.Marshal(PRPayload{
+		Head:  e.IntegrationRef,
+		Base:  e.BaseBranch,
+		Title: e.Title,
+		Body:  "Every node of this run is integrated. The final review and merge are yours.\n\nOpened by Golem.",
+	})
+	if err != nil {
+		return fmt.Errorf("marshal final pr payload: %w", err)
+	}
+	return Enqueue(tx, db.GitHubOutbox{
+		EpicID:         e.ID,
+		Kind:           KindPR,
+		Payload:        string(payload),
+		IdempotencyKey: EpicPRKey(e.ID),
+	})
 }
 
 // Enqueue inserts an outbox row. Pass the surrounding transaction as tx so the

@@ -378,8 +378,11 @@ const GraphBuildTimeout = 45 * time.Minute
 // makes re-enqueuing after a crash safe: the duplicate insert fails and the
 // caller treats that specific failure as success.
 type GitHubOutbox struct {
-	ID             uint       `gorm:"primaryKey" json:"id"`
+	ID uint `gorm:"primaryKey" json:"id"`
+	// TicketID scopes a ticket write; EpicID scopes a run-level write (the
+	// final pull request). Exactly one of the two is set.
 	TicketID       string     `gorm:"not null;index" json:"ticket_id"`
+	EpicID         string     `gorm:"not null;default:'';index" json:"epic_id"`
 	Kind           string     `gorm:"not null" json:"kind"` // comment | label | pr | close_issue
 	Payload        string     `gorm:"not null" json:"payload"`
 	IdempotencyKey string     `gorm:"uniqueIndex;not null" json:"idempotency_key"`
@@ -403,13 +406,18 @@ type Epic struct {
 	// epic/<id>) or "trunk-flags" (children merge into BaseBranch).
 	BranchStrategy string `gorm:"not null;default:'epic-branch'" json:"branch_strategy"`
 	IntegrationRef string `gorm:"not null;default:''" json:"integration_ref"`
-	// DeliveryTarget: "feature-branch" (a human merges the final PR) or
-	// "base-branch" (final auto-merge allowed after a tester pass).
+	// DeliveryTarget records the requested output. Epic-branch runs require
+	// a manual final merge; trunk-flags already integrates into base.
 	DeliveryTarget string `gorm:"not null;default:'feature-branch'" json:"delivery_target"`
-	// Any auto-merge forces TesterRequired on (set at create).
+	// Auto-merging children forces TesterRequired on (set at create).
 	AutoMergeChildren bool `gorm:"not null;default:false" json:"auto_merge_children"`
-	AutoMergeFinal    bool `gorm:"not null;default:false" json:"auto_merge_final"`
 	TesterRequired    bool `gorm:"not null;default:false" json:"tester_required"`
+	// FinalSHA is the base head the human attested to at completion;
+	// FinalPRNumber/FinalPRURL record the pull request the GitHub add-on
+	// opened for the integration branch, when one was opened.
+	FinalSHA      string `gorm:"not null;default:''" json:"final_sha"`
+	FinalPRNumber *int   `json:"final_pr_number"`
+	FinalPRURL    string `gorm:"not null;default:''" json:"final_pr_url"`
 	// AutoApprovePhases is snapshotted into each child's ManualApproval at Start.
 	AutoApprovePhases bool   `gorm:"not null;default:false" json:"auto_approve_phases"`
 	State             string `gorm:"not null;default:'draft'" json:"state"` // epics.State* constants
@@ -435,6 +443,22 @@ type EpicPlanRevision struct {
 	ApprovedBy string     `gorm:"not null;default:''" json:"approved_by"` // username
 	ApprovedAt *time.Time `json:"approved_at"`
 	CreatedAt  time.Time
+}
+
+// EpicIntegrationSlot is the per-run integration lease: at most one child
+// merges into the run's target ref at a time, so two children finishing
+// together cannot interleave their merges. The row is the slot — its
+// primary key IS the epic — and a holder that crashes stops blocking the
+// lane when ExpiresAt passes; the next gate check takes the slot over.
+type EpicIntegrationSlot struct {
+	LeaseID   string    `gorm:"not null;default:''" json:"lease_id"`
+	EpicID    string    `gorm:"primaryKey" json:"epic_id"`
+	NodeKey   string    `gorm:"not null" json:"node_key"`
+	HeadSHA   string    `gorm:"not null" json:"head_sha"`
+	ShemID    uint      `gorm:"not null" json:"shem_id"`
+	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // TesterVerdict is the tester's append-only verdict for one merge

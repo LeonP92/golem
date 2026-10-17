@@ -58,7 +58,6 @@ type CreateParams struct {
 	BranchStrategy    string
 	DeliveryTarget    string
 	AutoMergeChildren bool
-	AutoMergeFinal    bool // base-branch delivery only
 	AutoApprovePhases bool
 	CreatedByUserID   *uint
 }
@@ -87,9 +86,6 @@ func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 	if p.BranchStrategy == StrategyTrunkFlags && p.DeliveryTarget == TargetFeatureBranch {
 		return nil, fmt.Errorf("%w: trunk-flags integrates to base and has no feature branch; delivery target must be base-branch", ErrInvalid)
 	}
-	if p.AutoMergeFinal && p.DeliveryTarget != TargetBaseBranch {
-		return nil, fmt.Errorf("%w: final auto-merge requires the base-branch delivery target", ErrInvalid)
-	}
 
 	sum := sha256.Sum256([]byte(p.SpecMarkdown))
 	e := &db.Epic{
@@ -102,8 +98,7 @@ func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 		BranchStrategy:    p.BranchStrategy,
 		DeliveryTarget:    p.DeliveryTarget,
 		AutoMergeChildren: p.AutoMergeChildren,
-		AutoMergeFinal:    p.AutoMergeFinal,
-		TesterRequired:    p.AutoMergeChildren || p.AutoMergeFinal,
+		TesterRequired:    p.AutoMergeChildren,
 		AutoApprovePhases: p.AutoApprovePhases,
 		State:             StateDraft,
 		CreatedByUserID:   p.CreatedByUserID,

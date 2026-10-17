@@ -3,33 +3,46 @@ package epics
 import (
 	"testing"
 
+	"gorm.io/gorm"
+
 	"github.com/leonp92/golem/internal/epic"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 )
 
-func runningEpic(t *testing.T) (*db.Epic, *laneFixture) {
+func runningEpic(t *testing.T) (*db.Epic, *gorm.DB) {
 	t.Helper()
-	f := newLaneFixture(t, true)
-	var e db.Epic
-	f.gdb.First(&e, "id = ?", f.epic.ID)
-	if e.State != "running" {
-		t.Fatalf("state = %q", e.State)
+	gdb, _ := db.Open(":memory:")
+	e := createEpic(t, gdb)
+	rev, err := AddRevision(gdb, e.ID, validPlan(), "")
+	if err != nil {
+		t.Fatalf("revision: %v", err)
 	}
-	return &e, f
+	if err := Approve(gdb, e.ID, rev.Revision, rev.PlanHash, "leon"); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+	if _, err := Start(gdb, e.ID); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	var fresh db.Epic
+	gdb.First(&fresh, "id = ?", e.ID)
+	if fresh.State != "running" {
+		t.Fatalf("state = %q", fresh.State)
+	}
+	return &fresh, gdb
 }
 
 // Pause and resume refuse the states where they make no sense — a paused
 // run cannot pause again, a running one cannot resume, and
 // a paused run is the only one that resumes.
 func TestPauseResumeStateRules(t *testing.T) {
-	e, f := runningEpic(t)
-	if err := Resume(f.gdb, e.ID); err == nil {
+	e, gdb := runningEpic(t)
+	if err := Resume(gdb, e.ID); err == nil {
 		t.Fatal("resume of a running epic must fail")
 	}
-	if err := Pause(f.gdb, e.ID); err != nil {
+	if err := Pause(gdb, e.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := Pause(f.gdb, e.ID); err == nil {
+	if err := Pause(gdb, e.ID); err == nil {
 		t.Fatal("double pause must fail")
 	}
 }
@@ -90,29 +103,29 @@ func TestFailedNodeBlocksOnlyDescendants(t *testing.T) {
 // lands, successors become ready on resume, and the last receipt finishes
 // the run even if it arrives during a pause.
 func TestReceiptWhilePausedIsKept(t *testing.T) {
-	e, f := runningEpic(t)
-	if err := Pause(f.gdb, e.ID); err != nil {
+	e, gdb := runningEpic(t)
+	if err := Pause(gdb, e.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordIntegration(f.gdb, e.ID, "T1", "m1"); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "T1", "m1"); err != nil {
 		t.Fatalf("receipt while paused: %v", err)
 	}
-	if err := Resume(f.gdb, e.ID); err != nil {
+	if err := Resume(gdb, e.ID); err != nil {
 		t.Fatal(err)
 	}
 	var t2 db.Ticket
-	f.gdb.First(&t2, "epic_id = ? AND epic_node_key = 'T2'", e.ID)
+	gdb.First(&t2, "epic_id = ? AND epic_node_key = 'T2'", e.ID)
 	if !t2.EpicReady {
 		t.Fatal("T2 not ready after its predecessor's receipt")
 	}
-	if err := Pause(f.gdb, e.ID); err != nil {
+	if err := Pause(gdb, e.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := RecordIntegration(f.gdb, e.ID, "T2", "m2"); err != nil {
+	if err := RecordIntegration(gdb, e.ID, "T2", "m2"); err != nil {
 		t.Fatalf("last receipt while paused: %v", err)
 	}
 	var got db.Epic
-	f.gdb.First(&got, "id = ?", e.ID)
+	gdb.First(&got, "id = ?", e.ID)
 	if got.State != "awaiting-final-review" {
 		t.Fatalf("state = %q, want awaiting-final-review", got.State)
 	}

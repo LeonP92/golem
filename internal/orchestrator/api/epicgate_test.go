@@ -2,11 +2,13 @@ package api_test
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"gorm.io/gorm"
 
@@ -436,5 +438,41 @@ func TestPostgresSimultaneousIntegrationReceipts(t *testing.T) {
 		if child := epicChild(t, gdb, e.ID, key); child.EpicIntegratedSHA != "merged-"+key {
 			t.Fatalf("lost receipt: %+v", child)
 		}
+	}
+}
+
+func TestPostgresIntegrationLeaseFencing(t *testing.T) {
+	gdb := openPostgres(t)
+	e := seedRunningEpic(t, gdb)
+	sh := db.Shem{Name: "lease-holder", APIKeyHash: "x"}
+	if err := gdb.Create(&sh).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := epicChild(t, gdb, e.ID, "A")
+	gdb.Model(e).Updates(map[string]any{"auto_merge_children": true, "tester_required": true})
+	gdb.Model(&child).Updates(map[string]any{"phase": "ready-for-review", "assigned_shem": sh.ID})
+	if err := epics.RecordVerdict(gdb, db.TesterVerdict{EpicID: e.ID, EpicNodeKey: "A", HeadSHA: "head", Verdict: "pass"}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := epics.GateIntegration(gdb, e.ID, "A", "head", sh.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	gdb.Model(&db.EpicIntegrationSlot{}).Where("epic_id = ?", e.ID).Update("expires_at", time.Now().Add(-time.Second))
+	second, err := epics.GateIntegration(gdb, e.ID, "A", "head", sh.ID, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	pin := db.EpicIntegrationSlot{EpicID: e.ID, NodeKey: "A", HeadSHA: "head", ShemID: sh.ID, LeaseID: first.LeaseID}
+	record := func(tx *gorm.DB, _ db.Ticket) error { return epics.RecordIntegration(tx, e.ID, "A", "merged") }
+	if err := epics.ApplyIntegrationResult(gdb, pin, "merged", record); !errors.Is(err, epics.ErrIntegrationConflict) {
+		t.Fatalf("stale lease=%v", err)
+	}
+	pin.LeaseID = second.LeaseID
+	if err := epics.ApplyIntegrationResult(gdb, pin, "merged", record); err != nil {
+		t.Fatal(err)
+	}
+	if err := epics.ApplyIntegrationResult(gdb, pin, "merged", record); err != nil {
+		t.Fatalf("duplicate=%v", err)
 	}
 }

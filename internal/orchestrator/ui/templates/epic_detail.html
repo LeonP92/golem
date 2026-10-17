@@ -102,7 +102,14 @@
     </div>
     {{else if eq $.Epic.State "awaiting-final-review"}}
     <div class="card-actions justify-end items-center gap-3 mt-4">
+      {{if $.Epic.FinalPRURL}}<a class="link link-primary text-sm" href="{{$.Epic.FinalPRURL}}" target="_blank" rel="noopener">Final pull request #{{$.Epic.FinalPRNumber}}</a>{{end}}
       <span class="text-sm opacity-70">All nodes integrated. The final review and merge are yours.</span>
+      <form method="POST" action="/epics/{{$.Epic.ID}}/merge-final" class="flex items-center gap-2">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <input type="text" name="sha" required placeholder="final SHA on {{$.Epic.BaseBranch}}"
+               class="input input-bordered input-sm font-mono w-72">
+        <button type="submit" class="btn btn-primary btn-sm">Mark completed</button>
+      </form>
     </div>
     {{end}}
   </div>

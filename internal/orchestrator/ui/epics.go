@@ -2,7 +2,6 @@ package ui
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -41,7 +40,6 @@ type epicForm struct {
 	BranchStrategy    string
 	DeliveryTarget    string
 	AutoMergeChildren bool
-	AutoMergeFinal    bool
 	AutoApprovePhases bool
 }
 
@@ -70,7 +68,6 @@ func (h *Handlers) epicNewSubmit(w http.ResponseWriter, r *http.Request) {
 		BranchStrategy:    r.FormValue("branch_strategy"),
 		DeliveryTarget:    r.FormValue("delivery_target"),
 		AutoMergeChildren: r.FormValue("auto_merge_children") == "on",
-		AutoMergeFinal:    r.FormValue("auto_merge_final") == "on",
 		AutoApprovePhases: r.FormValue("auto_approve_phases") == "on",
 	}
 	user := auth.SessionUser(r)
@@ -82,7 +79,6 @@ func (h *Handlers) epicNewSubmit(w http.ResponseWriter, r *http.Request) {
 		BranchStrategy:    form.BranchStrategy,
 		DeliveryTarget:    form.DeliveryTarget,
 		AutoMergeChildren: form.AutoMergeChildren,
-		AutoMergeFinal:    form.AutoMergeFinal,
 		AutoApprovePhases: form.AutoApprovePhases,
 	}
 	if user != nil {
@@ -201,11 +197,10 @@ func (h *Handlers) epicStartSubmit(r *http.Request, id string) error {
 	return err
 }
 
+// epicMergeFinalSubmit records the human final merge: the operator attests
+// the integration branch is on base and names the resulting head SHA.
 func (h *Handlers) epicMergeFinalSubmit(r *http.Request, id string) error {
-	if h.GH == nil {
-		return errors.New("github sync is not configured")
-	}
-	return epics.MergeFinal(r.Context(), h.DB, h.GH, id)
+	return epics.CompleteFinal(h.DB, id, r.FormValue("sha"))
 }
 
 func (h *Handlers) epicPauseSubmit(r *http.Request, id string) error  { return epics.Pause(h.DB, id) }

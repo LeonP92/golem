@@ -1,15 +1,20 @@
 # orchestrator-ghsync (epic additions)
 
-- Epic children have no issue, yet `enqueuePRIfReady` queues their PR (no
-  `Closes #`) and the drain opens it non-draft so it can be merged.
-- Merged child PR into the child's base: `epics.RecordIntegration` with the
-  merge commit, then the ticket closes. A retryable receipt failure leaves
-  the ticket open; a conflict, a finished run, or a merge into another
-  base is logged and the ticket closes.
-- Children of a run that is not `running` are neither fixed nor merged.
-- Clean PRs go to `epics.MergeChild`; its fix/park result goes through
-  `needsFixing` / `setPhase(needs-attention)`.
+The add-on's whole role in runs is the final pull request; children never
+touch it. `enqueuePRIfReady` requires an issue number, so epic children
+get no pull request (they merge into the run's target ref through the
+shem-side lane — no GitHub involved), and the PR monitor skips them.
 
-`github.MergePullRequest(ctx, owner, repo, number, expectedHeadSHA)` merges
-pinned to the head: 409 → `ErrMergeConflictHead`, 403 →
-`ErrMergeForbidden`, anything else is a plain error.
+- `EnqueueFinalPR` is the one hook into the core flow, passed as an emit
+  hook to `epics.RecordIntegration` and fired inside the transition to
+  `awaiting-final-review`. It is a no-op for trunk-flags runs and for
+  remotes with no enabled repository, so the core behaves identically
+  with or without the add-on.
+- Run-level outbox rows carry `EpicID` (empty for ticket rows); the drain
+  routes them to `deliverEpicPR`, which opens the integration branch's
+  pull request to base (same at-least-once convergence as the ticket
+  path) and records `final_pr_number`/`final_pr_url` on the epic. The
+  dashboard links it at awaiting-final-review.
+
+The standalone-ticket paths (draft PR on branch push, monitor, phase
+labels, fix loops) are unchanged.

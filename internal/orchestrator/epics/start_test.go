@@ -195,12 +195,13 @@ func TestRecordIntegrationFailsClosed(t *testing.T) {
 	if err := RecordIntegration(gdb, e.ID, "A", "sha-other"); !errors.Is(err, ErrIntegrationConflict) {
 		t.Fatalf("conflicting repeat = %v", err)
 	}
-	// No receipts while the run is not running.
+	// No receipts before the run starts: nothing is materialized, so the
+	// node itself is unknown.
 	e2 := createEpic(t, gdb)
 	if _, err := AddRevision(gdb, e2.ID, diamondPlan(e2.IntegrationRef), ""); err != nil {
 		t.Fatalf("AddRevision: %v", err)
 	}
-	if err := RecordIntegration(gdb, e2.ID, "A", "sha"); !errors.Is(err, ErrWrongState) {
+	if err := RecordIntegration(gdb, e2.ID, "A", "sha"); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("receipt before start = %v", err)
 	}
 }

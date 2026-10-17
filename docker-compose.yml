@@ -43,6 +43,10 @@ services:
       # github.pr_fix_attempts, then 3. Use -1 for unlimited, 0 to never
       # attempt a fix.
       - GOLEM_PR_FIX_ATTEMPTS=${GOLEM_PR_FIX_ATTEMPTS:-}
+      # Same cap outside the GitHub add-on: how many times an epic child
+      # whose integration keeps failing (a merge conflict) goes back to
+      # revising before it parks for a human.
+      - GOLEM_FIX_ATTEMPTS=${GOLEM_FIX_ATTEMPTS:-}
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
       interval: 5s
@@ -179,8 +183,10 @@ services:
       # no_push: true, so by default there is nothing here for a credential to
       # do. Shipping the orchestrator's repo-write PAT in anyway would widen
       # what a successful prompt injection gets its hands on for no benefit.
-      # Set GOLEM_SHEM_GITHUB_TOKEN in .env at the same time you turn no_push
+      # Set GOLEM_SHEM_PUSH_TOKEN in .env at the same time you turn no_push
       # off — ideally to a second, push-only token rather than the same one.
+      # GOLEM_SHEM_GITHUB_TOKEN is the older github.com-only name; both work.
+      - GOLEM_PUSH_TOKEN=${GOLEM_SHEM_PUSH_TOKEN:-}
       - GOLEM_GITHUB_TOKEN=${GOLEM_SHEM_GITHUB_TOKEN:-}
 
 volumes:
