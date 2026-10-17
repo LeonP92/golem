@@ -127,7 +127,7 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	if !shem.ModelCatalog().Has(ticket.ModelSelections()) {
 		return nil, fmt.Errorf("shem %s's catalog does not have every model this ticket selects", shem.Name)
 	}
-	result := h.DB.Model(&db.Ticket{}).
+	result := h.DB.Where(epicWorkerGate, shemID).Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'unassigned' AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 			epicGatePool+" AND "+
@@ -216,7 +216,7 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tickets []db.Ticket
-	h.DB.Where(
+	h.DB.Where(epicWorkerGate, shem.ID).Where(
 		"assigned_shem = ? AND phase NOT IN ? AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 			epicGateResume,
@@ -347,7 +347,7 @@ func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := r.URL.Query().Get("repo")
-	query := h.DB.Where("phase = 'unassigned' AND "+
+	query := h.DB.Where(epicWorkerGate, shem.ID).Where("phase = 'unassigned' AND "+
 		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 		epicGatePool+" AND "+
 		"(model_backend = '' OR model_backend = ?)", shem.Backend)
@@ -408,7 +408,7 @@ func (h *Handlers) claimTicket(w http.ResponseWriter, r *http.Request) {
 // human to re-approve, exactly as resumableTickets does.
 func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, error) {
 	var ticket db.Ticket
-	result := h.DB.
+	result := h.DB.Where(epicWorkerGate, shemID).
 		Where("id = ? AND phase = 'revising' AND assigned_shem = ? AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 			epicGateResume,

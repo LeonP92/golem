@@ -169,8 +169,9 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 // Register registers this shem and reports the backend it runs.
 func (c *Client) Register(name string, repos []string, backend string, catalog models.Catalog) (uint, error) {
 	body := map[string]any{
-		"name":  name,
-		"repos": repos,
+		"supports_epics": true,
+		"name":           name,
+		"repos":          repos,
 		"backend": map[string]any{
 			"name":    backend,
 			"catalog": catalog,

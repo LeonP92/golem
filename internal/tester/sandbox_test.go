@@ -25,6 +25,9 @@ func envMap(t *testing.T, env []string) map[string]string {
 func TestEnvStripsSecretsAndEgress(t *testing.T) {
 	t.Setenv("GOLEM_GITHUB_TOKEN", "secret")
 	t.Setenv("ANTHROPIC_API_KEY", "secret")
+	t.Setenv("CODEX_API_KEY", "secret")
+	t.Setenv("OPENAI_API_KEY", "secret")
+	t.Setenv("OPENCODE_CONFIG_CONTENT", `{"apiKey":"secret"}`)
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "secret")
 	t.Setenv("GH_TOKEN", "secret")
 	t.Setenv("HTTPS_PROXY", "http://proxy:8080")
@@ -33,7 +36,7 @@ func TestEnvStripsSecretsAndEgress(t *testing.T) {
 	m := envMap(t, Env())
 	for _, name := range []string{
 		"GOLEM_GITHUB_TOKEN", "ANTHROPIC_API_KEY", "AWS_SECRET_ACCESS_KEY",
-		"GH_TOKEN", "HTTPS_PROXY", "SSL_CERT_FILE",
+		"GH_TOKEN", "HTTPS_PROXY", "SSL_CERT_FILE", "CODEX_API_KEY", "OPENAI_API_KEY", "OPENCODE_CONFIG_CONTENT",
 	} {
 		if _, ok := m[name]; ok {
 			t.Errorf("%s leaked into the tester environment", name)

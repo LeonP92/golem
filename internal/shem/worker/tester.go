@@ -13,10 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leonp92/golem/internal/agentrunner"
+	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/roles"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/tester"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 // runTesterStage runs the tester role on the head just pushed and posts
@@ -43,21 +46,11 @@ func (e *GolemExecutor) runTesterStage(ctx context.Context, c *client.Client,
 		}
 	}
 
-	prompt := string(role) + tester.Contract + fmt.Sprintf(`
-
-## This candidate
-
-Repository: %s
-Head SHA under test: %s
-
-The ticket's acceptance criteria:
-
-%s
-`, claim.RepoRemote, head, claim.Description)
-
-	prompt += acceptanceEvidence(ctx, worktree, claim.Epic.AcceptanceCommands) +
-		"\nYou cannot run commands in this session. Judge from the acceptance results above " +
-		"and the code at this head; a non-zero exit is a FAIL.\n"
+	prompt, err := buildTesterPrompt(ctx, string(role), claim, worktree, ticketDir, head)
+	if err != nil {
+		postStatus(c, claim.TicketID, "Tester stage could not read candidate evidence: "+firstLineOf(err.Error()))
+		return
+	}
 
 	logPath := filepath.Join(ticketDir, "agent-tester.log")
 	f, err := os.Create(logPath) //nolint:gosec
@@ -104,6 +97,31 @@ The ticket's acceptance criteria:
 		return
 	}
 	postStatus(c, claim.TicketID, "Tester verdict recorded: "+verdict)
+}
+
+// Supply the source as data: a tester that cannot run tools still needs the
+// exact comparison base and the complete candidate diff to judge correctness.
+func buildTesterPrompt(ctx context.Context, role string, claim *client.ClaimResponse, worktree, ticketDir, head string) (string, error) {
+	state, err := ticket.Load(ticketDir)
+	if err != nil {
+		return "", err
+	}
+	if state.BranchBaseSHA == "" {
+		return "", fmt.Errorf("candidate has no pinned base SHA")
+	}
+	cmd := asAgent(exec.CommandContext(ctx, "git", "diff", state.BranchBaseSHA+"..."+head))
+	cmd.Dir = worktree
+	diff, err := cmd.Output()
+	if err != nil {
+		return "", fmt.Errorf("reading candidate diff: %w", err)
+	}
+	evidence := fmt.Sprintf("Repository: %s\nHead SHA under test: %s\nBase SHA: %s\n\nAcceptance criteria:\n%s\n", claim.RepoRemote, head, state.BranchBaseSHA, claim.Description)
+	evidence += acceptanceEvidence(ctx, worktree, claim.Epic.AcceptanceCommands)
+	return agentrunner.BuildPrompt(agentrunner.Context{
+		RolePrompt: role + tester.Contract + "\nYou cannot run commands in this session. Judge the candidate diff and acceptance results supplied as data. A non-zero acceptance exit is a FAIL.\n",
+		Diff:       string(diff),
+		LogSlice:   []blog.Entry{blog.NewEntry("worker", blog.TypeStatus, evidence)},
+	}), nil
 }
 
 func shortSHA(sha string) string {

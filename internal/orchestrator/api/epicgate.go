@@ -1,5 +1,8 @@
 package api
 
+// epicWorkerGate excludes pre-epic workers, which ignore the tester claim payload.
+const epicWorkerGate = "(epic_id IS NULL OR EXISTS (SELECT 1 FROM shems WHERE shems.id = ? AND shems.supports_epics))"
+
 // Epic claim gates, added to every claim path. Ordinary tickets
 // (epic_id IS NULL) pass untouched.
 //

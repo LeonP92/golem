@@ -27,7 +27,7 @@ var deniedEnvExact = map[string]bool{
 // run is not an agent call and holds none of them.
 var deniedEnvPrefixes = []string{
 	"ANTHROPIC_", "CLAUDE_", "AWS_", "GOOGLE_", "CLOUD_ML_", "VERTEX_",
-	"GITHUB_", "GH_",
+	"GITHUB_", "GH_", "CODEX_", "OPENAI_", "OPENCODE_",
 }
 
 // Env returns the environment for one tester scenario run.

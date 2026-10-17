@@ -31,6 +31,8 @@ type Session struct {
 type Shem struct {
 	ID   uint   `gorm:"primaryKey"`
 	Name string `gorm:"uniqueIndex;not null"`
+	// SupportsEpics is cleared when a pre-epic worker registers.
+	SupportsEpics bool `gorm:"not null;default:false" json:"supports_epics"`
 	// json:"-" — GET /api/shems serializes this struct straight to the
 	// dashboard, and there is no reason to ship credential material to a
 	// browser. It is a bcrypt hash of 32 random bytes, so exposure was not

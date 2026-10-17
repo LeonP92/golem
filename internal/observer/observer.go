@@ -3,6 +3,8 @@ package observer
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -84,7 +86,18 @@ func (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) e
 		return nil
 	}
 
+	for _, name := range []string{"spec.md", "plan.md"} {
+		data, err := os.ReadFile(filepath.Join(filepath.Dir(o.logPath), name))
+		if err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("reading %s: %w", name, err)
+		}
+		if err == nil {
+			entries = append(entries, blog.NewEntry("system", blog.TypeStatus, name+":\n"+string(data)))
+		}
+	}
+
 	result, err := o.runner.RunAgent(context.Background(), role, agentrunner.Context{
+		LogSlice:   entries,
 		Diff:       diff,
 		RolePrompt: rolePrompt,
 	}, o.model)

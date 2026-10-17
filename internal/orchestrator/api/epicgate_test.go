@@ -23,6 +23,9 @@ import (
 // the run: child A is ready, child B is dependency-blocked.
 func seedRunningEpic(t *testing.T, gdb *gorm.DB) *db.Epic {
 	t.Helper()
+	if err := gdb.Model(&db.Shem{}).Where("1 = 1").Update("supports_epics", true).Error; err != nil {
+		t.Fatal(err)
+	}
 	e, err := epics.Create(gdb, epics.CreateParams{
 		RepoRemote: "https://github.com/org/repo", Title: "Gate test",
 		SpecMarkdown: "spec", BaseBranch: "main",
@@ -350,5 +353,88 @@ func TestPostgresEpicRun(t *testing.T) {
 	}
 	if code := claim(b.ID); code != http.StatusOK {
 		t.Fatalf("unblocked child claim = %d, want 200", code)
+	}
+}
+
+func TestLegacyShemCannotRunEpicChildren(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	e := seedRunningEpic(t, h.DB)
+	old := seedShem(t, h, "legacy", "key")
+	a := epicChild(t, h.DB, e.ID, "A")
+	plain := db.Ticket{ID: "legacy-ordinary", RepoRemote: e.RepoRemote, Branch: "plain", Phase: "unassigned"}
+	if err := h.DB.Create(&plain).Error; err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.ClaimTicket(a.ID, old.ID); err == nil {
+		t.Fatal("legacy worker claimed epic child")
+	}
+	if _, err := h.ClaimTicket(plain.ID, old.ID); err != nil {
+		t.Fatalf("ordinary ticket rejected: %v", err)
+	}
+	call := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, shemRequest(http.MethodGet, path, "legacy", "key"))
+		return w
+	}
+	if w := call("/api/tickets/available"); w.Code != 200 || strings.Contains(w.Body.String(), a.ID) {
+		t.Fatalf("legacy available: %d %s", w.Code, w.Body.String())
+	}
+	h.DB.Model(&a).Updates(map[string]any{"assigned_shem": old.ID, "phase": "implement"})
+	if w := call("/api/tickets/resumable"); w.Code != 200 || strings.Contains(w.Body.String(), a.ID) {
+		t.Fatalf("legacy resumed epic: %s", w.Body.String())
+	}
+	h.DB.Model(&a).Update("phase", "revising")
+	if _, err := h.ReviseClaim(a.ID, old.ID); err == nil {
+		t.Fatal("legacy worker revised epic")
+	}
+	h.DB.Model(&a).Updates(map[string]any{"phase": "unassigned", "assigned_shem": nil, "reaped_from_shem": old.ID, "reaped_from_phase": "implement"})
+	if w := call("/api/tickets/reaped"); w.Code != 200 || strings.Contains(w.Body.String(), a.ID) {
+		t.Fatalf("legacy reaped: %d %s", w.Code, w.Body.String())
+	}
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, shemRequest(http.MethodPost, "/api/tickets/"+a.ID+"/reclaim", "legacy", "key"))
+	if w.Code != http.StatusConflict {
+		t.Fatalf("legacy reclaim: %d %s", w.Code, w.Body.String())
+	}
+	// Reconnecting an old binary must clear a previously advertised capability.
+	h.DB.Model(&old).Update("supports_epics", true)
+	req := shemRequest(http.MethodPut, "/api/shems/me", "legacy", "key")
+	req.Body = io.NopCloser(strings.NewReader(`{"name":"legacy","repos":[]}`))
+	w = httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != 200 {
+		t.Fatalf("legacy registration: %d %s", w.Code, w.Body.String())
+	}
+	h.DB.First(&old, old.ID)
+	if old.SupportsEpics {
+		t.Fatal("legacy registration retained epic capability")
+	}
+}
+
+func TestPostgresSimultaneousIntegrationReceipts(t *testing.T) {
+	gdb := openPostgres(t)
+	e := seedRunningEpic(t, gdb)
+	start := make(chan struct{})
+	results := make(chan error, 2)
+	for _, key := range []string{"A", "B"} {
+		go func(key string) { <-start; results <- epics.RecordIntegration(gdb, e.ID, key, "merged-"+key) }(key)
+	}
+	close(start)
+	for range 2 {
+		if err := <-results; err != nil {
+			t.Fatal(err)
+		}
+	}
+	var got db.Epic
+	if err := gdb.First(&got, "id = ?", e.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.State != epics.StateAwaitingFinalReview {
+		t.Fatalf("simultaneous receipts left epic %s", got.State)
+	}
+	for _, key := range []string{"A", "B"} {
+		if child := epicChild(t, gdb, e.ID, key); child.EpicIntegratedSHA != "merged-"+key {
+			t.Fatalf("lost receipt: %+v", child)
+		}
 	}
 }

@@ -1,6 +1,8 @@
 package observer
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -119,5 +121,45 @@ func TestDispatchForCommitRecordsSilenceAsNoFindings(t *testing.T) {
 	}
 	if entries, _ = blog.ReadAll(logPath); len(entries) != 1 {
 		t.Fatalf("re-dispatch duplicated the entry: %d", len(entries))
+	}
+}
+
+// The spec observer must receive the plan, not infer it from the diff.
+type contextRunner struct {
+	*agentrunner.Mock
+	input agentrunner.Context
+}
+
+func (r *contextRunner) RunAgent(_ context.Context, _ string, in agentrunner.Context, _ string) (agentrunner.Result, error) {
+	r.input = in
+	return agentrunner.Result{}, nil
+}
+func TestDispatchSuppliesTicketEvidence(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "log.jsonl")
+	w, err := blog.NewWriter(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Append(blog.NewEntry("worker", blog.TypeStatus, "Approved by a human")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"spec.md", "plan.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("expected "+name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &contextRunner{Mock: agentrunner.NewMock()}
+	if err := New(logPath, runner, "").DispatchForCommit("spec-adherence", "sha", "the diff", "the role"); err != nil {
+		t.Fatal(err)
+	}
+	prompt := agentrunner.BuildPrompt(runner.input)
+	for _, evidence := range []string{"Approved by a human", "expected spec.md", "expected plan.md", "the diff"} {
+		if !strings.Contains(prompt, evidence) {
+			t.Errorf("missing ticket evidence %q", evidence)
+		}
 	}
 }

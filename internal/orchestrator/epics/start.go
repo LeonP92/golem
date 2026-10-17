@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -134,6 +135,10 @@ func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string) error {
 		return fmt.Errorf("%w: integration receipt needs the merged SHA", ErrInvalid)
 	}
 	return gdb.Transaction(func(tx *gorm.DB) error {
+		// Serialize receipt writes before reading siblings, including on PostgreSQL.
+		if err := tx.Model(&db.Epic{}).Where("id = ?", epicID).Update("updated_at", time.Now()).Error; err != nil {
+			return err
+		}
 		e, err := load(tx, epicID)
 		if err != nil {
 			return err

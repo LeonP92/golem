@@ -26,7 +26,7 @@ const reclaimablePredicate = "reaped_from_shem = ? AND phase = 'unassigned' AND 
 func (h *Handlers) reapedTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var tickets []db.Ticket
-	if err := h.DB.Where(reclaimablePredicate, shem.ID).Select("id").Find(&tickets).Error; err != nil {
+	if err := h.DB.Where(epicWorkerGate, shem.ID).Where(reclaimablePredicate, shem.ID).Select("id").Find(&tickets).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -54,7 +54,7 @@ func (h *Handlers) reclaimTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	shem := auth.ShemFromRequest(r)
-	result := h.DB.Model(&db.Ticket{}).
+	result := h.DB.Where(epicWorkerGate, shem.ID).Model(&db.Ticket{}).
 		Where("id = ? AND "+reclaimablePredicate, id, shem.ID).
 		Updates(map[string]any{
 			"phase":             gorm.Expr("reaped_from_phase"),
