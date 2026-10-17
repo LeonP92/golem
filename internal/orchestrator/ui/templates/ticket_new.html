@@ -108,6 +108,34 @@
         </label>
       </div>
 
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="tester_required" value="1" class="checkbox checkbox-sm"
+                 {{if .Form.TesterRequired}}checked{{end}}>
+          <span>
+            <span class="label-text font-medium">Run the tester on the pushed head</span>
+            <span class="label-text-alt block text-base-content/50">
+              Off: the ticket is done when the reviewer and the gate pass.
+              On: a separate tester stage judges the exact pushed head and records a structured verdict on the ticket.
+            </span>
+          </span>
+        </label>
+      </div>
+
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="verify_disabled" value="1" class="checkbox checkbox-sm"
+                 {{if .Form.VerifyDisabled}}checked{{end}}>
+          <span>
+            <span class="label-text font-medium">Skip the worker's self-verification</span>
+            <span class="label-text-alt block text-base-content/50">
+              Off: before the review gate, the worker runs the gate and the ticket's acceptance commands itself, and gets one pass to fix a failure.
+              On: the ticket goes straight from implementation to the review gate.
+            </span>
+          </span>
+        </label>
+      </div>
+
       {{template "model_selects" .ModelPicker}}
 
       <div class="flex gap-2 mt-2">

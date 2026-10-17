@@ -16,3 +16,6 @@ stage_defaults:
   observe: small
   pr-description: small
   graph: small
+  # The tester runs the acceptance scenarios end to end and argues from
+  # their evidence: same weight class as validate, not a cheap observer.
+  test: medium

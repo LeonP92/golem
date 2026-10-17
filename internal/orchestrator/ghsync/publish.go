@@ -140,11 +140,14 @@ func (s *Syncer) commitSuccess(row db.GitHubOutbox, postWrite func(tx *gorm.DB) 
 // the same transaction as marking the row done, via commitSuccess. Kinds
 // with no local write beyond done_at return a nil closure.
 func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gorm.DB) error, error) {
-	ticket, repo, err := s.linkedIssue(row.TicketID)
+	ticket, repo, err := s.linkedIssue(row.TicketID, row.Kind == KindPR)
 	if err != nil {
 		return nil, err
 	}
-	number := *ticket.IssueNumber
+	number := 0
+	if ticket.IssueNumber != nil {
+		number = *ticket.IssueNumber
+	}
 
 	switch row.Kind {
 	case KindComment:
@@ -180,7 +183,7 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 			return nil, fmt.Errorf("decode pr payload for outbox row %d: %w", row.ID, err)
 		}
 		pr, err := s.GH.CreatePullRequest(ctx, repo.Owner, repo.Name,
-			p.Head, p.Base, p.Title, p.Body, true)
+			p.Head, p.Base, p.Title, p.Body, ticket.EpicID == nil)
 		if err != nil {
 			// Delivery is at-least-once: the GitHub call cannot be inside
 			// the transaction that records it, so a local failure between
@@ -280,13 +283,14 @@ func (s *Syncer) applyPhaseLabel(ctx context.Context, repo db.GitHubRepo, issue 
 }
 
 // linkedIssue loads the ticket and its repo settings, verifying the ticket is
-// actually linked to an issue.
-func (s *Syncer) linkedIssue(ticketID string) (db.Ticket, db.GitHubRepo, error) {
+// actually linked to an issue. epicPR admits an unlinked epic child: its
+// pull request is the one write it needs (the lane merges it; no draft).
+func (s *Syncer) linkedIssue(ticketID string, epicPR bool) (db.Ticket, db.GitHubRepo, error) {
 	var ticket db.Ticket
 	if err := s.DB.First(&ticket, "id = ?", ticketID).Error; err != nil {
 		return ticket, db.GitHubRepo{}, fmt.Errorf("load ticket %s: %w", ticketID, err)
 	}
-	if ticket.IssueNumber == nil {
+	if ticket.IssueNumber == nil && (!epicPR || ticket.EpicID == nil) {
 		return ticket, db.GitHubRepo{}, fmt.Errorf("ticket %s has no linked issue", ticketID)
 	}
 	var repo db.GitHubRepo

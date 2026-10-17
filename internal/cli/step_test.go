@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -31,6 +32,31 @@ func gitCommit(t *testing.T, dir, file, content, message string) string {
 		t.Fatalf("git rev-parse: %v", err)
 	}
 	return strings.TrimSpace(string(out))
+}
+
+// writeReviewerSetup installs a minimal reviewer role and a config whose gate
+// runs the given commands, for tests that drive TicketReview.
+func writeReviewerSetup(t *testing.T, repo string, gateCommands ...string) {
+	t.Helper()
+	rolesDir := filepath.Join(repo, ".golem", "roles")
+	if err := os.MkdirAll(rolesDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll roles: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(rolesDir, "reviewer.md"), []byte("# reviewer\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile reviewer.md: %v", err)
+	}
+	var config strings.Builder
+	config.WriteString("backend: claude-code\ngate:\n  commands:")
+	if len(gateCommands) == 0 {
+		config.WriteString(" []\n")
+	}
+	for _, cmd := range gateCommands {
+		fmt.Fprintf(&config, "\n    - %q", cmd)
+	}
+	config.WriteString("\n")
+	if err := os.WriteFile(filepath.Join(repo, ".golem", "config.yaml"), []byte(config.String()), 0o644); err != nil {
+		t.Fatalf("WriteFile config.yaml: %v", err)
+	}
 }
 
 func setUpTicketForStepTest(t *testing.T) (repo, worktree, ticketID string) {

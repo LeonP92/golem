@@ -1,6 +1,8 @@
 package observer
 
 import (
+	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -95,5 +97,69 @@ func TestDispatchForCommitSkipsIfAlreadyLoggedFromPriorRun(t *testing.T) {
 	}
 	if len(entries) != 1 {
 		t.Fatalf("expected the prior entry to be untouched and no new one added, got %d entries", len(entries))
+	}
+}
+
+// A silent observer still leaves evidence it ran: the gating reviewer
+// fails any category it cannot see checked.
+func TestDispatchForCommitRecordsSilenceAsNoFindings(t *testing.T) {
+	logPath := filepath.Join(t.TempDir(), "log.jsonl")
+	mock := agentrunner.NewMock()
+	mock.ScriptResponse("convention-enforcer", agentrunner.Result{Output: "", Model: "mock"})
+	o := New(logPath, mock, "")
+	if err := o.DispatchForCommit("convention-enforcer", "abc123", "diff", "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := blog.ReadAll(logPath)
+	if len(entries) != 1 || entries[0].Type != blog.TypeStatus || entries[0].CommitSHA != "abc123" ||
+		!strings.Contains(entries[0].Message, "no findings") {
+		t.Fatalf("entries = %+v", entries)
+	}
+	// And the same commit is not reviewed twice.
+	if err := New(logPath, mock, "").DispatchForCommit("convention-enforcer", "abc123", "diff", "prompt"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ = blog.ReadAll(logPath); len(entries) != 1 {
+		t.Fatalf("re-dispatch duplicated the entry: %d", len(entries))
+	}
+}
+
+// The spec observer must receive the plan, not infer it from the diff.
+type contextRunner struct {
+	*agentrunner.Mock
+	input agentrunner.Context
+}
+
+func (r *contextRunner) RunAgent(_ context.Context, _ string, in agentrunner.Context, _ string) (agentrunner.Result, error) {
+	r.input = in
+	return agentrunner.Result{}, nil
+}
+func TestDispatchSuppliesTicketEvidence(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "log.jsonl")
+	w, err := blog.NewWriter(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Append(blog.NewEntry("worker", blog.TypeStatus, "Approved by a human")); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"spec.md", "plan.md"} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("expected "+name), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	runner := &contextRunner{Mock: agentrunner.NewMock()}
+	if err := New(logPath, runner, "").DispatchForCommit("spec-adherence", "sha", "the diff", "the role"); err != nil {
+		t.Fatal(err)
+	}
+	prompt := agentrunner.BuildPrompt(runner.input)
+	for _, evidence := range []string{"Approved by a human", "expected spec.md", "expected plan.md", "the diff"} {
+		if !strings.Contains(prompt, evidence) {
+			t.Errorf("missing ticket evidence %q", evidence)
+		}
 	}
 }

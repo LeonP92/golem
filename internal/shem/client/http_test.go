@@ -3,6 +3,7 @@ package client_test
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -343,5 +344,32 @@ func TestReclaim(t *testing.T) {
 	}
 	if err := c.Reclaim("taken"); !errors.Is(err, client.ErrNotAvailable) {
 		t.Errorf("expected ErrNotAvailable, got %v", err)
+	}
+}
+
+func TestPostEpicVerdict(t *testing.T) {
+	var gotPath, gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		buf, _ := io.ReadAll(r.Body)
+		gotBody = string(buf)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+	c := client.New(srv.URL, "k", "test-shem")
+	err := c.PostEpicVerdict("epic-1", client.EpicVerdictPayload{
+		EpicNodeKey: "T1", HeadSHA: "h", BaseSHA: "b", Verdict: "pass",
+		Scenarios: "boot", Backend: "local",
+	})
+	if err != nil {
+		t.Fatalf("PostEpicVerdict: %v", err)
+	}
+	if gotPath != "/api/epics/epic-1/verdicts" {
+		t.Fatalf("path = %q", gotPath)
+	}
+	for _, want := range []string{`"head_sha":"h"`, `"verdict":"pass"`, `"epic_node_key":"T1"`} {
+		if !strings.Contains(gotBody, want) {
+			t.Errorf("body missing %s: %s", want, gotBody)
+		}
 	}
 }

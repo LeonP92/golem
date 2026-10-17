@@ -45,6 +45,9 @@ the flag. `PrepareHost` pre-accepts the workspace trust dialog for a repository
 (`claudecode_trust.go`); `GenerateArtifacts` writes the subagent definitions
 and commands. `DefaultCatalog` is `claudecode_catalog.yaml`.
 
+### Tester stage default
+The claude-code catalog's stage_defaults include `test: medium` (the tester stage; see shem-worker and tester). Every entry in models.Stages needs a stage_defaults entry; TestClaudeCodeDefaultCatalog enforces it.
+
 ## Codex
 
 Runs `codex exec --skip-git-repo-check --sandbox <mode> [--model m] -`, the

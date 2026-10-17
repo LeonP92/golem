@@ -38,7 +38,7 @@ func init() {
 		desc: "Print the golem version.",
 	}
 	commandTable["init"] = commandEntry{fn: cli.Init, desc: "Initialise .golem in a repo."}
-	commandTable["ticket"] = commandEntry{fn: ticketDispatch, desc: "Manage tickets: new, resume, close, advance, review, set-step, check-bloat."}
+	commandTable["ticket"] = commandEntry{fn: ticketDispatch, desc: "Manage tickets: new, resume, close, advance, review, verify, set-step, check-bloat."}
 	commandTable["tickets"] = commandEntry{fn: cli.Tickets, desc: "List all tickets and their current phase."}
 	commandTable["wiki"] = commandEntry{fn: wikiDispatch, desc: "Wiki commands: search, rebuild."}
 	commandTable["ask"] = commandEntry{fn: cli.Ask, desc: "Prompt an agent and stream its response."}
@@ -92,6 +92,8 @@ func ticketDispatch(args []string, stdout, stderr io.Writer) int {
 		return cli.TicketAdvance(args[1:], stdout, stderr)
 	case "review":
 		return cli.TicketReview(args[1:], stdout, stderr)
+	case "verify":
+		return cli.TicketVerify(args[1:], stdout, stderr)
 	case "validate":
 		return cli.TicketValidate(args[1:], stdout, stderr)
 	case "pr-description":

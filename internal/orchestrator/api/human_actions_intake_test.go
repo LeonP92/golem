@@ -3,7 +3,6 @@ package api_test
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -83,15 +82,9 @@ func TestStartActionReleasesPendingApprovalTicket(t *testing.T) {
 				AssignedShem: tt.assignedShem}
 			h.DB.Create(&ticket)
 
-			body, _ := json.Marshal(map[string]string{
+			w := postAction(t, mux, cookie, ticket.ID, map[string]string{
 				"action": "start", "reviewed_body_hash": ticket.BodyHash,
 			})
-			url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-			req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-			req.Header.Set("Content-Type", "application/json")
-			withSession(req, cookie)
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
 
 			if w.Code != tt.wantStatus {
 				t.Fatalf("expected %d, got %d: %s", tt.wantStatus, w.Code, w.Body.String())
@@ -130,15 +123,9 @@ func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
 		t.Fatalf("seed ticket: %v", err)
 	}
 
-	body, _ := json.Marshal(map[string]string{
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{
 		"action": "start", "reviewed_body_hash": ticket.BodyHash,
 	})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204: %s", w.Code, w.Body.String())
@@ -165,16 +152,9 @@ func TestStartActionEnqueuesGitHubLabelWrite(t *testing.T) {
 func TestRequeueActionRejectsPendingApprovalTicket(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "pending-approval"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "pending-approval")
 
-	body, _ := json.Marshal(map[string]string{"action": "requeue"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "requeue"})
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())
@@ -197,16 +177,9 @@ func TestRequeueActionRejectsPendingApprovalTicket(t *testing.T) {
 func TestNeedsAttentionActionRejectsPendingApprovalTicket(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 
-	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "pending-approval"}
-	h.DB.Create(&ticket)
+	ticket := seedActionTicket(t, h, "pending-approval")
 
-	body, _ := json.Marshal(map[string]string{"action": "needs-attention"})
-	url := fmt.Sprintf("/api/tickets/%s/actions", ticket.ID)
-	req := httptest.NewRequest(http.MethodPost, url, bytes.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	withSession(req, cookie)
-	w := httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "needs-attention"})
 
 	if w.Code != http.StatusConflict {
 		t.Fatalf("expected 409, got %d: %s", w.Code, w.Body.String())

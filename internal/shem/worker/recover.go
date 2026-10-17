@@ -7,11 +7,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 // RecoverTicket ensures the local repo is in the correct state for resuming a
@@ -109,14 +111,6 @@ func ensureWorktree(ctx context.Context, repoPath, worktreePath, branch string) 
 	return fmt.Errorf("branch %q not found locally or on origin", branch)
 }
 
-// stateFile matches the fields required by ticket.Load (base golem's state.go).
-type stateFile struct {
-	ID           string `json:"id"`
-	Description  string `json:"description"`
-	Phase        string `json:"phase"`
-	WorktreePath string `json:"worktree_path"`
-}
-
 // blogEntryJSON matches the JSON schema written by blog.Writer (base golem).
 type blogEntryJSON struct {
 	Role      string    `json:"role"`
@@ -133,18 +127,11 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 		return err
 	}
 
-	// Write state.json — must match ticket.State struct (fields: id, description, phase, worktree_path).
-	state := stateFile{
-		ID:           claim.TicketID,
-		Description:  claim.Description,
-		Phase:        safeDeref(claim.CheckpointPhase),
-		WorktreePath: worktreePath,
-	}
-	stateData, err := json.Marshal(state)
+	state, err := restoredTicketState(ticketDir, worktreePath, claim)
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(ticketDir, "state.json"), stateData, 0o644); err != nil { //nolint:gosec
+	if err := state.Save(ticketDir); err != nil {
 		return err
 	}
 
@@ -170,6 +157,44 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 		}
 	}
 	return f.Close()
+}
+
+// Retain the pinned base and local metadata through a revision or restart.
+// On a new host, derive the original base from the fetched branch history.
+func restoredTicketState(ticketDir, worktreePath string, claim *client.ClaimResponse) (*ticket.State, error) {
+	state, err := ticket.Load(ticketDir)
+	if os.IsNotExist(err) {
+		state = &ticket.State{}
+	} else if err != nil {
+		return nil, err
+	}
+	state.ID, state.Description, state.Phase = claim.TicketID, claim.Description, ticket.Phase(safeDeref(claim.CheckpointPhase))
+	state.Branch, state.WorktreePath = claim.Branch, worktreePath
+	if claim.Epic != nil {
+		state.AcceptanceCommands = append([]string(nil), claim.Epic.AcceptanceCommands...)
+		if state.BranchBaseSHA == "" {
+			for _, ref := range []string{claim.BaseBranch, claim.Epic.BaseFallback} {
+				if ref == "" {
+					continue
+				}
+				for _, candidate := range []string{"origin/" + ref, ref} {
+					cmd := asAgent(exec.Command("git", "merge-base", "HEAD", candidate))
+					cmd.Dir = worktreePath
+					if out, err := cmd.Output(); err == nil {
+						state.BranchBaseSHA = strings.TrimSpace(string(out))
+						break
+					}
+				}
+				if state.BranchBaseSHA != "" {
+					break
+				}
+			}
+			if state.BranchBaseSHA == "" {
+				return nil, fmt.Errorf("recovering epic child: no readable comparison base")
+			}
+		}
+	}
+	return state, nil
 }
 
 // CloneIfMissing clones remote into repoPath when there is no git repository

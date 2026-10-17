@@ -11,7 +11,43 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/ui"
+	"gorm.io/gorm"
 )
+
+// adminCookie creates an admin user in gdb and returns its session cookie.
+func adminCookie(t *testing.T, gdb *gorm.DB) *http.Cookie {
+	t.Helper()
+	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
+	gdb.Create(&user)
+	w := httptest.NewRecorder()
+	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	return w.Result().Cookies()[0]
+}
+
+// uiMux loads the real templates and registers all UI routes on a fresh mux.
+func uiMux(t *testing.T, gdb *gorm.DB) *http.ServeMux {
+	t.Helper()
+	tmpls, err := ui.LoadTemplates()
+	if err != nil {
+		t.Fatalf("LoadTemplates: %v", err)
+	}
+	h := ui.NewHandlersWithMap(gdb, tmpls, false)
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+	return mux
+}
+
+// getWithSession GETs path with the session cookie and returns the recorder.
+func getWithSession(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, path string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	withSession(req, cookie)
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	return w
+}
 
 // TestGitHubSettingsPage_EscapesUserSuppliedValues guards RISK AREA 3:
 // Label is user-supplied and LastError carries raw GitHub API error text, so
@@ -31,26 +67,11 @@ func TestGitHubSettingsPage_EscapesUserSuppliedValues(t *testing.T) {
 		t.Fatalf("seed repo: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/settings/github", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/settings/github")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -81,26 +102,11 @@ func TestGitHubSettingsPageListsRepos(t *testing.T) {
 		t.Fatalf("seed repo: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/settings/github", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/settings/github")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -159,26 +165,11 @@ func TestGitHubSettingsPage_PlaceholderRepoHasNoSyncButton(t *testing.T) {
 		t.Fatalf("seed repo: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/settings/github", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/settings/github")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -243,13 +234,7 @@ func TestGitHubSettingsSubmit(t *testing.T) {
 					t.Fatalf("seed: %v", err)
 				}
 			}
-			user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-			gdb.Create(&user)
-			w := httptest.NewRecorder()
-			if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-				t.Fatalf("CreateSession: %v", err)
-			}
-			cookie := w.Result().Cookies()[0]
+			cookie := adminCookie(t, gdb)
 
 			h := ui.NewHandlers(gdb, nil)
 			mux := http.NewServeMux()
@@ -258,7 +243,7 @@ func TestGitHubSettingsSubmit(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/settings/github", strings.NewReader(tc.formBody))
 			req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 			withSession(req, cookie)
-			w = httptest.NewRecorder()
+			w := httptest.NewRecorder()
 			mux.ServeHTTP(w, req)
 
 			if w.Code != http.StatusSeeOther {
@@ -302,26 +287,11 @@ func TestTicketDetailShowsIssueLinkAndReadOnlyTitle(t *testing.T) {
 		t.Fatalf("seed ticket: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-001", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/tickets/gh-issue-001")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -360,26 +330,11 @@ func TestTicketDetailDescriptionIsEscapedPlainText(t *testing.T) {
 		t.Fatalf("seed ticket: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-004", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/tickets/gh-issue-004")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -431,26 +386,11 @@ func TestTicketDetailNonLinkedTicketUnchanged(t *testing.T) {
 		t.Fatalf("seed ticket: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/tickets/gh-issue-002", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/tickets/gh-issue-002")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -514,26 +454,11 @@ func TestTicketDetailOffersStartControlOnlyForPendingApproval(t *testing.T) {
 				t.Fatalf("seed ticket: %v", err)
 			}
 
-			user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-			gdb.Create(&user)
-			w := httptest.NewRecorder()
-			if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-				t.Fatalf("CreateSession: %v", err)
-			}
-			cookie := w.Result().Cookies()[0]
+			cookie := adminCookie(t, gdb)
 
-			tmpls, err := ui.LoadTemplates()
-			if err != nil {
-				t.Fatalf("LoadTemplates: %v", err)
-			}
-			h := ui.NewHandlersWithMap(gdb, tmpls, false)
-			mux := http.NewServeMux()
-			h.RegisterRoutes(mux)
+			mux := uiMux(t, gdb)
 
-			req := httptest.NewRequest(http.MethodGet, "/tickets/"+ticket.ID, nil)
-			withSession(req, cookie)
-			w = httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
+			w := getWithSession(t, mux, cookie, "/tickets/"+ticket.ID)
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -581,26 +506,11 @@ func TestTicketDetailSuppressesRequeueOnlyForPendingApproval(t *testing.T) {
 				t.Fatalf("seed ticket: %v", err)
 			}
 
-			user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-			gdb.Create(&user)
-			w := httptest.NewRecorder()
-			if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-				t.Fatalf("CreateSession: %v", err)
-			}
-			cookie := w.Result().Cookies()[0]
+			cookie := adminCookie(t, gdb)
 
-			tmpls, err := ui.LoadTemplates()
-			if err != nil {
-				t.Fatalf("LoadTemplates: %v", err)
-			}
-			h := ui.NewHandlersWithMap(gdb, tmpls, false)
-			mux := http.NewServeMux()
-			h.RegisterRoutes(mux)
+			mux := uiMux(t, gdb)
 
-			req := httptest.NewRequest(http.MethodGet, "/tickets/"+ticket.ID, nil)
-			withSession(req, cookie)
-			w = httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
+			w := getWithSession(t, mux, cookie, "/tickets/"+ticket.ID)
 
 			if w.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -637,26 +547,11 @@ func TestDashboardShowsIssueBadgeForLinkedTicket(t *testing.T) {
 		t.Fatalf("seed ticket: %v", err)
 	}
 
-	user := db.User{Username: "leon", PasswordHash: "x", Role: string(rbac.RoleAdmin)}
-	gdb.Create(&user)
-	w := httptest.NewRecorder()
-	if err := auth.CreateSession(gdb, w, user.ID, false); err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	cookie := w.Result().Cookies()[0]
+	cookie := adminCookie(t, gdb)
 
-	tmpls, err := ui.LoadTemplates()
-	if err != nil {
-		t.Fatalf("LoadTemplates: %v", err)
-	}
-	h := ui.NewHandlersWithMap(gdb, tmpls, false)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := uiMux(t, gdb)
 
-	req := httptest.NewRequest(http.MethodGet, "/dashboard", nil)
-	withSession(req, cookie)
-	w = httptest.NewRecorder()
-	mux.ServeHTTP(w, req)
+	w := getWithSession(t, mux, cookie, "/dashboard")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
@@ -667,5 +562,35 @@ func TestDashboardShowsIssueBadgeForLinkedTicket(t *testing.T) {
 	}
 	if !strings.Contains(body, "#42") {
 		t.Error("expected issue number on dashboard row")
+	}
+}
+
+func TestTicketDetailShowsTesterVerdictForEitherScope(t *testing.T) {
+	for _, isEpic := range []bool{false, true} {
+		gdb, err := db.Open(":memory:")
+		if err != nil {
+			t.Fatal(err)
+		}
+		ticket := db.Ticket{ID: "tested-ticket", RepoRemote: "https://github.com/org/repo", Branch: "ticket/tested", Description: "d", Phase: "ready-for-review", TesterRequired: true}
+		verdict := db.TesterVerdict{HeadSHA: "tested-head", Verdict: "pass", TicketID: ticket.ID}
+		if isEpic {
+			eid := "run"
+			ticket.EpicID = &eid
+			ticket.EpicNodeKey = "A"
+			verdict.TicketID = ""
+			verdict.EpicID = eid
+			verdict.EpicNodeKey = "A"
+		}
+		if err := gdb.Create(&ticket).Error; err != nil {
+			t.Fatal(err)
+		}
+		if err := gdb.Create(&verdict).Error; err != nil {
+			t.Fatal(err)
+		}
+		cookie := adminCookie(t, gdb)
+		w := getWithSession(t, uiMux(t, gdb), cookie, "/tickets/tested-ticket")
+		if w.Code != 200 || !strings.Contains(w.Body.String(), "pass @ tested-head") {
+			t.Fatalf("epic=%v: verdict missing (HTTP %d)", isEpic, w.Code)
+		}
 	}
 }

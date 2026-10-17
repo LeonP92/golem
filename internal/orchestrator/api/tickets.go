@@ -11,6 +11,7 @@ import (
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/epics"
 	"github.com/leonp92/golem/internal/orchestrator/ghsync"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
@@ -56,6 +57,31 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: pause for a human after brainstorm and after plan.
 	ManualApproval bool `json:"manual_approval"`
+	// TesterRequired: run the tester stage on the pushed head and record a
+	// structured verdict on the ticket. Ticket-level: it is set for any
+	// ticket that asks for it, and for epic children whose run requires it
+	// (the epic's policy lands on the child at materialization; the claim
+	// also ORs the run's policy so children created before the ticket flag
+	// existed keep their gate).
+	TesterRequired bool `json:"tester_required"`
+	// VerifyDisabled: skip the worker's self-verification before the
+	// review gate. Verification is the default; a ticket opts out at
+	// creation.
+	VerifyDisabled bool `json:"verify_disabled"`
+	// Epic is set only for an epic child.
+	Epic *EpicClaim `json:"epic,omitempty"`
+}
+
+// EpicClaim is what a worker needs to run an epic child.
+type EpicClaim struct {
+	EpicID  string `json:"epic_id"`
+	NodeKey string `json:"node_key"`
+	// BaseFallback (the run's base branch) seeds the integration ref
+	// until the first child creates it.
+	BaseFallback string `json:"base_fallback"`
+	// TesterRequired: run the tester on the pushed head and post a verdict.
+	TesterRequired     bool     `json:"tester_required"`
+	AcceptanceCommands []string `json:"acceptance_commands,omitempty"`
 }
 
 // ClaimTicket atomically claims a ticket for shemID. Exactly one concurrent
@@ -113,9 +139,10 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	if !shem.ModelCatalog().Has(ticket.ModelSelections()) {
 		return nil, fmt.Errorf("shem %s's catalog does not have every model this ticket selects", shem.Name)
 	}
-	result := h.DB.Model(&db.Ticket{}).
+	result := h.DB.Where(epicWorkerGate, shemID).Model(&db.Ticket{}).
 		Where("id = ? AND phase = 'unassigned' AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			epicGatePool+" AND "+
 			"(model_backend = '' OR model_backend = ?) AND models = ?", ticketID, shem.Backend, ticket.Models).
 		// The phase change also ends any reaped record (Ticket.BeforeUpdate),
 		// so the shem it was reaped from cannot take it from the new owner.
@@ -146,6 +173,7 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("POST /api/tickets/{id}/reclaim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reclaimTicket)))
+	mux.Handle("POST /api/tickets/{id}/tester-verdict", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.postTicketVerdict)))
 	mux.Handle("PATCH /api/tickets/{id}/phase", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updatePhase)))
 	mux.Handle("PATCH /api/tickets/{id}/checkpoint", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.updateCheckpoint)))
 }
@@ -201,9 +229,10 @@ func (h *Handlers) resumableTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var tickets []db.Ticket
-	h.DB.Where(
+	h.DB.Where(epicWorkerGate, shem.ID).Where(
 		"assigned_shem = ? AND phase NOT IN ? AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			epicGateResume,
 		shem.ID,
 		// needs-attention is excluded for the reason the phase exists: it
 		// means a run failed and a human has to look. Resuming it
@@ -240,6 +269,8 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 		Models      map[string]string `json:"models"`
 		// ManualApproval: require a human to approve the spec and the plan.
 		ManualApproval bool `json:"manual_approval"`
+		TesterRequired bool `json:"tester_required"`
+		VerifyDisabled bool `json:"verify_disabled"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -260,6 +291,8 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 		Description:    body.Description,
 		Phase:          "unassigned",
 		ManualApproval: body.ManualApproval,
+		TesterRequired: body.TesterRequired,
+		VerifyDisabled: body.VerifyDisabled,
 	}
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID
@@ -331,8 +364,9 @@ func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	repo := r.URL.Query().Get("repo")
-	query := h.DB.Where("phase = 'unassigned' AND "+
+	query := h.DB.Where(epicWorkerGate, shem.ID).Where("phase = 'unassigned' AND "+
 		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+		epicGatePool+" AND "+
 		"(model_backend = '' OR model_backend = ?)", shem.Backend)
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
@@ -391,9 +425,10 @@ func (h *Handlers) claimTicket(w http.ResponseWriter, r *http.Request) {
 // human to re-approve, exactly as resumableTickets does.
 func (h *Handlers) ReviseClaim(ticketID string, shemID uint) (*ClaimResponse, error) {
 	var ticket db.Ticket
-	result := h.DB.
+	result := h.DB.Where(epicWorkerGate, shemID).
 		Where("id = ? AND phase = 'revising' AND assigned_shem = ? AND "+
-			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))",
+			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
+			epicGateResume,
 			ticketID, shemID).
 		First(&ticket)
 	if result.Error != nil {
@@ -555,7 +590,9 @@ func (h *Handlers) writeTicketOwnership(w http.ResponseWriter, r *http.Request, 
 // flows must see no outbox activity at all.
 func enqueueGitHubPhase(tx *gorm.DB, ticket db.Ticket, phase, baseURL string) error {
 	if ticket.IssueNumber == nil {
-		return nil
+		// Unlinked epic children still need their pull request.
+		ticket.Phase = phase
+		return enqueuePRIfReady(tx, ticket)
 	}
 	// ticket must be the row as re-read inside tx after this transaction's own
 	// phase write — every caller does that — or the label's transition ordinal
@@ -643,3 +680,34 @@ func parseIDFromPath(r *http.Request) (string, error) {
 
 // strPtr returns a pointer to the given string value.
 func strPtr(v string) *string { return &v }
+
+// postTicketVerdict records the tester stage's structured verdict for a
+// standalone ticket — the ticket-level counterpart of postEpicVerdict. The
+// verdict is evidence on the ticket (visible on its detail page), never an
+// order: nothing auto-merges a standalone ticket on the strength of it.
+// Shem-authenticated, and a shem vouches only for the ticket it holds.
+func (h *Handlers) postTicketVerdict(w http.ResponseWriter, r *http.Request) {
+	var v db.TesterVerdict
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	v = db.TesterVerdict{TicketID: r.PathValue("id"), HeadSHA: v.HeadSHA, BaseSHA: v.BaseSHA,
+		Verdict: v.Verdict, Scenarios: v.Scenarios, Evidence: v.Evidence, Backend: v.Backend}
+	if v.HeadSHA == "" {
+		http.Error(w, "head_sha is required", http.StatusBadRequest)
+		return
+	}
+	var ticket db.Ticket
+	if err := h.DB.Select("id", "epic_id").First(&ticket, "id = ?", v.TicketID).Error; err != nil || ticket.EpicID != nil {
+		// Epic children report to their run's endpoint; a verdict for a
+		// ticket that does not exist, or one that belongs to a run, is not
+		// this endpoint's to record.
+		http.Error(w, errNotOwner.Error(), http.StatusConflict)
+		return
+	}
+	if !h.writeTicketOwnership(w, r, ticket.ID) {
+		return
+	}
+	writeEpicResult(w, http.StatusCreated, v, epics.RecordVerdict(h.DB, v))
+}

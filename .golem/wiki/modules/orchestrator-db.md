@@ -19,3 +19,8 @@ by `LoadFleet` (one query; offline rows count, since a catalog describes a
 machine rather than its liveness). `Backends` returns each backend's union
 catalog as a `BackendCatalog`, `Catalog` one by name, `Catalogs` all of them
 keyed by name, and `WaitingFor` why no shem can claim a ticket.
+
+Epic columns on `Ticket` (all nullable/defaulted, so pre-epic rows read as
+ordinary tickets): `EpicID`/`EpicNodeKey` (unique together), `EpicPlanRevision`,
+`EpicReady` (separate from `Phase`) and `EpicIntegratedSHA` (the receipt).
+Epic tables: `Epic`, `EpicPlanRevision`, `TesterVerdict` (append-only).

@@ -13,6 +13,7 @@ import (
 	"github.com/leonp92/golem/internal/github"
 	"github.com/leonp92/golem/internal/orchestrator/config"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/epics"
 	"gorm.io/gorm"
 )
 
@@ -77,8 +78,7 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	// abandoned work as delivered.
 	if status.State == "closed" {
 		if status.Merged {
-			return s.closeTicket(ticket,
-				fmt.Sprintf("Pull request #%d was merged.", status.Number))
+			return s.closeMergedTicket(ticket, status)
 		}
 		return s.setPhase(ticket, "needs-attention",
 			fmt.Sprintf("Pull request #%d was closed without merging. "+
@@ -91,6 +91,17 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	// still being written.
 	if ticket.Phase != "ready-for-review" {
 		return nil
+	}
+	// A child of a run that is not running cannot be revised (revise
+	// claims need state running), so nothing is dispatched or merged.
+	if ticket.EpicID != nil {
+		var e db.Epic
+		if err := s.DB.Select("state").First(&e, "id = ?", *ticket.EpicID).Error; err != nil {
+			return fmt.Errorf("load epic %s: %w", *ticket.EpicID, err)
+		}
+		if e.State != epics.StateRunning {
+			return nil
+		}
 	}
 
 	if status.Conflicted() {
@@ -135,6 +146,17 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	if len(failures) == 0 {
 		if checksErr != nil {
 			return fmt.Errorf("list checks for pull request #%d: %w", status.Number, checksErr)
+		}
+		// An epic child may be merged by the integration lane; a no-op for
+		// ordinary tickets.
+		fix, park, err := epics.MergeChild(ctx, s.DB, s.GH, repo.Owner, repo.Name, &ticket, status)
+		switch {
+		case err != nil:
+			return fmt.Errorf("epic integration lane: %w", err)
+		case fix != "":
+			return s.needsFixing(ticket, status.HeadSHA, fix)
+		case park != "":
+			return s.setPhase(ticket, "needs-attention", park)
 		}
 		return nil
 	}
@@ -333,6 +355,29 @@ func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestSt
 		}
 		return appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", seen)
 	})
+}
+
+// closeMergedTicket writes an epic child's integration receipt, then closes
+// the ticket. Receipt first: a closed ticket is never polled again, so a
+// receipt that fails must leave the ticket open for the next tick to retry.
+func (s *Syncer) closeMergedTicket(ticket db.Ticket, status github.PullRequestStatus) error {
+	switch {
+	case ticket.EpicID == nil:
+	case status.BaseRef != "" && status.BaseRef != ticket.BaseBranch:
+		log.Printf("pr monitor: epic child %s merged into %s, not %s; no receipt", ticket.ID, status.BaseRef, ticket.BaseBranch)
+	default:
+		sha := status.MergeCommitSHA
+		if sha == "" {
+			sha = status.HeadSHA
+		}
+		err := epics.RecordIntegration(s.DB, *ticket.EpicID, ticket.EpicNodeKey, sha)
+		if errors.Is(err, epics.ErrIntegrationConflict) || errors.Is(err, epics.ErrWrongState) {
+			log.Printf("pr monitor: epic receipt for %s node %s: %v", ticket.ID, ticket.EpicNodeKey, err)
+		} else if err != nil {
+			return fmt.Errorf("epic receipt for node %s: %w", ticket.EpicNodeKey, err)
+		}
+	}
+	return s.closeTicket(ticket, fmt.Sprintf("Pull request #%d was merged.", status.Number))
 }
 
 // closeTicket does everything closing a ticket by hand does, not just the

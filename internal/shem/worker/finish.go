@@ -10,6 +10,7 @@ import (
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
+	"github.com/leonp92/golem/internal/ticket"
 )
 
 // finishWorkPhase closes out an implement or revise run: it reads what the
@@ -66,6 +67,23 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			postStatus(c, ticketID, "Branch push failed, no pull request will be opened: "+pushErr.Error())
 		} else {
 			postStatus(c, ticketID, "Pushed "+branch+" to origin")
+			// An epic child's PR targets the integration ref; the first
+			// child to finish creates it. Non-fatal: a later child retries.
+			if claim.Epic != nil {
+				var baseSHA string
+				if st, err := ticket.Load(ticketDir); err == nil {
+					baseSHA = st.BranchBaseSHA
+				}
+				if baseSHA == "" {
+					postStatus(c, ticketID, "No pinned base SHA recorded; leaving the "+
+						"integration ref to another child")
+				} else if err := ensureRemoteBaseRef(ctx, repoPath, claim.RepoRemote,
+					claim.Epic.BaseFallback, claim.BaseBranch, baseSHA); err != nil {
+					postStatus(c, ticketID, "Could not create integration ref "+
+						claim.BaseBranch+": "+firstLineOf(err.Error()))
+					log.Printf("executor: ensure base ref for %s: %v", ticketID, err)
+				}
+			}
 			// Generated here, after the push and before the report, because
 			// the description is written from the branch's own diff and only
 			// this host has it. A failure is logged and the report goes out
@@ -80,6 +98,16 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			}
 			if pErr := c.PostBranchPushed(ticketID, prBody); pErr != nil {
 				log.Printf("executor: post branch-pushed: %v", pErr)
+			}
+			// After the PR report, so a slow tester never delays the PR.
+			// The tester is a ticket-level stage: it runs for any ticket
+			// that asked for it, with epics composing it by setting the
+			// flag on their children. The claim's epic-scoped flag keeps
+			// the gate when the claim comes from an orchestrator that
+			// predates the ticket-level flag; a current orchestrator
+			// already ORs the run's policy into the top-level field.
+			if claim.TesterRequired || (claim.Epic != nil && claim.Epic.TesterRequired) {
+				e.runTesterStage(ctx, c, claim, repoPath, worktree, ticketDir)
 			}
 		}
 	}

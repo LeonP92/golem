@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/leonp92/golem/internal/shem/client"
 )
@@ -66,8 +65,5 @@ func (e *GolemExecutor) runObservers(ctx context.Context, repoPath, worktree, ti
 // literal "HEAD" would make every later revision look already reviewed. As the
 // agent, since root is refused by git's ownership check on this checkout.
 func worktreeHead(ctx context.Context, worktree string) (string, error) {
-	cmd := asAgent(exec.CommandContext(ctx, "git", "rev-parse", "HEAD"))
-	cmd.Dir = worktree
-	out, err := cmd.Output()
-	return strings.TrimSpace(string(out)), err
+	return revParse(ctx, worktree, "HEAD")
 }

@@ -83,3 +83,23 @@ re-renders the panel for a chosen backend over htmx.
 
 `TicketRow.WaitingFor` carries `db.Fleet.WaitingFor` for the dashboard's
 waiting badge, filled from one fleet load per page.
+
+## Epics pages (epics.go)
+
+`GET /epics` (filter by repo and state), `GET/POST /epics/new`,
+`GET /epics/{id}` and the POST actions `revisions`, `approve`, `start`,
+`pause`, `resume`, `merge-final` under `/epics/{id}/` (session + CSRF;
+approve/start/pause/resume/merge-final need PermTicketManage). Plans are
+pasted JSON; every validation error is shown. The approve form's hidden
+revision and hash come from the stored record, so a human approves exactly
+what was shown. The plan form shows only while the run is editable. Action errors come back as `?error=` on the detail page.
+
+The detail page is also the run view: integrated/total progress (receipts,
+not closed tickets), a dependency table (blocked-by in words) with per-node
+status and a link to the child ticket, and the
+Start / Pause / Resume / Merge final PR buttons for the current state
+(Merge final only for a base-branch run with final auto-merge on).
+
+Dashboard: epic children are ordinary rows with an "epic" badge linking to
+the run ("· blocked" while waiting on dependencies); the ticket detail
+links back to the run.

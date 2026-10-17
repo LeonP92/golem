@@ -22,6 +22,17 @@ var ErrNotAvailable = errors.New("ticket not available")
 // no longer owns the ticket (e.g. after a requeue).
 var ErrNotOwner = errors.New("ticket not owned by this shem")
 
+// EpicVerdictPayload mirrors the orchestrator's verdict request body.
+type EpicVerdictPayload struct {
+	EpicNodeKey string `json:"epic_node_key"`
+	HeadSHA     string `json:"head_sha"`
+	BaseSHA     string `json:"base_sha"`
+	Verdict     string `json:"verdict"`
+	Scenarios   string `json:"scenarios"`
+	Evidence    string `json:"evidence"`
+	Backend     string `json:"backend"`
+}
+
 // LogPayload is the request body for logging.
 type LogPayload struct {
 	EntryType string `json:"entry_type"`
@@ -56,6 +67,24 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: stop after brainstorm and after plan until a human approves.
 	ManualApproval bool `json:"manual_approval"`
+	// TesterRequired: run the tester stage on the pushed head and record a
+	// structured verdict — ticket-level, set for any ticket that asks and
+	// for epic children whose run requires it.
+	TesterRequired bool `json:"tester_required"`
+	// VerifyDisabled: skip the worker's self-verification before the
+	// review gate (opt-out; verification is the default).
+	VerifyDisabled bool `json:"verify_disabled"`
+	// Epic is set only for an epic child (api.EpicClaim).
+	Epic *EpicClaim `json:"epic,omitempty"`
+}
+
+// EpicClaim mirrors api.EpicClaim.
+type EpicClaim struct {
+	EpicID             string   `json:"epic_id"`
+	NodeKey            string   `json:"node_key"`
+	BaseFallback       string   `json:"base_fallback"`
+	TesterRequired     bool     `json:"tester_required"`
+	AcceptanceCommands []string `json:"acceptance_commands,omitempty"`
 }
 
 // PendingInput represents a pending human input.
@@ -147,8 +176,9 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 // Register registers this shem and reports the backend it runs.
 func (c *Client) Register(name string, repos []string, backend string, catalog models.Catalog) (uint, error) {
 	body := map[string]any{
-		"name":  name,
-		"repos": repos,
+		"supports_epics": true,
+		"name":           name,
+		"repos":          repos,
 		"backend": map[string]any{
 			"name":    backend,
 			"catalog": catalog,
@@ -618,4 +648,40 @@ func (c *Client) PostGraphBuildResult(repoRemote, buildErr string) error {
 		return fmt.Errorf("post graph build result: unexpected status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// PostEpicVerdict records the tester stage's structured verdict for one
+// merge candidate. The orchestrator validates the shape; the lane still
+// matches the head SHA before it merges, so a verdict here is evidence,
+// never an order.
+func (c *Client) PostEpicVerdict(epicID string, v EpicVerdictPayload) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/verdicts", epicID), v)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return statusError(resp)
+}
+
+// TicketVerdictPayload is the standalone-ticket counterpart of
+// EpicVerdictPayload: the same structured verdict without the epic node
+// key, because the ticket itself is the scope.
+type TicketVerdictPayload struct {
+	HeadSHA   string `json:"head_sha"`
+	BaseSHA   string `json:"base_sha"`
+	Verdict   string `json:"verdict"`
+	Scenarios string `json:"scenarios"`
+	Evidence  string `json:"evidence"`
+	Backend   string `json:"backend"`
+}
+
+// PostTicketVerdict records the tester stage's structured verdict for a
+// standalone ticket. It is evidence on the ticket, never an order.
+func (c *Client) PostTicketVerdict(ticketID string, v TicketVerdictPayload) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/tester-verdict", ticketID), v)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return statusError(resp)
 }

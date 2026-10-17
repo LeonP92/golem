@@ -271,6 +271,7 @@ func main() {
 	// loud log message, not a silent no-op, and a missing token never
 	// prevents the rest of the orchestrator from serving.
 	var ghWorker *ghsync.Worker
+	var ghClient github.Client
 	// Validated eagerly, and fatally: a trigger label inside the golem:*
 	// namespace is stripped from the issue on its first phase change, which
 	// un-enrols it from the very label that enrolled it. The settings form
@@ -306,6 +307,7 @@ func main() {
 		if err != nil {
 			log.Printf("ERROR github sync: client init failed, sync DISABLED: %v", err)
 		} else {
+			ghClient = client
 			syncer := ghsync.NewSyncer(gdb, client)
 			// How the pull-request monitor tells a shem it has work. Same
 			// message the human "request changes" button sends, because it
@@ -346,6 +348,9 @@ func main() {
 	// the interface itself nil whenever sync isn't running.
 	if ghWorker != nil {
 		srv.Sync = ghWorker
+	}
+	if ghClient != nil {
+		srv.GH = ghClient
 	}
 	addr := fmt.Sprintf(":%d", cfg.ListenPort())
 	if secureCookie {

@@ -118,6 +118,9 @@ func gatedPhase(ctx context.Context, c approvalAPI, ticketID string, manual bool
 			status("Changes requested — running this phase again")
 			continue
 		}
+		if out == approvalGranted {
+			status("Approved by a human — continuing") // evidence for the reviewer
+		}
 		return out, nil
 	}
 }

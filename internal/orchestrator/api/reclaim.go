@@ -14,7 +14,8 @@ import (
 // gate ClaimTicket applies: a GitHub ticket whose issue body changed after
 // approval must not go back to work on the strength of the old approval.
 const reclaimablePredicate = "reaped_from_shem = ? AND phase = 'unassigned' AND assigned_shem IS NULL AND " +
-	"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash))"
+	"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND " +
+	epicGateResume
 
 // reapedTickets lists the tickets the reaper released from the calling shem.
 // The shem intersects this with what it is still running and reclaims those.
@@ -25,7 +26,7 @@ const reclaimablePredicate = "reaped_from_shem = ? AND phase = 'unassigned' AND 
 func (h *Handlers) reapedTickets(w http.ResponseWriter, r *http.Request) {
 	shem := auth.ShemFromRequest(r)
 	var tickets []db.Ticket
-	if err := h.DB.Where(reclaimablePredicate, shem.ID).Select("id").Find(&tickets).Error; err != nil {
+	if err := h.DB.Where(epicWorkerGate, shem.ID).Where(reclaimablePredicate, shem.ID).Select("id").Find(&tickets).Error; err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -53,7 +54,7 @@ func (h *Handlers) reclaimTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	shem := auth.ShemFromRequest(r)
-	result := h.DB.Model(&db.Ticket{}).
+	result := h.DB.Where(epicWorkerGate, shem.ID).Model(&db.Ticket{}).
 		Where("id = ? AND "+reclaimablePredicate, id, shem.ID).
 		Updates(map[string]any{
 			"phase":             gorm.Expr("reaped_from_phase"),

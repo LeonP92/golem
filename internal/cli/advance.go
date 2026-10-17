@@ -11,7 +11,6 @@ import (
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
-	"github.com/leonp92/golem/internal/gate"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/ticket"
 )
@@ -98,6 +97,13 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	logPath := filepath.Join(ticketDir, "log.jsonl")
+	// The gate runs first so the reviewer reads its evidence in the log.
+	gateResult, err := runTicketGate(cfg, s, ticketDir, "gate", "gate evidence")
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+
 	entries, err := blog.ReadAll(logPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "reading log: %v\n", err)
@@ -114,17 +120,20 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	var diff string
-	if *base != "" {
-		if diff, err = reviewDiff(s.WorktreePath, *base, "HEAD", stderr); err != nil {
-			fmt.Fprintf(stderr, "getting branch diff: %v\n", err)
-			return 1
-		}
+	// Review the whole branch: from the pinned base, else --base.
+	from := s.BranchBaseSHA
+	if from == "" {
+		from = *base
+	}
+	diff, err := reviewDiff(s.WorktreePath, from, "HEAD", stderr)
+	if err != nil {
+		fmt.Fprintf(stderr, "getting branch diff: %v\n", err)
+		return 1
 	}
 	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
 		Diff:       diff,
-		RolePrompt: string(rolePrompt),
+		RolePrompt: string(rolePrompt) + reviewerVerdictContract, // the contract must not depend on an editable role file
 	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running reviewer: %v\n", err)
@@ -145,13 +154,12 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	}
 	closeLogWriter(w, stderr)
 
-	gateResult, err := gate.Run(s.WorktreePath, cfg.Gate)
-	if err != nil {
-		fmt.Fprintf(stderr, "running gate: %v\n", err)
-		return 1
-	}
+	// A reviewer FAIL blocks the ticket like a failing gate. A missing
+	// verdict blocks only tickets with acceptance commands (epic children,
+	// which may auto-merge); other tickets keep the gate-only rule.
+	pass, found := parseReviewerVerdict(result.Output)
 	s.Phase = ticket.PhaseReadyForReview
-	if !gateResult.Passed {
+	if !gateResult.Passed || (found && !pass) || (!found && len(s.AcceptanceCommands) > 0) {
 		s.Phase = ticket.PhaseNeedsAttention
 	}
 	if err := s.Save(ticketDir); err != nil {

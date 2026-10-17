@@ -24,6 +24,9 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	fromIssue := fs.Int("from-issue", 0, "create the ticket from GitHub issue <n>, using its title and body as the description")
 	backendConfig := fs.String("backend-config", "", "path to a backend config document")
 	backend := fs.String("backend", "", "registered adapter name")
+	base := fs.String("base", "", "ref or commit the worktree starts from, pinned to its exact commit")
+	var accept stringList
+	fs.Var(&accept, "accept", "acceptance command the gate runs after gate.commands (repeatable)")
 	if err := fs.Parse(args); err != nil {
 		return 1
 	}
@@ -84,7 +87,18 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		s.IssueNumber = issueNumber
 		s.IssueURL = issueURL
 	}
-	worktreePath, err := workspace.Create(*repo, *id, workingBranch, "HEAD")
+	// --base pins the worktree to the exact commit the ref names now, so a
+	// moving ref cannot shift the start under the ticket.
+	baseRef, pinnedSHA := "HEAD", ""
+	if *base != "" {
+		sha, err := revSHA(*repo, *base)
+		if err != nil {
+			fmt.Fprintf(stderr, "resolving worktree base: %q is not a commit: %v\n", *base, err)
+			return 1
+		}
+		baseRef, pinnedSHA = sha, sha
+	}
+	worktreePath, err := workspace.Create(*repo, *id, workingBranch, baseRef)
 	if err != nil {
 		fmt.Fprintf(stderr, "creating worktree: %v\n", err)
 		return 1
@@ -95,6 +109,8 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	}
 	s.Branch = workingBranch
 	s.WorktreePath = worktreePath
+	s.BranchBaseSHA = pinnedSHA
+	s.AcceptanceCommands = accept
 
 	ticketDir := filepath.Join(*repo, ".golem", "tickets", *id)
 	if err := s.Save(ticketDir); err != nil {
@@ -116,3 +132,9 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 	fmt.Fprintf(stdout, "created ticket %s on branch %s\n", *id, workingBranch)
 	return 0
 }
+
+// stringList is a repeatable string flag.
+type stringList []string
+
+func (l *stringList) String() string     { return strings.Join(*l, ", ") }
+func (l *stringList) Set(v string) error { *l = append(*l, v); return nil }

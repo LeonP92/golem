@@ -28,8 +28,13 @@ type Fake struct {
 	// PRStatuses and FailedChecks drive the pull-request monitor. Both are
 	// keyed so a test can set up one unhealthy pull request without having
 	// to describe every other one: an absent entry means healthy.
-	PRStatuses   map[int]PullRequestStatus
+	PRStatuses map[int]PullRequestStatus
+	// MergeErr makes MergePullRequest return this error for the number,
+	// ahead of every other check.
+	MergeErr     map[int]error
 	FailedChecks map[string][]CheckFailure
+	// DraftByHead records the draft flag each PR was opened with.
+	DraftByHead map[string]bool
 
 	// prByHead indexes PRs by head branch, so CreatePullRequest can refuse a
 	// second pull request from the same branch the way GitHub does (422) and
@@ -238,9 +243,13 @@ func (f *Fake) CommentsFor(number int) []string {
 // a pull request: it refuses with ErrPullRequestUnprocessable rather than
 // opening a second one. That is the 422 a redelivered outbox row provokes,
 // and modelling it here is what lets the suite see finding I2 at all.
-func (f *Fake) CreatePullRequest(_ context.Context, _, _, head, _, _, _ string, _ bool) (PullRequest, error) {
+func (f *Fake) CreatePullRequest(_ context.Context, _, _, head, _, _, _ string, draft bool) (PullRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.DraftByHead == nil {
+		f.DraftByHead = map[string]bool{}
+	}
+	f.DraftByHead[head] = draft
 	if err := f.record("CreatePullRequest"); err != nil {
 		return PullRequest{}, err
 	}
@@ -291,6 +300,39 @@ func (f *Fake) GetPullRequest(_ context.Context, _, _ string, number int) (PullR
 		Number: number, State: "open", Mergeable: &mergeable,
 		MergeableState: "clean", HeadSHA: "headsha", BaseRef: "main",
 	}, nil
+}
+
+// MergePullRequest applies the same contract as the real client: the
+// pinned head must match, and a number with no recorded status answers as
+// an open clean pull request. A test controls refusal by setting
+// MergeErr or a mismatched PRStatuses[number].HeadSHA.
+func (f *Fake) MergePullRequest(_ context.Context, _, _ string, number int, expectedHeadSHA string) (string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if err := f.record("MergePullRequest"); err != nil {
+		return "", err
+	}
+	// MergeErr forces the refusal a test needs — branch protection on an
+	// open pull request cannot be expressed through PRStatuses, because a
+	// closed one is rejected before the merge call.
+	if err := f.MergeErr[number]; err != nil {
+		return "", err
+	}
+	st, ok := f.PRStatuses[number]
+	if !ok {
+		st = PullRequestStatus{Number: number, State: "open", HeadSHA: "headsha"}
+	}
+	if st.HeadSHA != expectedHeadSHA {
+		return "", fmt.Errorf("%w: head is %s, merge pinned to %s", ErrMergeConflictHead, st.HeadSHA, expectedHeadSHA)
+	}
+	if st.State != "open" {
+		return "", fmt.Errorf("%w: pull request is %s", ErrMergeForbidden, st.State)
+	}
+	sha := st.MergeCommitSHA
+	if sha == "" {
+		sha = "mergesha"
+	}
+	return sha, nil
 }
 
 func (f *Fake) ListFailedChecks(_ context.Context, _, _, ref string) ([]CheckFailure, error) {

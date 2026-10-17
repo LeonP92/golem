@@ -9,22 +9,22 @@ import (
 	"testing"
 
 	"github.com/leonp92/golem/internal/orchestrator/api"
-	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 )
 
-func postAction(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, id, action string) int {
+// postAction POSTs payload to /api/tickets/{id}/actions with the session
+// cookie and returns the response recorder.
+func postAction(t *testing.T, mux *http.ServeMux, cookie *http.Cookie, id string, payload any) *httptest.ResponseRecorder {
 	t.Helper()
-	body, _ := json.Marshal(map[string]string{"action": action})
+	body, _ := json.Marshal(payload)
 	req := httptest.NewRequest(http.MethodPost,
 		fmt.Sprintf("/api/tickets/%s/actions", id), bytes.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(cookie)
-	req.Header.Set(auth.CSRFHeader, auth.CSRFTokenForSession(cookie.Value))
+	withSession(req, cookie)
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
-	return w.Code
+	return w
 }
 
 // A human can interrupt a shem at any point, and the ticket then stays
@@ -50,8 +50,8 @@ func TestStopAndResume(t *testing.T) {
 		t.Fatalf("create ticket: %v", err)
 	}
 
-	if code := postAction(t, mux, cookie, tk.ID, "stop"); code != http.StatusNoContent {
-		t.Fatalf("stop = %d, want 204", code)
+	if w := postAction(t, mux, cookie, tk.ID, map[string]string{"action": "stop"}); w.Code != http.StatusNoContent {
+		t.Fatalf("stop = %d, want 204", w.Code)
 	}
 	var stopped db.Ticket
 	h.DB.First(&stopped, "id = ?", tk.ID)
@@ -88,8 +88,8 @@ func TestStopAndResume(t *testing.T) {
 	}
 
 	// Only a human brings it back, and it returns where it left off.
-	if code := postAction(t, mux, cookie, tk.ID, "resume"); code != http.StatusNoContent {
-		t.Fatalf("resume = %d, want 204", code)
+	if w := postAction(t, mux, cookie, tk.ID, map[string]string{"action": "resume"}); w.Code != http.StatusNoContent {
+		t.Fatalf("resume = %d, want 204", w.Code)
 	}
 	var resumed db.Ticket
 	h.DB.First(&resumed, "id = ?", tk.ID)
@@ -110,7 +110,7 @@ func TestResumeOnlyFromStopped(t *testing.T) {
 	if err := h.DB.Create(&tk).Error; err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if code := postAction(t, mux, cookie, tk.ID, "resume"); code == http.StatusNoContent {
+	if w := postAction(t, mux, cookie, tk.ID, map[string]string{"action": "resume"}); w.Code == http.StatusNoContent {
 		t.Error("resume succeeded on a ticket that was not stopped")
 	}
 }
@@ -128,7 +128,7 @@ func TestStopRejectsTerminalPhases(t *testing.T) {
 		if err := h.DB.Create(&tk).Error; err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if code := postAction(t, mux, cookie, tk.ID, "stop"); code == http.StatusNoContent {
+		if w := postAction(t, mux, cookie, tk.ID, map[string]string{"action": "stop"}); w.Code == http.StatusNoContent {
 			t.Errorf("stop succeeded on a %s ticket", phase)
 		}
 	}
@@ -159,8 +159,8 @@ func TestStoppedTicketRejectsShemPhaseUpdates(t *testing.T) {
 	if err := h.DB.Create(&tk).Error; err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if code := postAction(t, mux, cookie, tk.ID, "stop"); code != http.StatusNoContent {
-		t.Fatalf("stop = %d", code)
+	if w := postAction(t, mux, cookie, tk.ID, map[string]string{"action": "stop"}); w.Code != http.StatusNoContent {
+		t.Fatalf("stop = %d", w.Code)
 	}
 
 	// The shem, unaware, reports the phase it had moved on to.

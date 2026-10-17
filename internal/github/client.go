@@ -95,6 +95,9 @@ type Client interface {
 	// reads: whether the branch still merges, whether CI is green, and
 	// whether the pull request is still open at all.
 	GetPullRequest(ctx context.Context, owner, repo string, number int) (PullRequestStatus, error)
+	// MergePullRequest merges pinned to expectedHeadSHA (a moved head is
+	// refused) and returns the merge commit SHA.
+	MergePullRequest(ctx context.Context, owner, repo string, number int, expectedHeadSHA string) (string, error)
 	ListFailedChecks(ctx context.Context, owner, repo, ref string) ([]CheckFailure, error)
 }
 
