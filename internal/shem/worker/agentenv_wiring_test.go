@@ -11,10 +11,10 @@ import (
 func TestAsGolemCLICarriesGatePolicyWithoutGolemSecrets(t *testing.T) {
 	t.Setenv("GOLEM_GITHUB_TOKEN", "ghp_must_not_reach_the_agent")
 	t.Setenv("GOLEM_SHEM_API_KEY", "must-not-reach-the-agent")
-	t.Setenv("GOLEM_AGENT_ENV", "SIREN_TEST_DATABASE_URL")
+	t.Setenv("GOLEM_AGENT_ENV", "APP_TEST_DATABASE_URL")
 	t.Setenv("ORCHESTRATOR_DB", "/data/orchestrator.db")
 	t.Setenv("ANTHROPIC_API_KEY", "sk-the-agent-needs-this")
-	t.Setenv("SIREN_TEST_DATABASE_URL", "postgres://siren@localhost/siren_test")
+	t.Setenv("APP_TEST_DATABASE_URL", "postgres://app@localhost/app_test")
 
 	cmd := asGolemCLI(exec.Command("golem", "ticket", "review"))
 	if cmd.Env == nil {
@@ -23,14 +23,14 @@ func TestAsGolemCLICarriesGatePolicyWithoutGolemSecrets(t *testing.T) {
 	var sawKey bool
 	var sawPolicy, sawDatabaseURL bool
 	for _, kv := range cmd.Env {
-		if (strings.HasPrefix(kv, "GOLEM_") && kv != "GOLEM_AGENT_ENV=SIREN_TEST_DATABASE_URL") ||
+		if (strings.HasPrefix(kv, "GOLEM_") && kv != "GOLEM_AGENT_ENV=APP_TEST_DATABASE_URL") ||
 			strings.HasPrefix(kv, "ORCHESTRATOR_DB=") {
 			t.Errorf("the nested command environment carries %q", kv)
 		}
-		if kv == "GOLEM_AGENT_ENV=SIREN_TEST_DATABASE_URL" {
+		if kv == "GOLEM_AGENT_ENV=APP_TEST_DATABASE_URL" {
 			sawPolicy = true
 		}
-		if kv == "SIREN_TEST_DATABASE_URL=postgres://siren@localhost/siren_test" {
+		if kv == "APP_TEST_DATABASE_URL=postgres://app@localhost/app_test" {
 			sawDatabaseURL = true
 		}
 		if kv == "ANTHROPIC_API_KEY=sk-the-agent-needs-this" {

@@ -92,7 +92,7 @@ func assertGolemRules(t *testing.T, p parsedSettings) {
 	}
 }
 
-// The case that broke Siren: the committed file grants the project's gate
+// The committed file grants the project's gate
 // scripts and carries other fields; a ticket worktree must keep all of it.
 func TestSettingsWritersPreserveCommittedSettings(t *testing.T) {
 	committed := `{
