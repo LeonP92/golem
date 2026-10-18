@@ -108,7 +108,33 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 	// Determine starting phase and ensure the ticket exists locally.
 	startPhase := "brainstorm"
-	if claim.CheckpointPhase != nil {
+	if claim.RetryPhase != "" {
+		postStatus(c, ticketID, "Retrying "+claim.RetryPhase+" from the saved branch checkpoint")
+		startPhase = retryWorkerPhase(claim.RetryPhase)
+		if startPhase == "" {
+			return fmt.Errorf("unsupported retry phase %q", claim.RetryPhase)
+		}
+		if claim.CheckpointPhase != nil && claim.CheckpointSHA != nil {
+			recoveryClaim := *claim
+			if startPhase == "revising" {
+				recoveryClaim.CheckpointPhase = &startPhase
+			}
+			if err := RecoverTicketForRetry(ctx, &recoveryClaim, cfg, e.Agent.Adapter.WorktreeSetup); err != nil {
+				return fmt.Errorf("retry recovery failed: %w", err)
+			}
+		}
+		if startPhase != "revising" {
+			if err := runGolemAdvance(ctx, repoPath, ticketID, startPhase); err != nil {
+				return fmt.Errorf("restore local ticket phase for retry: %w", err)
+			}
+		}
+		if err := c.PostPhase(ticketID, startPhase); err != nil {
+			if errors.Is(err, client.ErrNotOwner) {
+				return nil
+			}
+			return fmt.Errorf("set retry phase: %w", err)
+		}
+	} else if claim.CheckpointPhase != nil {
 		postStatus(c, ticketID, "Resuming from checkpoint: "+*claim.CheckpointPhase)
 		if err := RecoverTicket(ctx, claim, cfg, e.Agent.Adapter.WorktreeSetup); err != nil {
 			return fmt.Errorf("recovery failed: %w", err)
@@ -175,7 +201,10 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		case "implement":
 			model := e.claimModel(c, claim, models.StageImplement)
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "implement")
-			if err := e.runPhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), ticketDir, "implement", model); err != nil {
+			postCurrentHeadCheckpoint(ctx, c, ticketID, "implement", filepath.Join(ticketDir, "worktree"))
+			feedback := consumeFeedback(ctx, c, ticketID)
+			prompt := withHumanFeedback(buildImplementPrompt(ticketID, claim.Branch, claim.Description), feedback)
+			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "implement", model); err != nil {
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
@@ -188,6 +217,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			postCurrentHeadCheckpoint(ctx, c, ticketID, "revising", filepath.Join(ticketDir, "worktree"))
 			// Make origin/<base> current before the agent runs. A revision
 			// asked for by the pull-request monitor may be "this no longer
 			// merges into main", and the fix is `git merge origin/main` —
@@ -474,6 +504,31 @@ func consumeFeedback(ctx context.Context, c *client.Client, ticketID string) str
 	return fb.Prompt
 }
 
+func retryWorkerPhase(phase string) string {
+	switch phase {
+	case "brainstorm", "plan", "implement", "revising":
+		return phase
+	default:
+		return ""
+	}
+}
+
+func withHumanFeedback(prompt, feedback string) string {
+	if strings.TrimSpace(feedback) == "" {
+		return prompt
+	}
+	return prompt + "\n\nHuman retry feedback:\n" + feedback
+}
+
+func postCurrentHeadCheckpoint(ctx context.Context, c *client.Client, ticketID, phase, worktree string) {
+	sha, err := revParse(ctx, worktree, "HEAD")
+	if err != nil {
+		log.Printf("executor: checkpoint %s at %s: %v", ticketID, phase, err)
+		return
+	}
+	PostCheckpointWithRetry(c, ticketID, phase, sha, 5) //nolint:errcheck
+}
+
 // postDocumentEntry streams filePath to the orchestrator as a document log entry.
 // If the file is missing or empty it is a no-op.
 func postDocumentEntry(c *client.Client, ticketID string, entryType, filePath string) {
@@ -543,6 +598,7 @@ func (e *GolemExecutor) runDesignPhase(ctx context.Context, c *client.Client,
 			return nil
 		})
 	if gErr != nil {
+		postCurrentHeadCheckpoint(ctx, c, ticketID, dp.name, filepath.Join(ticketDir, "worktree"))
 		return false, gErr
 	}
 	if out == approvalGone {

@@ -29,11 +29,18 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 
 	localPhase, sha, stateErr := readState(ticketDir)
 	orchPhase := toOrchestratorPhase(localPhase)
+	worktree := filepath.Join(ticketDir, "worktree")
+	if sha == "" {
+		// State files do not carry a commit SHA. Capture the actual branch head
+		// so a human retry can reconstruct this exact worktree on another shem.
+		if head, err := revParse(ctx, worktree, "HEAD"); err == nil {
+			sha = head
+		}
+	}
 
-	// Written either way, and before the early return: the checkpoint is what
-	// lets a requeue resume this phase instead of starting the ticket over
-	// from brainstorm.
-	if sha != "" {
+	// Written either way, and before the early return: the checkpoint lets an
+	// explicit retry resume this phase instead of starting from brainstorm.
+	if sha != "" && localPhase != "" {
 		PostCheckpointWithRetry(c, ticketID, localPhase, sha, 5) //nolint:errcheck
 	}
 
@@ -59,8 +66,6 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 	}
 
 	postStatus(c, ticketID, what+" complete — ready for review")
-	worktree := filepath.Join(ticketDir, "worktree")
-
 	if !cfg.NoPush && !strings.HasPrefix(claim.RepoRemote, "local://") {
 		if pushErr := pushTicketBranch(ctx, repoPath, worktree, branch, claim.RepoRemote); pushErr != nil {
 			if claim.Epic != nil {

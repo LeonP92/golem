@@ -102,6 +102,7 @@ func TestClaimTicket_HTTPEndpoint(t *testing.T) {
 		Branch:      "ticket/claim",
 		Description: "claim test",
 		Phase:       "unassigned",
+		RetryPhase:  "implement",
 	}
 	h.DB.Create(&ticket)
 
@@ -124,6 +125,13 @@ func TestClaimTicket_HTTPEndpoint(t *testing.T) {
 	}
 	if updated.AssignedShem == nil || *updated.AssignedShem != shem.ID {
 		t.Errorf("expected assigned_shem=%d, got %v", shem.ID, updated.AssignedShem)
+	}
+	var claim api.ClaimResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &claim); err != nil {
+		t.Fatalf("decode claim response: %v", err)
+	}
+	if claim.RetryPhase != "implement" {
+		t.Errorf("retry_phase = %q, want implement", claim.RetryPhase)
 	}
 }
 
@@ -151,6 +159,33 @@ func TestUpdatePhase(t *testing.T) {
 
 	if w.Code != http.StatusNoContent {
 		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestUpdatePhaseNeedsAttentionCapturesPreviousPhase(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	shem := seedShem(t, h, "attention-shem", "attentionkey")
+	ticket := db.Ticket{RepoRemote: "https://github.com/org/attention", Branch: "ticket/attention",
+		Description: "attention test", Phase: "implement", AssignedShem: &shem.ID}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]string{"phase": "needs-attention"})
+	req := httptest.NewRequest(http.MethodPatch, "/api/tickets/"+ticket.ID+"/phase", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer attentionkey")
+	req.Header.Set("X-Shem-Name", "attention-shem")
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("status = %d: %s", w.Code, w.Body.String())
+	}
+	var got db.Ticket
+	if err := h.DB.First(&got, "id = ?", ticket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "needs-attention" || got.RetryPhase != "implement" {
+		t.Errorf("phase/retry_phase = %q/%q, want needs-attention/implement", got.Phase, got.RetryPhase)
 	}
 }
 

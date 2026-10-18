@@ -528,6 +528,37 @@ func TestTicketDetailSuppressesRequeueOnlyForPendingApproval(t *testing.T) {
 	}
 }
 
+func TestTicketDetailOffersCurrentStepRetryOnlyWithCheckpoint(t *testing.T) {
+	for _, withCheckpoint := range []bool{false, true} {
+		t.Run(fmt.Sprintf("checkpoint-%v", withCheckpoint), func(t *testing.T) {
+			gdb, err := db.Open(":memory:")
+			if err != nil {
+				t.Fatalf("db.Open: %v", err)
+			}
+			ticket := db.Ticket{ID: "retry-ticket", RepoRemote: "https://github.com/org/repo",
+				Title: "t", Branch: "ticket/x", Description: "d", Phase: "needs-attention"}
+			if withCheckpoint {
+				phase, sha := "needs-attention", "abc123"
+				ticket.RetryPhase = "implement"
+				ticket.CheckpointPhase, ticket.CheckpointSHA = &phase, &sha
+			}
+			if err := gdb.Create(&ticket).Error; err != nil {
+				t.Fatalf("seed ticket: %v", err)
+			}
+			cookie := adminCookie(t, gdb)
+			mux := uiMux(t, gdb)
+			w := getWithSession(t, mux, cookie, "/tickets/"+ticket.ID)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+			}
+			got := strings.Contains(w.Body.String(), `name="action" value="retry-current-step"`)
+			if got != withCheckpoint {
+				t.Errorf("retry control present = %v, want %v", got, withCheckpoint)
+			}
+		})
+	}
+}
+
 // TestDashboardShowsIssueBadgeForLinkedTicket guards the ticket_row partial:
 // its dot context is ui.TicketRow (with a nested .Ticket), so the badge must
 // reference .Ticket.IssueNumber/.Ticket.IssueURL, not a bare .IssueNumber —

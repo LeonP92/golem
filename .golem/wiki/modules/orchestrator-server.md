@@ -17,6 +17,7 @@ UI action endpoints (`internal/orchestrator/api/human.go`):
 - `POST /api/tickets/{id}/approve` — resolves oldest `approval` HumanInput, advances brainstorm→plan or plan→implement, pushes WS `human_input_resolved`
 - `POST /api/tickets/{id}/answer` — resolves a `question_answer` by `input_id`, writes `ANSWER` log, pushes WS + SSE
 - `POST /api/tickets/{id}/requeue` — transitions `needs-attention→unassigned`, clears assigned shem, broadcasts `ticket_available`
+- `POST /api/tickets/{id}/actions` with `retry-current-step` — transitions a checkpointed `needs-attention` ticket to `unassigned`, retains its retry phase and branch checkpoint, and broadcasts `ticket_available`; optional human feedback is queued for the worker.
 - `POST /api/tickets/{id}/close` — transitions `ready-for-review→closed`
 - `POST /api/tickets/{id}/needs-attention` — manually flags any ticket as `needs-attention`
 

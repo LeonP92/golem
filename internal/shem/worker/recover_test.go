@@ -116,6 +116,101 @@ func TestReconstructState_EmptyLogs(t *testing.T) {
 	}
 }
 
+func TestRecoverTicketForRetryKeepsDirtyWorktree(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.txt")
+	runGit("commit", "-m", "base")
+	sha := runGit("rev-parse", "HEAD")
+	branch := "ticket/retry"
+	runGit("branch", branch)
+	ticketDir := filepath.Join(repo, ".golem", "tickets", "retry-ticket")
+	worktree := filepath.Join(ticketDir, "worktree")
+	runGit("worktree", "add", worktree, branch)
+	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte("uncommitted work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	phase := "needs-attention"
+	claim := &client.ClaimResponse{TicketID: "retry-ticket", Branch: branch, RepoRemote: "test-remote",
+		CheckpointPhase: &phase, CheckpointSHA: &sha}
+	cfg := &config.Config{Repos: []config.RepoConfig{{Path: repo, Remote: repo, NormalizedRemote: claim.RepoRemote}}}
+	if err := worker.RecoverTicketForRetry(context.Background(), claim, cfg, nil); err != nil {
+		t.Fatalf("RecoverTicketForRetry: %v", err)
+	}
+	got, err := os.ReadFile(filepath.Join(worktree, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "uncommitted work\n" {
+		t.Errorf("retry discarded in-progress worktree edits: %q", got)
+	}
+}
+
+func TestRecoverTicketForRetryRefusesWrongBranchWithoutResetting(t *testing.T) {
+	repo := t.TempDir()
+	runGit := func(args ...string) string {
+		t.Helper()
+		cmd := exec.Command("git", args...)
+		cmd.Dir = repo
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v: %v\n%s", args, err, out)
+		}
+		return strings.TrimSpace(string(out))
+	}
+	runGit("init")
+	runGit("config", "user.email", "test@example.com")
+	runGit("config", "user.name", "Test")
+	if err := os.WriteFile(filepath.Join(repo, "tracked.txt"), []byte("committed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit("add", "tracked.txt")
+	runGit("commit", "-m", "base")
+	sha := runGit("rev-parse", "HEAD")
+	branch := "ticket/retry"
+	runGit("branch", branch)
+	otherBranch := "ticket/other"
+	runGit("branch", otherBranch)
+	ticketDir := filepath.Join(repo, ".golem", "tickets", "retry-ticket")
+	worktree := filepath.Join(ticketDir, "worktree")
+	runGit("worktree", "add", worktree, otherBranch)
+	if err := os.WriteFile(filepath.Join(worktree, "tracked.txt"), []byte("uncommitted work\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	phase := "implement"
+	claim := &client.ClaimResponse{TicketID: "retry-ticket", Branch: branch, RepoRemote: "test-remote",
+		CheckpointPhase: &phase, CheckpointSHA: &sha}
+	cfg := &config.Config{Repos: []config.RepoConfig{{Path: repo, Remote: repo, NormalizedRemote: claim.RepoRemote}}}
+	err := worker.RecoverTicketForRetry(context.Background(), claim, cfg, nil)
+	if err == nil || !strings.Contains(err.Error(), "refusing to reset") {
+		t.Fatalf("RecoverTicketForRetry error = %v, want refusal to reset wrong-branch worktree", err)
+	}
+	got, err := os.ReadFile(filepath.Join(worktree, "tracked.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "uncommitted work\n" {
+		t.Errorf("wrong-branch retry altered existing worktree edits: %q", got)
+	}
+}
+
 // TestRecoverTicket_UsesClaimBranch verifies that RecoverTicket creates the
 // worktree on claim.Branch (the server-computed slug branch), not a
 // re-derived "ticket/<id>" name.

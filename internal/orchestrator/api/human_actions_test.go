@@ -347,6 +347,57 @@ func TestNeedsAttentionTicket(t *testing.T) {
 	if got.Phase != "needs-attention" {
 		t.Errorf("expected phase=needs-attention, got %q", got.Phase)
 	}
+	if got.RetryPhase != "implement" {
+		t.Errorf("retry phase = %q, want the phase that was active", got.RetryPhase)
+	}
+}
+
+func TestRetryCurrentStepPreservesCheckpointAndQueuesFeedback(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+	shemID := uint(99)
+	phase, sha := "needs-attention", "abc123"
+	ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "needs-attention",
+		AssignedShem: &shemID, RetryPhase: "implement", CheckpointPhase: &phase, CheckpointSHA: &sha}
+	if err := h.DB.Create(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{
+		"action": "retry-current-step", "feedback": "keep the existing implementation and fix the failing test",
+	})
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204, got %d: %s", w.Code, w.Body.String())
+	}
+	var got db.Ticket
+	if err := h.DB.First(&got, "id = ?", ticket.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "unassigned" || got.AssignedShem != nil {
+		t.Errorf("phase/owner = %q/%v, want unassigned/unassigned", got.Phase, got.AssignedShem)
+	}
+	if got.RetryPhase != "implement" || got.CheckpointPhase == nil || *got.CheckpointPhase != phase || got.CheckpointSHA == nil || *got.CheckpointSHA != sha {
+		t.Errorf("retry checkpoint was not preserved: %+v", got)
+	}
+	var input db.HumanInput
+	if err := h.DB.Where("ticket_id = ? AND kind = 'feedback' AND resolved_at IS NULL", ticket.ID).First(&input).Error; err != nil {
+		t.Fatalf("pending retry feedback: %v", err)
+	}
+	if input.Prompt != "keep the existing implementation and fix the failing test" {
+		t.Errorf("feedback = %q", input.Prompt)
+	}
+}
+
+func TestRetryCurrentStepRequiresSavedCheckpoint(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+	ticket := seedActionTicket(t, h, "needs-attention")
+	ticket.RetryPhase = "implement"
+	if err := h.DB.Save(&ticket).Error; err != nil {
+		t.Fatal(err)
+	}
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "retry-current-step"})
+	if w.Code != http.StatusConflict {
+		t.Fatalf("expected 409 without a checkpoint, got %d: %s", w.Code, w.Body.String())
+	}
 }
 
 // TestRequestApproval_CreatesHumanInput verifies POST /api/tickets/{id}/request-approval

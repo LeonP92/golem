@@ -6,6 +6,8 @@ Package `internal/orchestrator/db` defines GORM model structs for all six orches
 
 `Ticket` also tracks `CreatedByUserID *uint` (nullable, indexed, references `User.ID`), set from the session user at creation time by the API and UI handlers. `CreatorNames(gdb *gorm.DB, tickets []Ticket) map[uint]string` resolves a batch of tickets' `CreatedByUserID` to usernames in a single query, for use by list/detail endpoints and templates that need to render "created by X" without an N+1 lookup.
 
+`Ticket.RetryPhase` records the worker phase that was active when a ticket moved to `needs-attention`. `PhaseUpdates` captures that phase on the transition and clears stale retry state on other phase changes; the human retry action consumes it while retaining the saved checkpoint.
+
 ## Model selection
 
 `Ticket.Models` (JSON selections) and `Ticket.ModelBackend` (the backend its

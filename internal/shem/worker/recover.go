@@ -68,6 +68,43 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 	return nil
 }
 
+// RecoverTicketForRetry keeps an existing worktree's uncommitted edits when it
+// is already on this ticket's branch. If the retry lands on another shem with
+// no matching worktree, it falls back to the saved commit checkpoint.
+func RecoverTicketForRetry(ctx context.Context, claim *client.ClaimResponse, cfg *config.Config, setup func(string) error) error {
+	if claim.CheckpointPhase == nil || claim.CheckpointSHA == nil {
+		return fmt.Errorf("RecoverTicketForRetry: claim has no checkpoint data")
+	}
+	repoPath := repoLocalPath(cfg, claim.RepoRemote)
+	if repoPath == "" {
+		return fmt.Errorf("RecoverTicketForRetry: no local path for repo %q", claim.RepoRemote)
+	}
+	worktreePath := filepath.Join(repoPath, ".golem", "tickets", claim.TicketID, "worktree")
+	if branch, err := currentBranch(ctx, worktreePath); err == nil {
+		if branch != claim.Branch {
+			return fmt.Errorf("RecoverTicketForRetry: existing worktree is on branch %q, want %q; refusing to reset it", branch, claim.Branch)
+		}
+		return ReconstructState(filepath.Dir(worktreePath), worktreePath, claim)
+	} else if _, statErr := os.Stat(worktreePath); statErr == nil {
+		// An existing but detached or unreadable worktree may contain edits.
+		// RecoverTicket hard-resets existing worktrees, so do not fall through
+		// and risk discarding those edits when branch inspection failed.
+		return fmt.Errorf("RecoverTicketForRetry: existing worktree branch is unreadable; refusing to reset it: %w", err)
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("RecoverTicketForRetry: inspect worktree: %w", statErr)
+	}
+	return RecoverTicket(ctx, claim, cfg, setup)
+}
+
+func currentBranch(ctx context.Context, worktreePath string) (string, error) {
+	cmd := asAgent(exec.CommandContext(ctx, "git", "-C", worktreePath, "symbolic-ref", "--quiet", "--short", "HEAD"))
+	out, err := cmd.Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 // fetchBranchForAgent updates origin/<branch> in the agent's repo without
 // handing it the token: root fetches into the push mirror, then the agent
 // fetches from a bundle of that branch.

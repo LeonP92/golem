@@ -408,7 +408,7 @@ func (s *Syncer) setPhase(ticket db.Ticket, phase, message string) error {
 	return s.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = ?", ticket.ID, ticket.Phase).
-			Update("phase", phase)
+			Updates(db.PhaseUpdates(phase))
 		if result.Error != nil {
 			return result.Error
 		}

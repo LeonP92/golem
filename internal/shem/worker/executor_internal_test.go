@@ -55,6 +55,25 @@ func TestPromptsFenceUntrustedDescription(t *testing.T) {
 	}
 }
 
+func TestRetryWorkerPhaseAndFeedback(t *testing.T) {
+	for _, phase := range []string{"brainstorm", "plan", "implement", "revising"} {
+		if got := retryWorkerPhase(phase); got != phase {
+			t.Errorf("retryWorkerPhase(%q) = %q", phase, got)
+		}
+	}
+	if got := retryWorkerPhase("needs-attention"); got != "" {
+		t.Errorf("unsupported retry phase = %q, want empty", got)
+	}
+
+	const prompt = "implement this"
+	if got := withHumanFeedback(prompt, "  "); got != prompt {
+		t.Errorf("empty feedback changed prompt: %q", got)
+	}
+	if got := withHumanFeedback(prompt, "keep the existing implementation"); !strings.Contains(got, "Human retry feedback:\nkeep the existing implementation") {
+		t.Errorf("retry feedback missing from prompt: %q", got)
+	}
+}
+
 // TestFenceDescription_NeutralizesEmbeddedMarkers is an adversarial table
 // covering every known way a ticket description can try to reproduce a
 // fence marker verbatim, so it survives escapeFenceMarkers and either spoofs

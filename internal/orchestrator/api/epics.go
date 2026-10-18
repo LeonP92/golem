@@ -429,7 +429,7 @@ func (h *Handlers) parkEpicChild(child db.Ticket, message string) error {
 	return h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = ? AND epic_integrated_sha = ?", child.ID, "ready-for-review", "").
-			Update("phase", "needs-attention")
+			Updates(db.PhaseUpdates("needs-attention"))
 		if result.Error != nil {
 			return result.Error
 		}

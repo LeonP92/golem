@@ -60,6 +60,7 @@ type ClaimResponse struct {
 	Description     string        `json:"description"`
 	CheckpointPhase *string       `json:"checkpoint_phase"`
 	CheckpointSHA   *string       `json:"checkpoint_sha"`
+	RetryPhase      string        `json:"retry_phase,omitempty"`
 	LogEntries      []db.LogEntry `json:"log_entries"`
 	// Backend is the adapter the claiming shem runs.
 	Backend string `json:"backend"`
@@ -381,6 +382,9 @@ func (c *Client) PostPhase(ticketID string, phase string) error {
 	_ = resp.Body.Close() // response consumed; a close error changes nothing
 	if resp.StatusCode == http.StatusConflict {
 		return ErrNotOwner
+	}
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 	return nil
 }

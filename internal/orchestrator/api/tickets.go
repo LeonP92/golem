@@ -50,6 +50,7 @@ type ClaimResponse struct {
 	Description     string        `json:"description"`
 	CheckpointPhase *string       `json:"checkpoint_phase"`
 	CheckpointSHA   *string       `json:"checkpoint_sha"`
+	RetryPhase      string        `json:"retry_phase,omitempty"`
 	LogEntries      []db.LogEntry `json:"log_entries"`
 	// Backend is the adapter the claiming shem runs.
 	Backend string `json:"backend"`
@@ -486,7 +487,7 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 	}
 	validPhases := map[string]bool{
 		"brainstorm": true, "plan": true, "implement": true,
-		"review": true, "ready-for-review": true, "needs-attention": true,
+		"review": true, "ready-for-review": true, "revising": true, "needs-attention": true,
 		"in-progress": true,
 	}
 	if !validPhases[body.Phase] {
@@ -529,7 +530,7 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 			// 204, leaving the ticket assigned, idle and resumable — the
 			// opposite of the invariant actionStop documents.
 			Where("id = ? AND assigned_shem = ? AND phase <> ?", id, shem.ID, PhaseStopped).
-			Updates(map[string]any{"phase": body.Phase})
+			Updates(db.PhaseUpdates(body.Phase))
 		if result.Error != nil {
 			return result.Error
 		}

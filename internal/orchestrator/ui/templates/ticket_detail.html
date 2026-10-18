@@ -127,7 +127,7 @@
           hx-post="/api/tickets/{{.Ticket.ID}}/actions"
           hx-vals='{"action":"requeue"}'
           hx-include="#requeue-form"
-          hx-confirm="Re-queue this ticket? The shem will pick it up again from its current state."
+          hx-confirm="Start this ticket over from brainstorm? The existing branch is kept, but completed stages may run again."
           hx-on::after-request="if(event.detail.successful) window.location.reload()">
           <span class="iconify" data-icon="heroicons:arrow-path"></span>
           Re-queue
@@ -135,6 +135,31 @@
       </form>
       {{end}}
     </div>
+
+    {{if .CanRetryCurrentStep}}
+    <div class="card bg-base-100 shadow-sm border border-base-300 mt-3">
+      <div class="card-body p-4">
+        <h2 class="font-semibold text-sm text-base-content/70 mb-1 flex items-center gap-1.5">
+          <span class="iconify" data-icon="heroicons:arrow-path"></span>
+          Retry Current Step
+        </h2>
+        <p class="text-xs text-base-content/60 mb-2">Resume the saved phase from its branch checkpoint. Optional feedback is sent to the shem with the retry.</p>
+        <form hx-post="/api/tickets/{{.Ticket.ID}}/actions"
+              hx-on::after-request="if(event.detail.successful) window.location.reload()">
+          <input type="hidden" name="action" value="retry-current-step">
+          <div class="mb-3">{{template "one_model_select" .RetrySelect}}</div>
+          <textarea name="feedback" rows="3"
+            class="textarea textarea-bordered w-full text-sm"
+            placeholder="Optional: what should the shem focus on this time?"></textarea>
+          <button type="submit" class="btn btn-sm btn-primary mt-2 gap-1.5"
+            hx-confirm="Retry the saved step and preserve this branch checkpoint?">
+            <span class="iconify" data-icon="heroicons:arrow-path"></span>
+            Retry from Checkpoint
+          </button>
+        </form>
+      </div>
+    </div>
+    {{end}}
 
     {{if eq .Ticket.Phase "ready-for-review"}}
     <div class="card bg-base-100 shadow-sm border border-base-300">
