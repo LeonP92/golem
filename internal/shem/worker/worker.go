@@ -177,11 +177,12 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 	//
 	// There is no phase to reset to in that case: RunTicket's nil-checkpoint
 	// branch starts at brainstorm and posts that phase itself.
-	if claim.CheckpointPhase == nil {
+	resumePhase := resumeWorkerPhase(claim)
+	if resumePhase == "" {
 		log.Printf("worker: resuming ticket %s from the start (no checkpoint)", claim.TicketID)
 	} else {
-		log.Printf("worker: resuming ticket %s from checkpoint %q", claim.TicketID, *claim.CheckpointPhase)
-		if err := w.client.PostPhase(claim.TicketID, *claim.CheckpointPhase); err != nil {
+		log.Printf("worker: resuming ticket %s at phase %q", claim.TicketID, resumePhase)
+		if err := w.client.PostPhase(claim.TicketID, resumePhase); err != nil {
 			log.Printf("worker: resume: failed to reset phase for ticket %s: %v", claim.TicketID, err)
 		}
 	}
@@ -201,6 +202,19 @@ func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
 			w.failTicket(claim.TicketID, fmt.Errorf("resuming the ticket: %w", err))
 		}
 	}
+}
+
+// resumeWorkerPhase returns the next phase a resumed ticket will execute.
+// A saved checkpoint is a completed phase, so ordinary resumes continue
+// after it; an explicit retry takes precedence and resumes that phase itself.
+func resumeWorkerPhase(claim *client.ClaimResponse) string {
+	if claim.RetryPhase != "" {
+		return retryWorkerPhase(claim.RetryPhase)
+	}
+	if claim.CheckpointPhase == nil {
+		return ""
+	}
+	return nextPhaseAfterCheckpoint(*claim.CheckpointPhase)
 }
 
 // failTicket records why a ticket stopped and then parks it in
