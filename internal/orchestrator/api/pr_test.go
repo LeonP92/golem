@@ -391,3 +391,28 @@ func TestUpdatePhaseRace_ConcurrentBranchPushed_StillQueuesOnePR(t *testing.T) {
 		t.Errorf("pr rows = %d, want exactly 1 once both preconditions are true", prs)
 	}
 }
+
+// An epic child never gets a pull request: the shem-side lane merges it
+// into the run's target ref directly, and the add-on's only run-level
+// write is the final pull request (see ghsync.EnqueueFinalPR).
+func TestNoPRForEpicChild(t *testing.T) {
+	h, mux := setupPRTest(t)
+	h.RegisterEpicRoutes(mux)
+	shem := seedShem(t, h, "pr-shem", "prkey")
+	e := seedRunningEpic(t, h.DB)
+	child := epicChild(t, h.DB, e.ID, "A")
+	h.DB.Model(&db.Ticket{}).Where("id = ?", child.ID).
+		Updates(map[string]any{"assigned_shem": shem.ID, "phase": "implement"})
+
+	if code := doBranchPushed(t, mux, child.ID, "pr-shem", "prkey"); code != http.StatusNoContent {
+		t.Fatalf("push status = %d", code)
+	}
+	if code := doPhaseUpdateTo(t, mux, child.ID, "pr-shem", "prkey", "ready-for-review"); code != http.StatusNoContent {
+		t.Fatalf("phase status = %d", code)
+	}
+	var rows int64
+	h.DB.Model(&db.GitHubOutbox{}).Where("kind = ? AND ticket_id = ?", ghsync.KindPR, child.ID).Count(&rows)
+	if rows != 0 {
+		t.Fatal("a pull request was queued for an epic child")
+	}
+}

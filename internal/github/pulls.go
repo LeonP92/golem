@@ -84,6 +84,8 @@ type PullRequestStatus struct {
 	MergeableState string
 	HeadSHA        string
 	BaseRef        string
+	// MergeCommitSHA is set once Merged: the commit the base now contains.
+	MergeCommitSHA string
 }
 
 // Conflicted reports whether the pull request cannot merge because the branch
@@ -125,6 +127,7 @@ func (c *client) GetPullRequest(ctx context.Context, owner, repo string, number 
 		MergeableState: pr.GetMergeableState(),
 		HeadSHA:        pr.GetHead().GetSHA(),
 		BaseRef:        pr.GetBase().GetRef(),
+		MergeCommitSHA: pr.GetMergeCommitSHA(),
 	}
 	if pr.Mergeable != nil {
 		st.Mergeable = gh.Ptr(pr.GetMergeable())
@@ -303,4 +306,35 @@ func failedConclusion(c string) bool {
 // have produced another run held for the same approval.
 func needsHumanConclusion(c string) bool {
 	return c == "action_required"
+}
+
+// ErrMergeConflictHead: the head moved after validation (409).
+var ErrMergeConflictHead = errors.New("github: pull request head moved before merge")
+
+// ErrMergeForbidden: permissions or branch protection refused it (403).
+// A 405 (not mergeable yet) stays a plain, retryable error.
+var ErrMergeForbidden = errors.New("github: merge refused by permissions or branch protection")
+
+// MergePullRequest merges number pinned to expectedHeadSHA.
+func (c *client) MergePullRequest(ctx context.Context, owner, repo string, number int, expectedHeadSHA string) (string, error) {
+	res, _, err := c.api.PullRequests.Merge(ctx, owner, repo, number, "", &gh.PullRequestOptions{
+		SHA:         expectedHeadSHA,
+		MergeMethod: "merge",
+	})
+	if err != nil {
+		var resp *gh.ErrorResponse
+		if errors.As(err, &resp) && resp.Response != nil {
+			switch resp.Response.StatusCode {
+			case http.StatusConflict:
+				return "", fmt.Errorf("merge pull request %s/%s#%d: %w: %w", owner, repo, number, ErrMergeConflictHead, err)
+			case http.StatusForbidden:
+				return "", fmt.Errorf("merge pull request %s/%s#%d: %w: %w", owner, repo, number, ErrMergeForbidden, err)
+			}
+		}
+		return "", fmt.Errorf("merge pull request %s/%s#%d: %w", owner, repo, number, err)
+	}
+	if !res.GetMerged() {
+		return "", fmt.Errorf("merge pull request %s/%s#%d: github reports not merged: %s", owner, repo, number, res.GetMessage())
+	}
+	return res.GetSHA(), nil
 }

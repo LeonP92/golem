@@ -8,7 +8,7 @@
 
 - `running map[uint]context.CancelFunc` tracks active tickets by ID; a per-ticket cancel is stored there after claim, replacing an idle placeholder that prevents duplicate-claim races.
 - `tryClaimAndRun(ticketID)` — deduplicates by ticket ID, enforces `cfg.MaxConcurrent`, claims, then runs the executor in a goroutine.
-- `HandleMessage` also reacts to WS `ticket_revise` pushes (sent when a human requests changes on a `ready-for-review` ticket) by calling `tryReviseAndRun(ticketID)` — same dedupe/slot/cleanup structure as `tryClaimAndRun`, but calls `POST /api/tickets/{id}/revise-claim` (`client.ClaimRevision`) instead of `/claim`, since the ticket is already owned by this shem rather than unassigned. A 409 (requeued before reconnect) is a silent no-op.
+- `HandleMessage` also reacts to WS `ticket_revise` pushes (sent when a human requests changes on a `ready-for-review` ticket) by calling `tryReviseAndRun(ticketID)` — same dedupe/slot/cleanup structure as `tryClaimAndRun`, but calls `POST /api/tickets/{id}/revise-claim` (`client.ClaimRevision`) instead of `/claim`, since the ticket is already owned by this shem rather than unassigned. A 409 (requeued before reconnect) is a silent no-op. It also reacts to `epic_resumed` by re-running the integration lane for assigned children still waiting on their merge (`integrateAssigned`).
 
 Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to 10 minutes for the map to drain, then calls `Deregister`.
 
@@ -18,7 +18,7 @@ Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to
 1. Resolving the local repo path from `config.Repos` by normalized remote URL.
 2. Starting a `tailLog` goroutine that polls `.golem/tickets/<id>/log.jsonl` every 500 ms and POSTs new JSON-lines to `/api/tickets/{id}/log`.
 3. When `CheckpointPhase != nil`, calling `RecoverTicket` to restore local worktree state before resuming.
-4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. `golem ticket new` is invoked with `--branch claim.Branch` so the worktree is created on the server-computed slug branch instead of `golem ticket new`'s own `ticket/<id>` default. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
+4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. `golem ticket new` is invoked with `--branch claim.Branch` so the worktree is created on the server-computed slug branch instead of `golem ticket new`'s own `ticket/<id>` default. When the claim carries a `BaseBranch`, the worker fetches it and pins it to an exact commit (`resolveBaseSHA`), passing `--base <sha>`. With no_push or a `local://` remote nothing is fetched. If the base cannot be resolved, an ordinary ticket starts from HEAD (the pre-pinning behavior) and an epic child falls back to the run's base branch. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
 5. A `"revising"` phase case (reached only via `ReviseClaim`'s `CheckpointPhase: "revising"` sentinel, not a local ticket phase): consumes the pending `feedback` HumanInput, runs `buildRevisePrompt` in the existing worktree/branch (no plan restatement, no `golem ticket close`), then re-reads local state and posts the resulting phase (`ready-for-review` or `needs-attention`) back — same checkpoint/post-phase pattern as the `implement` case.
 6. After the CLI returns, reading `.golem/tickets/<id>/state.json` and posting a final checkpoint via `PostCheckpointWithRetry`.
 
@@ -57,3 +57,45 @@ backend and model on the entry. `sanitizeModel` returns a model id the adapter
 can use, or `""` with a WARNING so the stage runs on the vendor default.
 
 `finish.go` holds `finishWorkPhase`, moved out of `executor.go` unchanged.
+
+## Epic children on the worker
+
+The claim's optional `epic` block (`EpicClaim`) carries run id, node key,
+base fallback, `tester_required` and the node's acceptance
+commands.
+
+- Scaffold: the base resolves from the child's branch target; while the
+  run's `epic/<id>` ref does not exist yet, `resolveBaseSHA` uses the run's base branch. Acceptance commands go to
+  `golem ticket new --accept`, so verify and review run them after
+  `gate.commands`.
+- Finish: the branch is pushed unless no_push (a push failure is
+  non-fatal), the first child also creates the integration ref at the
+  pinned base SHA if missing (`ensureRemoteBaseRef`, never advances an
+  existing one), and the branch is reported. Then, in order: the phase
+  lands (the verdict handler bounces a failed child out of
+  ready-for-review, so the child must be there first), the tester stage
+  runs, and for an epic child this shem runs the merge lane itself
+  (`integrate.go`).
+- Tester stage (`tester.go`), gated by `tester_required` (a ticket-level
+  flag — the claim's top-level field, with the epic block's flag as the
+  fallback for children materialized before it existed): runs the
+  `tester` role against the measured worktree head and posts the verdict —
+  epic children to `POST /api/epics/{id}/verdicts`, standalone tickets to
+  `POST /api/tickets/{id}/tester-verdict` — downgraded to inconclusive if
+  the agent reports another head or the head moves. Tester failures are
+  reported and swallowed; the lane waits.
+- Integration lane (`integrate.go`): pin the head from the lane remote
+  (`integrationRemote`: the claim's remote, or the local repository
+  itself under no_push / `local://` — the same place no_push routes the
+  agent's own pushes, so children merge into the epic branch locally with
+  no remote or credential), pass the gate (`CheckIntegrationGate`, which
+  grants the per-run slot), merge into the run's target ref via
+  `forge.Forge` in the push mirror (wired in `cmd/shem`), post the result. `wait` retries with
+  the gate's hint, bounded (`maxIntegrationWaits`, shared with moved-pin
+  re-runs — a branch that never settles IS the lane staying busy). Every
+  step is idempotent, so recovery is simply running the lane again:
+  `IntegrateAssigned` re-runs it from the startup sweep and the
+  `epic_resumed` WS push for assigned children still at ready-for-review.
+- Self-verification (`golem ticket verify`) runs before the review gate for
+  every ticket, unless the ticket opted out at creation (`verify_disabled`);
+  a failed check bounces the implementer once with the output.

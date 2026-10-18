@@ -62,6 +62,14 @@ func (s *Syncer) MonitorPullRequests(ctx context.Context) {
 }
 
 func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error {
+	// Epic children have no pull requests of their own: the shem that did
+	// the work merges into the run's target ref directly (see
+	// epics.GateIntegration), and the add-on's only run-level pull request
+	// is the final one. A child that still carries a pr_number predates
+	// that flow; its pull request is a human's to finish.
+	if ticket.EpicID != nil {
+		return nil
+	}
 	var repo db.GitHubRepo
 	if err := s.DB.First(&repo, "repo_remote = ?", ticket.RepoRemote).Error; err != nil {
 		return fmt.Errorf("load repo %s: %w", ticket.RepoRemote, err)
@@ -77,8 +85,7 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	// abandoned work as delivered.
 	if status.State == "closed" {
 		if status.Merged {
-			return s.closeTicket(ticket,
-				fmt.Sprintf("Pull request #%d was merged.", status.Number))
+			return s.closeMergedTicket(ticket, status)
 		}
 		return s.setPhase(ticket, "needs-attention",
 			fmt.Sprintf("Pull request #%d was closed without merging. "+
@@ -92,7 +99,6 @@ func (s *Syncer) monitorPullRequest(ctx context.Context, ticket db.Ticket) error
 	if ticket.Phase != "ready-for-review" {
 		return nil
 	}
-
 	if status.Conflicted() {
 		base := status.BaseRef
 		if base == "" {
@@ -333,6 +339,11 @@ func (s *Syncer) recordObservation(ticket db.Ticket, status github.PullRequestSt
 		}
 		return appendLog(tx, ticket.ID, "STATUS", "orchestrator", "", seen)
 	})
+}
+
+// closeMergedTicket closes the ticket whose pull request was merged.
+func (s *Syncer) closeMergedTicket(ticket db.Ticket, status github.PullRequestStatus) error {
+	return s.closeTicket(ticket, fmt.Sprintf("Pull request #%d was merged.", status.Number))
 }
 
 // closeTicket does everything closing a ticket by hand does, not just the

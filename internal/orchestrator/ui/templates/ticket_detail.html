@@ -24,6 +24,12 @@
           </a>
           {{end}}
         </div>
+        {{if .Ticket.EpicID}}
+        <p class="text-base-content/70 mt-1 text-sm font-medium">
+          Part of <a href="/epics/{{.Ticket.EpicID}}" class="link link-hover">this epic run</a>
+          (node {{.Ticket.EpicNodeKey}}){{if not .Ticket.EpicReady}} — dependency-blocked until its predecessors integrate{{end}}.
+        </p>
+        {{end}}
         {{if .Ticket.IssueNumber}}
         <p class="text-base-content/70 mt-1 text-sm font-medium">{{.Ticket.Title}}</p>
         <p class="text-base-content/50 mt-0.5 text-xs flex items-center gap-1 flex-wrap">
@@ -260,6 +266,32 @@
           </button>
           {{end}}
         </div>
+
+        {{/* Tester gate: a ticket-level flag; the verdict, once the stage
+             has run, is evidence bound to the exact head it judged. */}}
+        {{if or .Ticket.TesterRequired .TesterVerdict}}
+        <div id="ticket-tester" class="mb-4 text-sm">
+          <span class="text-base-content/50">Tester</span>
+          <span class="badge badge-sm ml-2 {{if .Ticket.TesterRequired}}badge-warning{{else}}badge-ghost{{end}}">
+            {{if .Ticket.TesterRequired}}required{{else}}not required{{end}}
+          </span>
+          {{if .TesterVerdict}}
+          <span class="badge badge-sm ml-2 {{if eq .TesterVerdict.Verdict "pass"}}badge-success{{else if eq .TesterVerdict.Verdict "fail"}}badge-error{{else}}badge-ghost{{end}}"
+                title="head {{.TesterVerdict.HeadSHA}}">
+            {{.TesterVerdict.Verdict}} @ {{.TesterVerdict.HeadSHA}}
+          </span>
+          {{end}}
+        </div>
+        {{end}}
+
+        {{/* Self-verification runs by default; only an opted-out ticket
+             says so. */}}
+        {{if .Ticket.VerifyDisabled}}
+        <div id="ticket-verify" class="mb-4 text-sm">
+          <span class="text-base-content/50">Self-verification</span>
+          <span class="badge badge-sm ml-2 badge-ghost">skipped at the ticket's request</span>
+        </div>
+        {{end}}
 
         {{/* The editable panel only while unclaimed and not closed — the two
              conditions set-models itself enforces, so the page never offers a

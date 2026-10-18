@@ -69,14 +69,15 @@ Every piece of work is a ticket. Golem creates a dedicated git worktree and bran
 
 #### Roles
 
-Four roles ship by default. Each is a markdown prompt in `.golem/roles/` — owned by your repo and editable after `init`.
+The default roles below ship with `golem init`. Each is a markdown prompt in `.golem/roles/` — owned by your repo and editable after `init`.
 
 | Role | When it runs | What it checks |
 |---|---|---|
 | `developer` | During implement | Writes code following YAGNI/KISS identity |
 | `convention-enforcer` | After the last plan-step commit | Naming, structure, project patterns |
 | `spec-adherence` | After the last plan-step commit | Scope creep, plan alignment |
-| `reviewer` | At `ticket review` | Full attestation across all categories |
+| `reviewer` | At `ticket review` | Full attestation; ends with `VERDICT: PASS` or `VERDICT: FAIL` |
+| `tester` | After a ticket with the tester gate is pushed (any ticket; an epic run sets it on every child) | Judges the sandboxed acceptance results at the pushed head; posts a verdict |
 
 #### Observer
 
@@ -91,7 +92,7 @@ Each dispatch is fire-and-forget: the role reads the diff and ticket log, writes
 
 #### Gate
 
-Before `ticket review` is allowed, Golem runs the commands in your `gate.commands` config. If any command fails, review is blocked.
+`golem ticket review` runs the commands in your `gate.commands` config (plus an epic child's acceptance commands), logs the result for the exact head, then runs the reviewer on the log and the branch diff. A failing command or a reviewer `VERDICT: FAIL` sends the ticket to needs-attention (for an epic child, so does a missing verdict).
 
 ```yaml
 gate:
@@ -191,8 +192,11 @@ github:
 golem init --backend <name>                    initialise .golem in a repo
 
 golem ticket new "<description>"               create ticket, worktree, branch
+golem ticket new --base <ref>                  pin the worktree to the exact commit <ref> names
+golem ticket new --accept "<cmd>"              acceptance command the gate also runs (repeatable)
 golem ticket advance --to <phase>
 golem ticket set-step --expected-lines <n>
+golem ticket verify                            run the gate as self-verification (exit 2 on failure)
 golem ticket review
 golem ticket close
 golem ticket resume
@@ -266,6 +270,50 @@ Create a ticket from the UI. The shem will pick it up within seconds and run bra
 7. You close the ticket from the UI.
 
 At every step the shem tails the ticket's `log.jsonl` and forwards entries to the orchestrator over HTTP, which fans them out to the browser via SSE.
+
+### Epic Runs
+
+An epic turns one specification into several dependent tickets (UI: **Epics**).
+
+1. **Create** with a repo, base branch and spec. Choose a branch strategy
+   (`epic-branch` integrates children into `epic/<id>`; `trunk-flags` into
+   base) and a delivery target (`feature-branch`: the final merge is yours;
+   `base-branch`). Options: auto-merge children (makes a tester pass
+   mandatory) and auto-approve child phases (snapshotted into each child
+   when it is created).
+2. **Plan**: paste a plan revision as JSON — requirements, nodes (title,
+   scope, `acceptance_commands`, `requirement_ids`) and dependency edges.
+   It is validated (coverage, cycles, keys); every save is a new immutable
+   revision.
+3. **Approve** the current revision (bound to its content hash), then
+   **Start**: each node becomes an ordinary ticket. A child is claimable
+   only while the run is `running` and all its predecessors are integrated.
+4. Children run the normal lifecycle. Their acceptance commands run in the
+   gate; with the tester required, the shem runs the `tester` role on the
+   pushed head and records its verdict.
+5. **Integration**: the shem that finished a child merges it into the
+   run's integration branch itself, through plain git — no GitHub, no
+   pull requests. Once the tester has passed the exact head, the shem
+   takes the run's integration slot (one merge at a time per run),
+   merges in a Golem-owned mirror, and pushes the integration branch.
+   With pushes enabled that push goes to the run's remote; with
+   `no_push` (or a `local://` repo) the merge lands in the local
+   repository, next to the ticket branches. The receipt unblocks
+   successors; a conflict sends the child back to revising with the
+   conflicted files as feedback (bounded by `GOLEM_FIX_ATTEMPTS`,
+   default 3). Each result consumes the unique lease for its tested
+   head; stale results cannot release newer work. The worker reconciles
+   unfinished integrations every 10 seconds, including after outages or
+   a restart. Paused runs wait without spending fix attempts. A human can also record a receipt by hand via
+   `POST /api/epics/{id}/nodes/{key}/integrate`.
+6. **Pause/Resume** stops and restarts claims and merges. When every node
+   is integrated the run waits for final review (`trunk-flags` completes
+   instead). With the GitHub add-on enabled for the repo, this is when
+   the integration branch's pull request to base is opened.
+
+The final merge to base is always yours: mark the run completed (UI or
+`POST /api/epics/{id}/merge-final`) with the resulting base head SHA after merging the integration
+branch. Details: `.golem/wiki/modules/orchestrator-epics.md`.
 
 ### GitHub Issues
 
@@ -582,7 +630,9 @@ internal/
   roles/            ← embedded default role prompts
   soul/             ← learned preference extraction
   gate/             ← build/test gate runner
-  orchestrator/     ← orchestrator packages (db, auth, api, ws, sse, ui)
+  epic/             ← epic plan core: schema, validation, readiness
+  tester/           ← tester verdict contract and scenario sandbox
+  orchestrator/     ← orchestrator packages (db, auth, api, epics, ghsync, ws, sse, ui)
   shem/             ← shem packages (config, client, worker)
 deploy/
   orchestrator.yaml ← orchestrator config for Docker Compose

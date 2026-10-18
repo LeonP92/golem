@@ -140,11 +140,17 @@ func (s *Syncer) commitSuccess(row db.GitHubOutbox, postWrite func(tx *gorm.DB) 
 // the same transaction as marking the row done, via commitSuccess. Kinds
 // with no local write beyond done_at return a nil closure.
 func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gorm.DB) error, error) {
-	ticket, repo, err := s.linkedIssue(row.TicketID)
+	if row.EpicID != "" {
+		return s.deliverEpicPR(ctx, row)
+	}
+	ticket, repo, err := s.linkedIssue(row.TicketID, row.Kind == KindPR)
 	if err != nil {
 		return nil, err
 	}
-	number := *ticket.IssueNumber
+	number := 0
+	if ticket.IssueNumber != nil {
+		number = *ticket.IssueNumber
+	}
 
 	switch row.Kind {
 	case KindComment:
@@ -180,7 +186,7 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 			return nil, fmt.Errorf("decode pr payload for outbox row %d: %w", row.ID, err)
 		}
 		pr, err := s.GH.CreatePullRequest(ctx, repo.Owner, repo.Name,
-			p.Head, p.Base, p.Title, p.Body, true)
+			p.Head, p.Base, p.Title, p.Body, ticket.EpicID == nil)
 		if err != nil {
 			// Delivery is at-least-once: the GitHub call cannot be inside
 			// the transaction that records it, so a local failure between
@@ -220,6 +226,48 @@ func (s *Syncer) deliver(ctx context.Context, row db.GitHubOutbox) (func(tx *gor
 	default:
 		return nil, fmt.Errorf("unknown outbox kind %q on row %d", row.Kind, row.ID)
 	}
+}
+
+// deliverEpicPR handles a run-level outbox row. KindPR is the only kind a
+// run enqueues: the integration branch's final pull request, opened when
+// the run reached awaiting-final-review. Its local write records the pull
+// request on the epic, not a ticket.
+func (s *Syncer) deliverEpicPR(ctx context.Context, row db.GitHubOutbox) (func(tx *gorm.DB) error, error) {
+	if row.Kind != KindPR {
+		return nil, fmt.Errorf("epic outbox row %d has kind %q, want %q", row.ID, row.Kind, KindPR)
+	}
+	var e db.Epic
+	if err := s.DB.First(&e, "id = ?", row.EpicID).Error; err != nil {
+		return nil, fmt.Errorf("load epic %s: %w", row.EpicID, err)
+	}
+	var repo db.GitHubRepo
+	if err := s.DB.First(&repo, "repo_remote = ?", e.RepoRemote).Error; err != nil {
+		return nil, fmt.Errorf("load repo %s: %w", e.RepoRemote, err)
+	}
+	var p PRPayload
+	if err := json.Unmarshal([]byte(row.Payload), &p); err != nil {
+		return nil, fmt.Errorf("decode pr payload for outbox row %d: %w", row.ID, err)
+	}
+	pr, err := s.GH.CreatePullRequest(ctx, repo.Owner, repo.Name, p.Head, p.Base, p.Title, p.Body, false)
+	if err != nil {
+		// Same at-least-once convergence as the ticket path above.
+		existing, found, lookupErr := s.recoverExistingPR(ctx, repo, p.Head, err)
+		if lookupErr != nil {
+			return nil, lookupErr
+		}
+		if !found {
+			return nil, fmt.Errorf("create final pull request for epic %s: %w", e.ID, err)
+		}
+		pr = existing
+	}
+	epicID := e.ID
+	return func(tx *gorm.DB) error {
+		if err := tx.Model(&db.Epic{}).Where("id = ?", epicID).
+			Updates(map[string]any{"final_pr_number": pr.Number, "final_pr_url": pr.HTMLURL}).Error; err != nil {
+			return fmt.Errorf("record final pull request %d on epic %s: %w", pr.Number, epicID, err)
+		}
+		return nil
+	}, nil
 }
 
 // recoverExistingPR resolves a failed CreatePullRequest into the pull request
@@ -280,13 +328,14 @@ func (s *Syncer) applyPhaseLabel(ctx context.Context, repo db.GitHubRepo, issue 
 }
 
 // linkedIssue loads the ticket and its repo settings, verifying the ticket is
-// actually linked to an issue.
-func (s *Syncer) linkedIssue(ticketID string) (db.Ticket, db.GitHubRepo, error) {
+// actually linked to an issue. epicPR admits an unlinked epic child: its
+// pull request is the one write it needs (the lane merges it; no draft).
+func (s *Syncer) linkedIssue(ticketID string, epicPR bool) (db.Ticket, db.GitHubRepo, error) {
 	var ticket db.Ticket
 	if err := s.DB.First(&ticket, "id = ?", ticketID).Error; err != nil {
 		return ticket, db.GitHubRepo{}, fmt.Errorf("load ticket %s: %w", ticketID, err)
 	}
-	if ticket.IssueNumber == nil {
+	if ticket.IssueNumber == nil && (!epicPR || ticket.EpicID == nil) {
 		return ticket, db.GitHubRepo{}, fmt.Errorf("ticket %s has no linked issue", ticketID)
 	}
 	var repo db.GitHubRepo

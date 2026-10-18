@@ -19,6 +19,13 @@
       #{{.Ticket.IssueNumber}}
     </a>
     {{end}}
+    {{if .Ticket.EpicID}}
+    <a class="badge badge-sm badge-outline gap-1" href="/epics/{{.Ticket.EpicID}}"
+       title="Part of an epic run (node {{.Ticket.EpicNodeKey}}){{if not .Ticket.EpicReady}} — waiting on its dependencies{{end}}">
+      <span class="iconify text-xs" data-icon="heroicons:squares-2x2"></span>
+      epic{{if not .Ticket.EpicReady}} · blocked{{end}}
+    </a>
+    {{end}}
     <div class="text-xs text-base-content/40 font-mono truncate mt-0.5" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</div>
   </td>
   <td>

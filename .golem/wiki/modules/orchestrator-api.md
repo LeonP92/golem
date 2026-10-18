@@ -61,3 +61,47 @@ validates a submission and returns the two columns for the caller's own
 `Updates`, so `start`, `requeue` and `request-changes` write selections in the
 same statement as their transition. Request-changes checks only the submitted
 values, against the assigned shem's own catalog.
+
+## Epic routes (epics.go, epicgate.go)
+
+Session + CSRF (writes need PermTicketCreate for create/revisions,
+PermTicketManage for the rest): `POST/GET /api/epics`, `GET /api/epics/{id}`,
+`POST /api/epics/{id}/revisions` (422 lists every validation problem;
+an empty node `branch_target` defaults to the run's target ref),
+`/approve` (exact revision + plan hash; 409 on a mismatch or a revision
+that is not current), `/start` (idempotent), `/pause`, `/resume` (resume
+also broadcasts `epic_resumed` so shems re-run lanes that waited out the
+pause), `/merge-final` (the human attestation: the caller states the
+integration branch is on base and names the resulting head SHA — Golem
+never merges to base itself), and `/nodes/{key}/integrate` (manual
+receipt, for repos without GitHub sync).
+
+Errors map through `writeEpicResult` (404 / 422 invalid / 409 conflict / 500).
+Approvals record the username (UI and API alike).
+
+Shem API key: `POST /api/tickets/{id}/tester-verdict` records the tester
+stage's verdict for a standalone ticket (same validated shape, ownership of
+the ticket; epic children are refused — they report to their run).
+Shem API key: `POST /api/epics/{id}/verdicts` — needs `epic_node_key` and
+the calling shem must hold that node's ticket (`writeTicketOwnership`). A
+`fail` verdict bounces the child to revising with the evidence as feedback
+(`bounceIntegration`, capped by `GOLEM_FIX_ATTEMPTS`), an inconclusive one
+parks it for a human; a pass needs nothing, the shem takes the lane.
+Shem API key, same ownership rule: `POST .../nodes/{key}/integrate-check`
+(the gate: preconditions plus the per-run slot; answers granted/wait/done)
+and `POST .../nodes/{key}/integrate-result` (the receipt: merged/contained
+records the integration, conflict bounces to revising with the conflicted
+files, moved frees the slot, error parks the child).
+
+Claim gates: `epicGatePool` (unassigned pool: running epic, approved
+revision, `EpicReady`) and `epicGateResume` (resume/revise/reclaim:
+running epic, approved revision) are ANDed into every ticket-serving query
+and into ClaimTicket's conditional UPDATE. Ordinary tickets are
+unaffected. The claim response carries the `epic` block the worker uses
+(see shem-worker).
+
+Only standalone tickets with a linked issue get a pull request:
+`enqueuePRIfReady` requires an issue number, so epic children and unlinked
+tickets produce no outbox activity. Children merge into the run's target
+ref through the shem-side lane instead; the run's final pull request is
+the add-on's hook (`ghsync.EnqueueFinalPR`).

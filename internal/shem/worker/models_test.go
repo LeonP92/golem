@@ -299,7 +299,7 @@ func TestSubcommandsCarryTheBackendDocument(t *testing.T) {
 	if _, err := e.generatePRDescription(ctx, repo, "t-1", "picked-pr"); err != nil {
 		t.Logf("pr-description: %v", err)
 	}
-	if err := e.runGolemTicketNew(ctx, repo, "t-1", "b", "a description"); err != nil {
+	if err := e.runGolemTicketNew(ctx, repo, "t-1", "b", "a description", "", "", "", nil); err != nil {
 		t.Logf("ticket new: %v", err)
 	}
 	if err := runGolemAdvance(ctx, repo, "t-1", "plan"); err != nil {

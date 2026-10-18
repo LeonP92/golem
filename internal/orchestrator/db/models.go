@@ -31,6 +31,8 @@ type Session struct {
 type Shem struct {
 	ID   uint   `gorm:"primaryKey"`
 	Name string `gorm:"uniqueIndex;not null"`
+	// SupportsEpics is cleared when a pre-epic worker registers.
+	SupportsEpics bool `gorm:"not null;default:false" json:"supports_epics"`
 	// json:"-" — GET /api/shems serializes this struct straight to the
 	// dashboard, and there is no reason to ship credential material to a
 	// browser. It is a bcrypt hash of 32 random bytes, so exposure was not
@@ -73,6 +75,17 @@ type Ticket struct {
 	// ManualApproval makes the shem wait for a human to approve the spec and
 	// the plan. False keeps automatic validation as the only gate.
 	ManualApproval bool `gorm:"not null;default:false" json:"manual_approval"`
+	// TesterRequired runs the tester stage on the pushed head and records a
+	// structured verdict on the ticket. This is the ticket-level primitive:
+	// any ticket can ask for it, and an epic run composes it by setting the
+	// flag on every child at materialization. Default false keeps every
+	// pre-existing ticket on its old path.
+	TesterRequired bool `gorm:"not null;default:false" json:"tester_required"`
+	// VerifyDisabled opts the ticket out of the worker's self-verification
+	// (`golem ticket verify` before the review gate). Verification is the
+	// default for every ticket; a pre-existing ticket migrates forward
+	// with it on.
+	VerifyDisabled bool `gorm:"not null;default:false" json:"verify_disabled"`
 	// ApprovedBodyHash is the hex-encoded SHA-256 hash of Description at the
 	// moment actionStart set IntakeApproved, binding the approval to the
 	// exact text a human reviewed (spec Amendment 1 fix round 4). Without
@@ -126,6 +139,18 @@ type Ticket struct {
 	PRBody   string `gorm:"not null;default:''" json:"-"`
 	PRNumber *int   `json:"pr_number"`
 	PRURL    string `json:"pr_url"`
+
+	// Epic child fields: the run, plan node and revision this ticket was
+	// materialized from. NULL/empty on ordinary tickets.
+	EpicID           *string `gorm:"index;uniqueIndex:idx_ticket_epic_node" json:"epic_id,omitempty"`
+	EpicNodeKey      string  `gorm:"not null;default:'';uniqueIndex:idx_ticket_epic_node" json:"epic_node_key,omitempty"`
+	EpicPlanRevision int     `gorm:"not null;default:0" json:"epic_plan_revision,omitempty"`
+	// EpicReady: every hard predecessor is integrated. Separate from Phase.
+	EpicReady bool `gorm:"not null;default:false" json:"epic_ready,omitempty"`
+	// EpicIntegratedSHA is the integration receipt: the merge commit that
+	// landed this node on the run's target ref. It, not Phase, unblocks
+	// successors.
+	EpicIntegratedSHA string `gorm:"not null;default:''" json:"epic_integrated_sha,omitempty"`
 	// PRFixAttempts counts how many times the pull-request monitor has sent
 	// this ticket back to revising to fix a failing check or a merge
 	// conflict. It is compared against github.MaxPRFixAttempts and is what
@@ -353,8 +378,11 @@ const GraphBuildTimeout = 45 * time.Minute
 // makes re-enqueuing after a crash safe: the duplicate insert fails and the
 // caller treats that specific failure as success.
 type GitHubOutbox struct {
-	ID             uint       `gorm:"primaryKey" json:"id"`
+	ID uint `gorm:"primaryKey" json:"id"`
+	// TicketID scopes a ticket write; EpicID scopes a run-level write (the
+	// final pull request). Exactly one of the two is set.
 	TicketID       string     `gorm:"not null;index" json:"ticket_id"`
+	EpicID         string     `gorm:"not null;default:'';index" json:"epic_id"`
 	Kind           string     `gorm:"not null" json:"kind"` // comment | label | pr | close_issue
 	Payload        string     `gorm:"not null" json:"payload"`
 	IdempotencyKey string     `gorm:"uniqueIndex;not null" json:"idempotency_key"`
@@ -362,4 +390,95 @@ type GitHubOutbox struct {
 	NextAttempt    time.Time  `gorm:"index" json:"next_attempt"`
 	LastError      string     `json:"last_error"`
 	DoneAt         *time.Time `json:"done_at"`
+}
+
+// Epic is one spec-driven run: the original spec, immutable plan
+// revisions, and the run state. Its children are ordinary tickets.
+type Epic struct {
+	ID           string `gorm:"primaryKey" json:"id"`
+	RepoRemote   string `gorm:"not null;index" json:"repo_remote"`
+	Title        string `gorm:"not null" json:"title"`
+	SpecMarkdown string `gorm:"not null" json:"spec_markdown"`
+	SpecHash     string `gorm:"not null" json:"spec_hash"`
+	BaseBranch   string `gorm:"not null;default:'main'" json:"base_branch"`
+	BaseSHA      string `gorm:"not null;default:''" json:"base_sha"`
+	// BranchStrategy: "epic-branch" (children merge into IntegrationRef,
+	// epic/<id>) or "trunk-flags" (children merge into BaseBranch).
+	BranchStrategy string `gorm:"not null;default:'epic-branch'" json:"branch_strategy"`
+	IntegrationRef string `gorm:"not null;default:''" json:"integration_ref"`
+	// DeliveryTarget records the requested output. Epic-branch runs require
+	// a manual final merge; trunk-flags already integrates into base.
+	DeliveryTarget string `gorm:"not null;default:'feature-branch'" json:"delivery_target"`
+	// Auto-merging children forces TesterRequired on (set at create).
+	AutoMergeChildren bool `gorm:"not null;default:false" json:"auto_merge_children"`
+	TesterRequired    bool `gorm:"not null;default:false" json:"tester_required"`
+	// FinalSHA is the base head the human attested to at completion;
+	// FinalPRNumber/FinalPRURL record the pull request the GitHub add-on
+	// opened for the integration branch, when one was opened.
+	FinalSHA      string `gorm:"not null;default:''" json:"final_sha"`
+	FinalPRNumber *int   `json:"final_pr_number"`
+	FinalPRURL    string `gorm:"not null;default:''" json:"final_pr_url"`
+	// AutoApprovePhases is snapshotted into each child's ManualApproval at Start.
+	AutoApprovePhases bool   `gorm:"not null;default:false" json:"auto_approve_phases"`
+	State             string `gorm:"not null;default:'draft'" json:"state"` // epics.State* constants
+	// ApprovedRevision/ApprovedPlanHash bind approval to exact content; a
+	// new revision clears both.
+	CurrentRevision  int    `gorm:"not null;default:0" json:"current_revision"`
+	ApprovedRevision int    `gorm:"not null;default:0" json:"approved_revision"`
+	ApprovedPlanHash string `gorm:"not null;default:''" json:"approved_plan_hash"`
+	CreatedByUserID  *uint  `gorm:"index" json:"created_by_user_id"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+// EpicPlanRevision is immutable once written; an edit is a new revision.
+type EpicPlanRevision struct {
+	ID         uint       `gorm:"primaryKey" json:"id"`
+	EpicID     string     `gorm:"not null;index;uniqueIndex:idx_epic_revision" json:"epic_id"`
+	Revision   int        `gorm:"not null;uniqueIndex:idx_epic_revision" json:"revision"`
+	SpecHash   string     `gorm:"not null" json:"spec_hash"`
+	RepoSHA    string     `gorm:"not null;default:''" json:"repo_sha"` // the commit the planner read
+	PlanJSON   string     `gorm:"not null" json:"plan_json"`           // canonical epic.Plan
+	PlanHash   string     `gorm:"not null" json:"plan_hash"`
+	ApprovedBy string     `gorm:"not null;default:''" json:"approved_by"` // username
+	ApprovedAt *time.Time `json:"approved_at"`
+	CreatedAt  time.Time
+}
+
+// EpicIntegrationSlot is the per-run integration lease: at most one child
+// merges into the run's target ref at a time, so two children finishing
+// together cannot interleave their merges. The row is the slot — its
+// primary key IS the epic — and a holder that crashes stops blocking the
+// lane when ExpiresAt passes; the next gate check takes the slot over.
+type EpicIntegrationSlot struct {
+	LeaseID   string    `gorm:"not null;default:''" json:"lease_id"`
+	EpicID    string    `gorm:"primaryKey" json:"epic_id"`
+	NodeKey   string    `gorm:"not null" json:"node_key"`
+	HeadSHA   string    `gorm:"not null" json:"head_sha"`
+	ShemID    uint      `gorm:"not null" json:"shem_id"`
+	ExpiresAt time.Time `gorm:"not null" json:"expires_at"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+// TesterVerdict is the tester's append-only verdict for one merge
+// candidate head. Only a pass for the candidate's current head authorizes
+// an auto-merge. EpicNodeKey is empty for the final PR.
+type TesterVerdict struct {
+	ID uint `gorm:"primaryKey" json:"id"`
+	// EpicID and EpicNodeKey name the merge candidate for an epic child.
+	// TicketID names it for a standalone ticket: the verdict table serves
+	// both, because the tester is a ticket-level stage that epics compose,
+	// not an epic-only mechanism. Exactly one of the two is set; a row with
+	// neither is rejected at the write endpoints.
+	EpicID      string `gorm:"not null;index" json:"epic_id"`
+	EpicNodeKey string `gorm:"not null;default:'';index" json:"epic_node_key"`
+	TicketID    string `gorm:"not null;default:'';index" json:"ticket_id"`
+	HeadSHA     string `gorm:"not null" json:"head_sha"`
+	BaseSHA     string `gorm:"not null;default:''" json:"base_sha"`
+	Verdict     string `gorm:"not null" json:"verdict"` // pass, fail, inconclusive
+	Scenarios   string `gorm:"not null;default:''" json:"scenarios"`
+	Evidence    string `gorm:"not null;default:''" json:"evidence"`
+	Backend     string `gorm:"not null;default:''" json:"backend"`
+	CreatedAt   time.Time
 }

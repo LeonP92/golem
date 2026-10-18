@@ -28,10 +28,31 @@ func testAgentFor(t *testing.T, cfg *config.Config) *worker.Agent {
 	return agent
 }
 
+// startTestWorker serves handler, points a worker at it and starts the
+// worker, with a nil executor so no golem actually runs. The worker shuts
+// down before the server closes: Shutdown deregisters from the server, and
+// the client retries a connection refusal for a long time.
+func startTestWorker(t *testing.T, handler http.HandlerFunc) *worker.Worker {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	cfg := &config.Config{
+		Orchestrator: srv.URL,
+		APIKey:       "k",
+		Name:         "n",
+		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
+	}
+	c := client.New(srv.URL, "k", "test-shem")
+	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
+	go w.Start()
+	t.Cleanup(w.Shutdown)
+	return w
+}
+
 func TestWorker_ClaimsOnPush(t *testing.T) {
 	claimed := make(chan string, 1)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w := startTestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/claim"):
 			// Extract ticket ID from path: /api/tickets/{id}/claim
@@ -56,22 +77,7 @@ func TestWorker_ClaimsOnPush(t *testing.T) {
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Orchestrator: srv.URL,
-		APIKey:       "k",
-		Name:         "n",
-		Repos: []config.RepoConfig{
-			{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"},
-		},
-	}
-	c := client.New(srv.URL, "k", "test-shem")
-	// nil executor = don't actually run golem
-	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
-	go w.Start()
-	defer w.Shutdown()
+	})
 
 	// Give Start() time to register
 	time.Sleep(50 * time.Millisecond)
@@ -93,7 +99,7 @@ func TestWorker_ClaimsOnPush(t *testing.T) {
 func TestWorker_ReviseOnPush(t *testing.T) {
 	revised := make(chan string, 1)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w := startTestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/revise-claim"):
 			parts := strings.Split(r.URL.Path, "/")
@@ -119,21 +125,7 @@ func TestWorker_ReviseOnPush(t *testing.T) {
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Orchestrator: srv.URL,
-		APIKey:       "k",
-		Name:         "n",
-		Repos: []config.RepoConfig{
-			{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"},
-		},
-	}
-	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
-	go w.Start()
-	defer w.Shutdown()
+	})
 
 	time.Sleep(50 * time.Millisecond)
 
@@ -151,60 +143,13 @@ func TestWorker_ReviseOnPush(t *testing.T) {
 }
 
 func TestWorker_HandlesRevise409(t *testing.T) {
-	// Buffered so the handler never blocks, and read through the channel
-	// rather than a bare counter: the handler runs on the server's goroutine
-	// and the assertion on the test's, which is a data race when the two are
-	// joined only by a sleep. This is the shape the tests above already use.
-	attempts := make(chan struct{}, 8)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/revise-claim") {
-			attempts <- struct{}{}
-			http.Error(w, "conflict", http.StatusConflict)
-			return
-		}
-		if strings.Contains(r.URL.Path, "/register") {
-			w.Header().Set("Content-Type", "application/json")
-			json.NewEncoder(w).Encode(map[string]uint{"shem_id": 1}) //nolint:errcheck
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Orchestrator: srv.URL,
-		APIKey:       "k",
-		Name:         "n",
-		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
-	}
-	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
-	go w.Start()
-	defer w.Shutdown()
-
-	time.Sleep(50 * time.Millisecond)
-
-	w.HandleMessage(ws.WSMessage{Type: "ticket_revise", TicketID: strPtr("uuid-6")})
-
-	select {
-	case <-attempts:
-	case <-time.After(2 * time.Second):
-		t.Fatal("timeout: no revise-claim attempt was made")
-	}
-	// A second attempt would mean the 409 was retried rather than
-	// treated as terminal, which is the whole point of the test.
-	select {
-	case <-attempts:
-		t.Error("a second revise-claim attempt was made; a 409 must not be retried")
-	case <-time.After(200 * time.Millisecond):
-	}
+	testClaim409NotRetried(t, "/revise-claim", "ticket_revise")
 }
 
 func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 	claimed := make(chan string, 1)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	w := startTestWorker(t, func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasSuffix(r.URL.Path, "/claim") {
 			claimed <- "claimed"
 			w.WriteHeader(http.StatusNoContent)
@@ -216,19 +161,7 @@ func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Orchestrator: srv.URL,
-		APIKey:       "k",
-		Name:         "n",
-		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
-	}
-	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
-	go w.Start()
-	defer w.Shutdown()
+	})
 
 	// A message with a different type should not trigger a claim
 	w.HandleMessage(ws.WSMessage{Type: "some_other_type", TicketID: strPtr("uuid-99")})
@@ -242,14 +175,21 @@ func TestWorker_IgnoresNonAvailableMessages(t *testing.T) {
 }
 
 func TestWorker_HandlesClaim409(t *testing.T) {
-	// Buffered so the handler never blocks, and read through the channel
-	// rather than a bare counter: the handler runs on the server's goroutine
-	// and the assertion on the test's, which is a data race when the two are
-	// joined only by a sleep. This is the shape the tests above already use.
+	testClaim409NotRetried(t, "/claim", "ticket_available")
+}
+
+// testClaim409NotRetried answers 409 to requests for pathSuffix and checks
+// the worker makes exactly one attempt: a retried 409 would double-claim a
+// ticket another shem already took. attempts is a buffered channel read by
+// the test rather than a bare counter, because the handler runs on the
+// server's goroutine and the assertion on the test's — a data race when the
+// two are joined only by a sleep.
+func testClaim409NotRetried(t *testing.T, pathSuffix, msgType string) {
+	t.Helper()
 	attempts := make(chan struct{}, 8)
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.HasSuffix(r.URL.Path, "/claim") {
+	w := startTestWorker(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, pathSuffix) {
 			attempts <- struct{}{}
 			http.Error(w, "conflict", http.StatusConflict)
 			return
@@ -260,24 +200,11 @@ func TestWorker_HandlesClaim409(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	cfg := &config.Config{
-		Orchestrator: srv.URL,
-		APIKey:       "k",
-		Name:         "n",
-		Repos:        []config.RepoConfig{{Path: t.TempDir(), Remote: "r", NormalizedRemote: "r"}},
-	}
-	c := client.New(srv.URL, "k", "test-shem")
-	w := worker.New(cfg, c, nil, testAgentFor(t, cfg))
-	go w.Start()
-	defer w.Shutdown()
+	})
 
 	time.Sleep(50 * time.Millisecond)
 
-	// Trigger a claim that will get a 409
-	w.HandleMessage(ws.WSMessage{Type: "ticket_available", TicketID: strPtr("uuid-5")})
+	w.HandleMessage(ws.WSMessage{Type: msgType, TicketID: strPtr("uuid-5")})
 
 	select {
 	case <-attempts:

@@ -18,32 +18,34 @@ name: shem-local
 #      ticket anyone runs from the quick start pushes a branch to whatever
 #      remote their working copy happens to point at.
 #
-# To get the pull-request half of the GitHub integration, set no_push: false
-# and make sure the shem can authenticate: set GOLEM_SHEM_GITHUB_TOKEN in .env
-# (the entrypoint installs it as an HTTPS credential helper for github.com),
-# or give the container your own SSH key. Without one of those the push fails
-# and the pull request is never opened — the ticket still reaches
-# ready-for-review, so the failure shows up as a missing PR, not as an error
-# on the ticket.
+# Pushing is load-bearing in both flows: the shem merges an epic child into
+# its run's integration branch itself, and a standalone ticket's branch is
+# what the GitHub add-on opens a pull request from. So set no_push: false
+# and make sure the shem can authenticate: set GOLEM_SHEM_PUSH_TOKEN in .env
+# (the entrypoint installs it as an HTTPS credential helper for any remote;
+# GOLEM_SHEM_GITHUB_TOKEN is the older github.com-scoped name), or give the
+# container your own SSH key. Without one of those the push fails: a
+# standalone ticket still reaches ready-for-review and simply gets no pull
+# request, but an epic child cannot integrate at all.
 #
-# GOLEM_SHEM_GITHUB_TOKEN is a different variable from the orchestrator's
+# GOLEM_SHEM_PUSH_TOKEN is a different variable from the orchestrator's
 # GOLEM_GITHUB_TOKEN on purpose, and it is empty by default. This container
 # runs the agent on issue text a stranger can write, so it is handed a
 # repository credential only when someone has decided it needs one. A separate
 # token is better than reusing the orchestrator's.
 #
-# Note that a PRIVATE repository needs GOLEM_SHEM_GITHUB_TOKEN even while
-# no_push stays true: the shem clones the repository itself the first time it
-# works a ticket for it, and a clone needs Contents: Read. Pushing additionally
-# needs Contents: Read and write. Pre-cloning the repository onto the host and
-# mounting it is the way to keep this container credential-free.
+# Note that a PRIVATE repository needs a credential even while no_push stays
+# true: the shem clones the repository itself the first time it works a
+# ticket for it. Pre-cloning the repository onto the host and mounting it is
+# the way to keep this container credential-free.
 #
-# Turned on, with GOLEM_SHEM_GITHUB_TOKEN set: the shem pushes the ticket
-# branch once the work reaches ready-for-review and reports that to the
-# orchestrator, which queues the pull request. All three of issue_number,
-# branch_pushed and phase=ready-for-review must hold before one is opened
+# Turned on, with a token set: the shem pushes the ticket branch once the
+# work reaches ready-for-review and reports that to the orchestrator. For a
+# standalone ticket the GitHub add-on queues the pull request — all three of
+# issue_number, branch_pushed and phase=ready-for-review must hold first
 # (api.enqueuePRIfReady), so nothing is opened for a web-form ticket or for
-# work that never pushed.
+# work that never pushed. For an epic child the same shem takes the merge
+# lane: gate check, merge into the run's target ref, receipt.
 no_push: false
 max_concurrent: 5
 

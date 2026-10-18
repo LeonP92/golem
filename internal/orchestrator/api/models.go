@@ -3,12 +3,14 @@ package api
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
+	"github.com/leonp92/golem/internal/orchestrator/epics"
 	"github.com/leonp92/golem/internal/orchestrator/rbac"
 )
 
@@ -66,7 +68,7 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		entries = []db.LogEntry{}
 	}
 	backend, resolved := h.resolveForShem(t, shem)
-	return &ClaimResponse{
+	resp := &ClaimResponse{
 		TicketID:        t.ID,
 		Branch:          t.Branch,
 		BaseBranch:      t.BaseBranch,
@@ -79,7 +81,35 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		Backend:         backend,
 		Models:          resolved,
 		ManualApproval:  t.ManualApproval,
+		TesterRequired:  t.TesterRequired,
+		VerifyDisabled:  t.VerifyDisabled,
 	}
+	if t.EpicID != nil {
+		resp.Epic = &EpicClaim{EpicID: *t.EpicID, NodeKey: t.EpicNodeKey}
+		var e db.Epic
+		plan, _, err := epics.LoadPlan(h.DB, *t.EpicID, t.EpicPlanRevision)
+		if err == nil {
+			err = h.DB.First(&e, "id = ?", *t.EpicID).Error
+		}
+		if err != nil {
+			// The claim still goes out; without TesterRequired the lane just
+			// never auto-merges this child (fails closed).
+			log.Printf("claim %s: load epic context: %v", t.ID, err)
+		} else {
+			resp.Epic.BaseFallback = e.BaseBranch
+			resp.Epic.TesterRequired = e.TesterRequired
+			// The run's policy backs up the child's own flag: children
+			// materialized before the ticket-level tester flag existed keep
+			// their gate, and new children carry the flag themselves.
+			resp.TesterRequired = resp.TesterRequired || e.TesterRequired
+			for _, n := range plan.Nodes {
+				if n.Key == t.EpicNodeKey {
+					resp.Epic.AcceptanceCommands = n.AcceptanceCommands
+				}
+			}
+		}
+	}
+	return resp
 }
 
 // shemRow loads one shem row by id. A zero row would read as "matches every

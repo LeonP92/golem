@@ -109,13 +109,32 @@ const UnlimitedPRFixAttempts = -1
 // A typo in the one setting whose job is to bound cost should not be the
 // thing that removes the bound.
 func (g GitHubConfig) MaxPRFixAttempts() int {
-	if raw := strings.TrimSpace(os.Getenv(defaultPRFixAttemptsEnv)); raw != "" {
+	return resolveAttempts(os.Getenv(defaultPRFixAttemptsEnv), g.PRFixAttempts)
+}
+
+// defaultFixAttemptsEnv bounds the same kind of loop outside the GitHub
+// add-on: an epic child whose integration keeps failing (a merge conflict
+// the agent cannot clear) goes back to revising at most this many times
+// before the ticket parks for a human.
+const defaultFixAttemptsEnv = "GOLEM_FIX_ATTEMPTS"
+
+// MaxFixAttempts resolves GOLEM_FIX_ATTEMPTS, then 3. The reasoning —
+// including why a cap is not optional, why zero means "never attempt", and
+// why -1 is the only unlimited — is MaxPRFixAttempts's.
+func MaxFixAttempts() int {
+	return resolveAttempts(os.Getenv(defaultFixAttemptsEnv), 0)
+}
+
+// resolveAttempts is the shared resolution behind both attempt caps:
+// environment first, config file second, the built-in default last.
+func resolveAttempts(env string, yamlVal int) int {
+	if raw := strings.TrimSpace(env); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && (n >= 0 || n == UnlimitedPRFixAttempts) {
 			return n
 		}
 	}
-	if g.PRFixAttempts > 0 || g.PRFixAttempts == UnlimitedPRFixAttempts {
-		return g.PRFixAttempts
+	if yamlVal > 0 || yamlVal == UnlimitedPRFixAttempts {
+		return yamlVal
 	}
 	return defaultPRFixAttempts
 }

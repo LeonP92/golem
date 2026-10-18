@@ -119,6 +119,11 @@
         <span class="iconify" data-icon="heroicons:squares-2x2"></span>
         Dashboard
       </a>
+      <a href="/epics"
+         class="btn btn-sm gap-1.5 {{if eq .Nav `epics`}}btn-active text-white{{else}}btn-ghost text-neutral-content opacity-75 hover:opacity-100{{end}}">
+        <span class="iconify" data-icon="heroicons:rectangle-stack"></span>
+        Epics
+      </a>
       <a href="/shems"
          class="btn btn-sm gap-1.5 {{if eq .Nav `shems`}}btn-active text-white{{else}}btn-ghost text-neutral-content opacity-75 hover:opacity-100{{end}}">
         <span class="iconify" data-icon="heroicons:server-stack"></span>

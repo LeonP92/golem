@@ -51,6 +51,7 @@ func openPostgres(t *testing.T) *gorm.DB {
 	tables := []string{
 		"git_hub_outboxes", "human_inputs", "log_entries",
 		"tickets", "git_hub_repos", "shems", "sessions", "users",
+		"epics", "epic_plan_revisions", "tester_verdicts",
 	}
 	for _, table := range tables {
 		if err := gdb.Exec("TRUNCATE TABLE " + table + " RESTART IDENTITY CASCADE").Error; err != nil {

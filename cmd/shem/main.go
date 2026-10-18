@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/leonp92/golem/internal/forge"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/shem/worker"
@@ -30,7 +31,7 @@ func main() {
 	defer cleanupAgent()
 
 	httpClient := client.New(cfg.Orchestrator, cfg.APIKey, cfg.Name)
-	exec := &worker.GolemExecutor{Agent: agent}
+	exec := &worker.GolemExecutor{Agent: agent, Forge: forge.Git{}}
 	w := worker.New(cfg, httpClient, exec, agent)
 
 	// Connect WebSocket (non-fatal: falls back to polling if unavailable).

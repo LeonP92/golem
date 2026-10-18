@@ -11,11 +11,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/forge"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
@@ -25,8 +27,13 @@ import (
 // GolemExecutor runs tickets phase by phase. Per ticket, the spec and the plan
 // are either gated by a human (manual approval) or by automatic validation.
 type GolemExecutor struct {
-	repoMu sync.Map // keyed by repoPath, value *sync.Mutex
-	Agent  *Agent
+	repoMu      sync.Map // keyed by repoPath, value *sync.Mutex
+	integrating sync.Map // active ticket IDs; polling skips an in-flight lane
+	Agent       *Agent
+	// Forge merges a finished epic child into its run's target ref (plain
+	// git in the push mirror). Nil means forge.Git{}; tests substitute a
+	// fake. The worker depends on the operation, not on the git CLI.
+	Forge forge.Forge
 }
 
 func (e *GolemExecutor) repoMutex(repoPath string) *sync.Mutex {
@@ -94,7 +101,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	ticketDir := filepath.Join(repoPath, ".golem", "tickets", ticketID)
 	logPath := filepath.Join(ticketDir, "log.jsonl")
 
-	if cfg.NoPush {
+	if cfg.NoPush || strings.HasPrefix(claim.RepoRemote, "local://") {
 		setPushURL(repoPath, repoPath)
 		defer setPushURL(repoPath, "")
 	}
@@ -122,7 +129,11 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		// existing worktree instead of trying to create it again.
 		postStatus(c, ticketID, "Initializing repository…")
 		if _, statErr := os.Stat(ticketDir); os.IsNotExist(statErr) {
-			if err := e.runGolemTicketNew(ctx, repoPath, ticketID, claim.Branch, claim.Description); err != nil {
+			baseFallback, accept := "", []string(nil)
+			if claim.Epic != nil {
+				baseFallback, accept = claim.Epic.BaseFallback, claim.Epic.AcceptanceCommands
+			}
+			if err := e.runGolemTicketNew(ctx, repoPath, ticketID, claim.Branch, claim.Description, baseFetchRemote(cfg.NoPush, claim.RepoRemote), claim.BaseBranch, baseFallback, accept); err != nil {
 				return fmt.Errorf("golem ticket new: %w", err)
 			}
 		}
@@ -153,87 +164,13 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 	// needs-attention rather than waiting.
 	for phase := startPhase; ; {
 		switch phase {
-		case "brainstorm":
-			out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
-				"Brainstorm complete. Review the spec and approve to continue to planning.",
-				func(m string) { postStatus(c, ticketID, m) },
-				func() error {
-					feedback := consumeFeedback(ctx, c, claim.TicketID)
-					model := e.claimModel(c, claim, models.StageBrainstorm)
-					postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "brainstorm")
-					prompt := buildBrainstormPrompt(ticketID, claim.Description, feedback)
-					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "brainstorm", model); err != nil {
-						return err
-					}
-					adoptStrayTicketFile(ticketDir, "spec.md")
-					postDocumentEntry(c, claim.TicketID, "SPEC", filepath.Join(ticketDir, "spec.md"))
-					postStatus(c, ticketID, "Brainstorm complete — validating the spec")
-					if err := e.runGolemValidate(ctx, repoPath, ticketID, "spec", e.claimModel(c, claim, models.StageValidate)); err != nil {
-						return fmt.Errorf("spec validation: %w", err)
-					}
-					return nil
-				})
-			if gErr != nil {
-				return gErr
-			}
-			if out == approvalGone {
-				log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
+		case "brainstorm", "plan":
+			if stop, err := e.runDesignPhase(ctx, c, claim, repoPath, ticketDir, designPhases[phase]); err != nil {
+				return err
+			} else if stop {
 				return nil
 			}
-			postStatus(c, ticketID, "Spec cleared — advancing to planning")
-			PostCheckpointWithRetry(c, claim.TicketID, "brainstorm", "", 5) //nolint:errcheck
-			if err := runGolemAdvance(ctx, repoPath, ticketID, "plan"); err != nil {
-				log.Printf("executor: advance to plan: %v", err)
-			}
-			if phErr := c.PostPhase(claim.TicketID, "plan"); phErr != nil {
-				if errors.Is(phErr, client.ErrNotOwner) {
-					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-					return nil
-				}
-				log.Printf("executor: post phase error: %v", phErr)
-			}
-			phase = "plan"
-
-		case "plan":
-			out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
-				"Plan complete. Review the plan and approve to begin implementation.",
-				func(m string) { postStatus(c, ticketID, m) },
-				func() error {
-					feedback := consumeFeedback(ctx, c, claim.TicketID)
-					model := e.claimModel(c, claim, models.StagePlan)
-					postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "plan")
-					prompt := buildPlanPrompt(ticketID, claim.Description, feedback)
-					if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "plan", model); err != nil {
-						return err
-					}
-					adoptStrayTicketFile(ticketDir, "plan.md")
-					postDocumentEntry(c, claim.TicketID, "PLAN", filepath.Join(ticketDir, "plan.md"))
-					postStatus(c, ticketID, "Plan complete — validating the plan")
-					if err := e.runGolemValidate(ctx, repoPath, ticketID, "plan", e.claimModel(c, claim, models.StageValidate)); err != nil {
-						return fmt.Errorf("plan validation: %w", err)
-					}
-					return nil
-				})
-			if gErr != nil {
-				return gErr
-			}
-			if out == approvalGone {
-				log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-				return nil
-			}
-			postStatus(c, ticketID, "Plan cleared — starting implementation")
-			PostCheckpointWithRetry(c, claim.TicketID, "plan", "", 5) //nolint:errcheck
-			if err := runGolemAdvance(ctx, repoPath, ticketID, "implement"); err != nil {
-				log.Printf("executor: advance to implement: %v", err)
-			}
-			if phErr := c.PostPhase(claim.TicketID, "implement"); phErr != nil {
-				if errors.Is(phErr, client.ErrNotOwner) {
-					log.Printf("executor: ticket %s was requeued, stopping", claim.TicketID)
-					return nil
-				}
-				log.Printf("executor: post phase error: %v", phErr)
-			}
-			phase = "implement"
+			phase = nextPhaseAfterCheckpoint(phase)
 
 		case "implement":
 			model := e.claimModel(c, claim, models.StageImplement)
@@ -242,6 +179,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
+			e.selfVerify(ctx, c, claim, repoPath, ticketDir, ticketID, model)
 			if revErr := e.runGolemReview(ctx, repoPath, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageReview)); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
@@ -274,6 +212,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
+			e.selfVerify(ctx, c, claim, repoPath, ticketDir, ticketID, model)
 			if revErr := e.runGolemReview(ctx, repoPath, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageReview)); revErr != nil {
 				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
 				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
@@ -311,16 +250,34 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 // both cases. See TestGolemTicketNewArgs_SeparatesDescription here and
 // TestTicketNew_DescriptionStartingWithDash in internal/cli, which proves
 // the real FlagSet honours it.
-func golemTicketNewArgs(ticketID, branch, description, backendConfig string) []string {
-	return []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch,
-		"--backend-config", backendConfig, "--", description}
+func golemTicketNewArgs(ticketID, branch, description, backendConfig, baseSHA string, accept ...string) []string {
+	args := []string{"ticket", "new", "--ticket-id", ticketID, "--branch", branch,
+		"--backend-config", backendConfig}
+	// --base precedes the separator: it is resolved locally from git
+	// (never from the untrusted description), so it is safe in the flag
+	// region the separator protects.
+	if baseSHA != "" {
+		args = append(args, "--base", baseSHA)
+	}
+	for _, c := range accept {
+		args = append(args, "--accept", c)
+	}
+	return append(args, "--", description)
 }
 
 // runGolemTicketNew creates the local ticket scaffold (worktree + branch) without
 // invoking an agent. The agent's role starts at brainstorm, after the scaffold exists.
-func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description string) error {
+func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketID, branch, description, remote, baseBranch, baseFallback string, accept []string) error {
+	baseSHA := ""
+	if baseBranch != "" {
+		sha, err := resolveBaseSHA(ctx, repoPath, remote, baseBranch, baseFallback)
+		if err != nil {
+			return err
+		}
+		baseSHA = sha
+	}
 	cmd := asAgent(exec.CommandContext(ctx, "golem",
-		golemTicketNewArgs(ticketID, branch, description, e.Agent.ConfigPath)...))
+		golemTicketNewArgs(ticketID, branch, description, e.Agent.ConfigPath, baseSHA, accept...)...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -328,6 +285,58 @@ func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketI
 	}
 	log.Printf("executor: created ticket %s in %s", ticketID, repoPath)
 	return nil
+}
+
+// resolveBaseSHA pins a fresh ticket's base to an exact commit. When the
+// base cannot be resolved, an epic child falls back to the run's base
+// branch (its integration ref does not exist until the first child
+// creates it) and an ordinary ticket starts from HEAD, as before pinning.
+func resolveBaseSHA(ctx context.Context, repoPath, remote, baseBranch, epicFallback string) (string, error) {
+	sha, err := resolveClaimBaseSHA(ctx, repoPath, remote, baseBranch)
+	if err == nil {
+		return sha, nil
+	}
+	if epicFallback == "" {
+		log.Printf("executor: base %s unresolvable (%v); starting from HEAD", baseBranch, err)
+		return revParse(ctx, repoPath, "HEAD")
+	}
+	log.Printf("executor: base %s unresolvable; resolving from %s", baseBranch, epicFallback)
+	sha, ferr := resolveClaimBaseSHA(ctx, repoPath, remote, epicFallback)
+	if ferr != nil {
+		return "", fmt.Errorf("resolving base %s (fallback for %s): %w", epicFallback, baseBranch, ferr)
+	}
+	return sha, nil
+}
+
+// baseFetchRemote is the remote a fresh ticket fetches its base from; "" when
+// there is none (no_push, local://), so the base resolves from local refs.
+func baseFetchRemote(noPush bool, remote string) string {
+	if noPush || strings.HasPrefix(remote, "local://") {
+		return ""
+	}
+	return remote
+}
+
+// resolveClaimBaseSHA fetches baseBranch (when there is a remote) and
+// returns origin/<base>, else the local branch.
+func resolveClaimBaseSHA(ctx context.Context, repoPath, remote, baseBranch string) (string, error) {
+	if remote != "" {
+		if err := fetchBranchForAgent(ctx, repoPath, remote, baseBranch); err != nil {
+			return "", err
+		}
+	}
+	for _, ref := range []string{"refs/remotes/origin/" + baseBranch, baseBranch} {
+		if sha, err := revParse(ctx, repoPath, ref); err == nil {
+			return sha, nil
+		}
+	}
+	return "", fmt.Errorf("no commit found for %q locally or on origin", baseBranch)
+}
+
+// revParse resolves ref to a commit SHA, as the agent.
+func revParse(ctx context.Context, dir, ref string) (string, error) {
+	out, err := asAgent(exec.CommandContext(ctx, "git", "-C", dir, "rev-parse", "--verify", ref+"^{commit}")).Output()
+	return strings.TrimSpace(string(out)), err
 }
 
 // runGolemAdvance advances the local ticket to the given phase.
@@ -341,8 +350,8 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 	return nil
 }
 
-// runGolemReview runs the review gate — the reviewer agent, then the
-// configured gate commands — and is what advances the local ticket to
+// runGolemReview runs the review gate — the configured gate commands, then the
+// reviewer agent — and is what advances the local ticket to
 // ready-for-review.
 //
 // Run by the SHEM, not by the agent, for two reasons.
@@ -375,6 +384,47 @@ func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID
 		return fmt.Errorf("%w\n%s", err, out)
 	}
 	return nil
+}
+
+// selfVerify runs the ticket's gate and acceptance commands (`golem
+// ticket verify`) before the review gate and, when a check fails, gives
+// the implementer one pass to fix it. The review gate reruns the same
+// commands either way. Every ticket verifies by default; a ticket
+// created with verify_disabled skips it.
+func (e *GolemExecutor) selfVerify(ctx context.Context, c *client.Client,
+	claim *client.ClaimResponse, repoPath, ticketDir, ticketID, model string) {
+	if claim.VerifyDisabled {
+		return
+	}
+	out, failed := e.runGolemVerify(ctx, repoPath, ticketID)
+	if !failed {
+		return
+	}
+	postStatus(c, ticketID, "Self-verification failed; the implementer gets one pass to fix it")
+	if err := e.runPhase(ctx, repoPath,
+		buildImplementPrompt(ticketID, claim.Branch, claim.Description)+
+			"\n\nYour own verification just failed with this output — fix the cause before anything else:\n"+out,
+		ticketDir, "implement", model); err != nil {
+		log.Printf("executor: self-verify fix pass for %s: %v", ticketID, err)
+		return
+	}
+	if _, failed := e.runGolemVerify(ctx, repoPath, ticketID); failed {
+		postStatus(c, ticketID, "Self-verification still failing after the fix pass; the review gate decides")
+	}
+}
+
+// runGolemVerify reports failed only when a check failed (exit 2), not
+// when verification could not run.
+func (e *GolemExecutor) runGolemVerify(ctx context.Context, repoPath, ticketID string) (string, bool) {
+	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "verify", "--ticket", ticketID))
+	cmd.Dir = repoPath
+	out, err := cmd.CombinedOutput()
+	var exit *exec.ExitError
+	failed := errors.As(err, &exit) && exit.ExitCode() == 2
+	if err != nil && !failed {
+		log.Printf("executor: self-verification for %s did not run: %v\n%s", ticketID, err, out)
+	}
+	return string(out), failed
 }
 
 func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, baseBranch, model string) error {
@@ -425,6 +475,85 @@ func postDocumentEntry(c *client.Client, ticketID string, entryType, filePath st
 	if _, postErr := c.PostDocumentFile(ticketID, entryType, "developer", filePath); postErr != nil {
 		log.Printf("executor: post %s entry: %v", entryType, postErr)
 	}
+}
+
+// designPhase describes the brainstorm and plan phases, which share one gated
+// shape: run the agent, adopt the document it wrote, validate it, and — in
+// manual-approval mode — wait for a human before advancing to the next phase.
+type designPhase struct {
+	name         string // phase, checkpoint and stage label
+	document     string // file the agent writes
+	docKind      string // log-entry kind for the document
+	validateKind string // argument to golem validate
+	gatePrompt   string // approval request text in manual-approval mode
+	validating   string // status posted while validation runs
+	cleared      string // status posted after the gate passes
+	buildPrompt  func(ticketID, description, feedback string) string
+}
+
+var designPhases = map[string]designPhase{
+	"brainstorm": {
+		name: "brainstorm", document: "spec.md", docKind: "SPEC", validateKind: "spec",
+		gatePrompt:  "Brainstorm complete. Review the spec and approve to continue to planning.",
+		validating:  "Brainstorm complete — validating the spec",
+		cleared:     "Spec cleared — advancing to planning",
+		buildPrompt: buildBrainstormPrompt,
+	},
+	"plan": {
+		name: "plan", document: "plan.md", docKind: "PLAN", validateKind: "plan",
+		gatePrompt:  "Plan complete. Review the plan and approve to begin implementation.",
+		validating:  "Plan complete — validating the plan",
+		cleared:     "Plan cleared — starting implementation",
+		buildPrompt: buildPlanPrompt,
+	},
+}
+
+// runDesignPhase executes one gated design phase and advances the ticket to
+// the next phase. stop reports that the ticket was requeued mid-phase and the
+// caller must return without error.
+func (e *GolemExecutor) runDesignPhase(ctx context.Context, c *client.Client,
+	claim *client.ClaimResponse, repoPath, ticketDir string, dp designPhase) (stop bool, err error) {
+	ticketID := claim.TicketID
+	out, gErr := gatedPhase(ctx, c, ticketID, claim.ManualApproval,
+		dp.gatePrompt,
+		func(m string) { postStatus(c, ticketID, m) },
+		func() error {
+			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			model := e.claimModel(c, claim, models.Stage(dp.name))
+			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, dp.name)
+			prompt := dp.buildPrompt(ticketID, claim.Description, feedback)
+			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, dp.name, model); err != nil {
+				return err
+			}
+			adoptStrayTicketFile(ticketDir, dp.document)
+			postDocumentEntry(c, claim.TicketID, dp.docKind, filepath.Join(ticketDir, dp.document))
+			postStatus(c, ticketID, dp.validating)
+			if err := e.runGolemValidate(ctx, repoPath, ticketID, dp.validateKind, e.claimModel(c, claim, models.StageValidate)); err != nil {
+				return fmt.Errorf("%s validation: %w", dp.validateKind, err)
+			}
+			return nil
+		})
+	if gErr != nil {
+		return false, gErr
+	}
+	if out == approvalGone {
+		log.Printf("executor: ticket %s was requeued, stopping", ticketID)
+		return true, nil
+	}
+	postStatus(c, ticketID, dp.cleared)
+	next := nextPhaseAfterCheckpoint(dp.name)
+	PostCheckpointWithRetry(c, claim.TicketID, dp.name, "", 5) //nolint:errcheck
+	if err := runGolemAdvance(ctx, repoPath, ticketID, next); err != nil {
+		log.Printf("executor: advance to %s: %v", next, err)
+	}
+	if phErr := c.PostPhase(claim.TicketID, next); phErr != nil {
+		if errors.Is(phErr, client.ErrNotOwner) {
+			log.Printf("executor: ticket %s was requeued, stopping", ticketID)
+			return true, nil
+		}
+		log.Printf("executor: post phase error: %v", phErr)
+	}
+	return false, nil
 }
 
 // toOrchestratorPhase maps the local golem state.json phase to the orchestrator
@@ -611,10 +740,10 @@ func readState(ticketDir string) (string, string, error) {
 	return state.Phase, state.SHA, nil
 }
 
-// pushCredentialEnv is the variable deploy/shem-entrypoint.sh's git
-// credential helper expands at use time. It is the one value in this
+// pushCredentialEnv are the variables deploy/shem-entrypoint.sh's git
+// credential helpers expand at use time. They are the one value in this
 // process's environment that is worth stealing.
-const pushCredentialEnv = "GOLEM_GITHUB_TOKEN"
+var pushCredentialEnv = []string{"GOLEM_PUSH_TOKEN", "GOLEM_GITHUB_TOKEN"}
 
 // pushMirrorPath is where Golem keeps its own bare clone of a repository, as
 // a sibling of the repository rather than a child of it. The agent works
@@ -629,12 +758,60 @@ func pushMirrorPath(repoPath string) string {
 func withoutPushCredential(env []string) []string {
 	out := make([]string, 0, len(env))
 	for _, kv := range env {
-		if name, _, ok := strings.Cut(kv, "="); ok && name == pushCredentialEnv {
+		name, _, ok := strings.Cut(kv, "=")
+		if !ok {
+			out = append(out, kv)
 			continue
 		}
-		out = append(out, kv)
+		if !slices.Contains(pushCredentialEnv, name) {
+			out = append(out, kv)
+		}
 	}
 	return out
+}
+
+// ensureRemoteBaseRef creates createRef on the remote at sha (the pinned
+// base) when it does not exist yet; an existing ref is never touched. Runs
+// in the credential-carrying push mirror, like pushTicketBranch.
+func ensureRemoteBaseRef(ctx context.Context, repoPath, remote, fetchRef, createRef, sha string) error {
+	if remote == "" || createRef == "" || sha == "" || fetchRef == "" || fetchRef == createRef {
+		return nil
+	}
+	mirror := pushMirrorPath(repoPath)
+	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
+		return err
+	}
+	// The check-create below races siblings under git's ref locks rather
+	// than failing on them, but it shares the mirror's refs/golem-base-fetch
+	// scratch ref, so run the whole pass under the per-mirror lock.
+	mu := forge.MirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
+	ls := exec.CommandContext(ctx, "git", "-C", mirror, "ls-remote", remote, "refs/heads/"+createRef)
+	out, err := ls.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("checking remote for %s: %w\n%s", createRef, err, out)
+	}
+	if len(bytes.TrimSpace(out)) > 0 {
+		return nil // somebody already created it — nothing to do
+	}
+	fetch := exec.CommandContext(ctx, "git", "-C", mirror, "fetch", "--no-tags",
+		remote, "+refs/heads/"+fetchRef+":refs/golem-base-fetch")
+	if out, err := fetch.CombinedOutput(); err != nil {
+		return fmt.Errorf("fetching %s to create %s: %w\n%s", fetchRef, createRef, err, out)
+	}
+	push := exec.CommandContext(ctx, "git", "-C", mirror, "push", remote, sha+":refs/heads/"+createRef)
+	if out, err := push.CombinedOutput(); err != nil {
+		// Children that finish together race this create: both check, both
+		// push, one wins. The loser holds an error for the state it wanted
+		// — the ref exists — so re-check before reporting a failure.
+		verify := exec.CommandContext(ctx, "git", "-C", mirror, "ls-remote", remote, "refs/heads/"+createRef)
+		if vout, verr := verify.CombinedOutput(); verr == nil && len(bytes.TrimSpace(vout)) > 0 {
+			return nil
+		}
+		return fmt.Errorf("creating remote ref %s: %w\n%s", createRef, err, out)
+	}
+	return nil
 }
 
 // pushTicketBranch publishes the ticket branch to origin so the orchestrator
@@ -708,13 +885,19 @@ func ensurePushMirror(ctx context.Context, mirror, remote string) error {
 	if remote == "" {
 		return fmt.Errorf("push mirror: no remote for this repository")
 	}
+	// git init --bare is not safe to run twice on the same directory at
+	// once, and the forge merge lane shares this mirror, so create it under
+	// the forge's per-mirror lock.
+	mu := forge.MirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(mirror), 0o750); err != nil {
 		return fmt.Errorf("push mirror: %w", err)
 	}
-	init := exec.CommandContext(ctx, "git", "init", "--bare", mirror)
+	init := exec.CommandContext(ctx, "git", "init", "--bare", "--template=", mirror)
 	init.Env = withoutPushCredential(os.Environ())
 	if out, err := init.CombinedOutput(); err != nil {
 		return fmt.Errorf("push mirror: git init --bare: %w\n%s", err, out)

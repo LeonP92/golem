@@ -23,12 +23,14 @@ const (
 	StageReview        Stage = "review"
 	StagePRDescription Stage = "pr-description"
 	StageGraph         Stage = "graph"
+	// StageTest is the epic tester, whose verdict gates auto-merge.
+	StageTest Stage = "test"
 )
 
 // Stages is the closed set of stages, in display order.
 var Stages = []Stage{
 	StageBrainstorm, StagePlan, StageImplement, StageRevise, StageValidate,
-	StageObserve, StageReview, StagePRDescription, StageGraph,
+	StageObserve, StageReview, StagePRDescription, StageGraph, StageTest,
 }
 
 func isStage(s string) bool {

@@ -22,6 +22,17 @@ var ErrNotAvailable = errors.New("ticket not available")
 // no longer owns the ticket (e.g. after a requeue).
 var ErrNotOwner = errors.New("ticket not owned by this shem")
 
+// EpicVerdictPayload mirrors the orchestrator's verdict request body.
+type EpicVerdictPayload struct {
+	EpicNodeKey string `json:"epic_node_key"`
+	HeadSHA     string `json:"head_sha"`
+	BaseSHA     string `json:"base_sha"`
+	Verdict     string `json:"verdict"`
+	Scenarios   string `json:"scenarios"`
+	Evidence    string `json:"evidence"`
+	Backend     string `json:"backend"`
+}
+
 // LogPayload is the request body for logging.
 type LogPayload struct {
 	EntryType string `json:"entry_type"`
@@ -56,6 +67,24 @@ type ClaimResponse struct {
 	Models map[string]string `json:"models"`
 	// ManualApproval: stop after brainstorm and after plan until a human approves.
 	ManualApproval bool `json:"manual_approval"`
+	// TesterRequired: run the tester stage on the pushed head and record a
+	// structured verdict — ticket-level, set for any ticket that asks and
+	// for epic children whose run requires it.
+	TesterRequired bool `json:"tester_required"`
+	// VerifyDisabled: skip the worker's self-verification before the
+	// review gate (opt-out; verification is the default).
+	VerifyDisabled bool `json:"verify_disabled"`
+	// Epic is set only for an epic child (api.EpicClaim).
+	Epic *EpicClaim `json:"epic,omitempty"`
+}
+
+// EpicClaim mirrors api.EpicClaim.
+type EpicClaim struct {
+	EpicID             string   `json:"epic_id"`
+	NodeKey            string   `json:"node_key"`
+	BaseFallback       string   `json:"base_fallback"`
+	TesterRequired     bool     `json:"tester_required"`
+	AcceptanceCommands []string `json:"acceptance_commands,omitempty"`
 }
 
 // PendingInput represents a pending human input.
@@ -147,8 +176,9 @@ func (c *Client) do(method, path string, body any) (*http.Response, error) {
 // Register registers this shem and reports the backend it runs.
 func (c *Client) Register(name string, repos []string, backend string, catalog models.Catalog) (uint, error) {
 	body := map[string]any{
-		"name":  name,
-		"repos": repos,
+		"supports_epics": true,
+		"name":           name,
+		"repos":          repos,
 		"backend": map[string]any{
 			"name":    backend,
 			"catalog": catalog,
@@ -191,6 +221,12 @@ type AssignedTicket struct {
 	TicketID   string `json:"ticket_id"`
 	Phase      string `json:"phase"`
 	RepoRemote string `json:"repo_remote"`
+	// Branch and the epic coordinates let a restarted shem re-run the
+	// integration lane for a child it finished but never merged.
+	Branch            string `json:"branch,omitempty"`
+	EpicID            string `json:"epic_id,omitempty"`
+	EpicNodeKey       string `json:"epic_node_key,omitempty"`
+	EpicIntegratedSHA string `json:"epic_integrated_sha,omitempty"`
 }
 
 // GetAssigned returns all tickets currently assigned to this shem (any active phase).
@@ -274,6 +310,63 @@ func (c *Client) ClaimRevision(id string) (*ClaimResponse, error) {
 		return nil, err
 	}
 	return &result, nil
+}
+
+// IntegrationGate is the orchestrator's answer to an integration gate
+// check (api.integrateCheckEpicNode).
+type IntegrationGate struct {
+	LeaseID        string `json:"lease_id"`
+	Outcome        string `json:"outcome"` // granted | wait | done
+	TargetRef      string `json:"target_ref"`
+	ExpiresAt      string `json:"expires_at"`
+	RetryAfterSecs int    `json:"retry_after_secs"`
+	Reason         string `json:"reason"`
+	MergeSHA       string `json:"merge_sha"`
+}
+
+// CheckIntegrationGate asks whether this shem may merge headSHA into the
+// run's target ref, and takes the per-run integration slot when it may.
+func (c *Client) CheckIntegrationGate(epicID, nodeKey, headSHA string) (*IntegrationGate, error) {
+	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/nodes/%s/integrate-check", epicID, nodeKey),
+		map[string]string{"head_sha": headSHA})
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	var g IntegrationGate
+	if err := json.NewDecoder(resp.Body).Decode(&g); err != nil {
+		return nil, err
+	}
+	return &g, nil
+}
+
+// IntegrationResult reports what the merge into the run's target ref did.
+type IntegrationResult struct {
+	LocalOnly bool   `json:"local_only,omitempty"`
+	LeaseID   string `json:"lease_id"`
+	HeadSHA   string `json:"head_sha"`
+	Status    string `json:"status"` // merged | contained | conflict | moved | error
+	MergeSHA  string `json:"merge_sha,omitempty"`
+	Detail    string `json:"detail,omitempty"`
+}
+
+// PostIntegrationResult posts the receipt end of the integration lane.
+func (c *Client) PostIntegrationResult(epicID, nodeKey string, r IntegrationResult) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/nodes/%s/integrate-result", epicID, nodeKey), r)
+	if err != nil {
+		return err
+	}
+	_ = resp.Body.Close() // response consumed; a close error changes nothing
+	if resp.StatusCode == http.StatusConflict {
+		return ErrNotOwner
+	}
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+	}
+	return nil
 }
 
 // PostPhase updates the phase of a ticket.
@@ -618,4 +711,40 @@ func (c *Client) PostGraphBuildResult(repoRemote, buildErr string) error {
 		return fmt.Errorf("post graph build result: unexpected status %d", resp.StatusCode)
 	}
 	return nil
+}
+
+// PostEpicVerdict records the tester stage's structured verdict for one
+// merge candidate. The orchestrator validates the shape; the lane still
+// matches the head SHA before it merges, so a verdict here is evidence,
+// never an order.
+func (c *Client) PostEpicVerdict(epicID string, v EpicVerdictPayload) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/verdicts", epicID), v)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return statusError(resp)
+}
+
+// TicketVerdictPayload is the standalone-ticket counterpart of
+// EpicVerdictPayload: the same structured verdict without the epic node
+// key, because the ticket itself is the scope.
+type TicketVerdictPayload struct {
+	HeadSHA   string `json:"head_sha"`
+	BaseSHA   string `json:"base_sha"`
+	Verdict   string `json:"verdict"`
+	Scenarios string `json:"scenarios"`
+	Evidence  string `json:"evidence"`
+	Backend   string `json:"backend"`
+}
+
+// PostTicketVerdict records the tester stage's structured verdict for a
+// standalone ticket. It is evidence on the ticket, never an order.
+func (c *Client) PostTicketVerdict(ticketID string, v TicketVerdictPayload) error {
+	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/tester-verdict", ticketID), v)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return statusError(resp)
 }

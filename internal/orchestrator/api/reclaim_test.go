@@ -143,11 +143,11 @@ func TestReclaim_RefusedAfterStopAndResume(t *testing.T) {
 	_, cookie := seedSessionUser(t, h.DB, "operator", string(rbac.RoleAdmin))
 	ticket := seedReapedTicket(t, h, a, "implement")
 
-	if code := postAction(t, mux, cookie, ticket.ID, "stop"); code != http.StatusNoContent {
-		t.Fatalf("stop = %d, want 204", code)
+	if w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "stop"}); w.Code != http.StatusNoContent {
+		t.Fatalf("stop = %d, want 204", w.Code)
 	}
-	if code := postAction(t, mux, cookie, ticket.ID, "resume"); code != http.StatusNoContent {
-		t.Fatalf("resume = %d, want 204", code)
+	if w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "resume"}); w.Code != http.StatusNoContent {
+		t.Fatalf("resume = %d, want 204", w.Code)
 	}
 
 	w := httptest.NewRecorder()

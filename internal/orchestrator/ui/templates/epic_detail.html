@@ -1,0 +1,146 @@
+{{define "page_content"}}
+<div class="mb-6">
+  <div class="flex items-center gap-3 flex-wrap">
+    <h1 class="text-2xl font-bold">{{.Epic.Title}}</h1>
+    <span class="badge">{{.Epic.State}}</span>
+  </div>
+  <p class="text-sm text-base-content/60 mt-1">
+    {{.Epic.RepoRemote}} · base {{.Epic.BaseBranch}} · {{.Epic.BranchStrategy}}
+    {{if .Epic.IntegrationRef}}· integrates into <code>{{.Epic.IntegrationRef}}</code>{{end}}
+    · delivers to {{.Epic.DeliveryTarget}}
+  </p>
+</div>
+
+{{if .Error}}
+<div class="alert alert-error mb-4"><span style="white-space: pre-wrap;">{{.Error}}</span></div>
+{{end}}
+
+{{if .Revision}}
+<div class="card bg-base-100 shadow-sm mb-6">
+  <div class="card-body">
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <h2 class="card-title">Plan revision {{.Revision.Revision}}</h2>
+      {{if .Revision.ApprovedBy}}
+      <span class="badge badge-success">approved by {{.Revision.ApprovedBy}}</span>
+      {{else}}
+      <span class="badge badge-warning">awaiting approval</span>
+      {{end}}
+    </div>
+    <p class="text-xs text-base-content/60 break-all">plan hash: {{.Revision.PlanHash}}</p>
+    {{if .Total}}
+    <p class="text-sm mt-1">
+      <strong>{{.Integrated}} / {{.Total}}</strong> integrated
+      {{if eq $.Epic.State "awaiting-final-review"}}· all nodes integrated — awaiting final review{{end}}
+    </p>
+    {{end}}
+
+    <h3 class="font-semibold mt-4 mb-2">Requirements</h3>
+    <ul class="list-disc list-inside text-sm space-y-1">
+      {{range .Requirements}}<li><strong>{{.ID}}</strong> — {{.Text}}</li>{{end}}
+    </ul>
+
+    <h3 class="font-semibold mt-4 mb-2">Tickets in dependency order</h3>
+    <div class="overflow-x-auto">
+      <table class="table table-zebra table-sm">
+        <thead>
+          <tr><th>Key</th><th>Title</th><th>Requirements</th><th>Blocked by</th><th>Target</th><th>Status</th></tr>
+        </thead>
+        <tbody>
+          {{range .Rows}}
+          <tr>
+            <td class="font-mono">{{.Key}}</td>
+            <td>{{.Title}}</td>
+            <td class="text-sm">{{range $i, $r := .Requirements}}{{if $i}}, {{end}}{{$r}}{{end}}</td>
+            <td class="text-sm">
+              {{if .Integrated}}—
+              {{else if .BlockedBy}}{{range $i, $b := .BlockedBy}}{{if $i}}, {{end}}{{$b}}{{end}}
+              {{else}}<span class="text-success">ready when the run starts</span>{{end}}
+            </td>
+            <td class="text-sm font-mono">{{.BranchTarget}}</td>
+            <td class="text-sm">
+              {{if .Integrated}}<span class="badge badge-success badge-sm">integrated</span>
+              {{else if .TicketID}}
+                <a href="/tickets/{{.TicketID}}" class="link link-hover">{{.TicketPhase}}</a>
+                {{if .Ready}}<span class="badge badge-info badge-sm">ready</span>{{end}}
+              {{else}}<span class="text-base-content/40">not started</span>{{end}}
+            </td>
+          </tr>
+          {{end}}
+        </tbody>
+      </table>
+    </div>
+
+    {{if not .Revision.ApprovedBy}}
+    <div class="card-actions justify-end mt-4">
+      <form method="POST" action="/epics/{{$.Epic.ID}}/approve">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <input type="hidden" name="revision" value="{{.Revision.Revision}}">
+        <input type="hidden" name="plan_hash" value="{{.Revision.PlanHash}}">
+        <button type="submit" class="btn btn-primary btn-sm">Approve this plan</button>
+      </form>
+    </div>
+    {{else if eq $.Epic.State "awaiting-approval"}}
+    <div class="card-actions justify-end mt-4">
+      <form method="POST" action="/epics/{{$.Epic.ID}}/start">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <button type="submit" class="btn btn-primary btn-sm">Start run</button>
+      </form>
+    </div>
+    {{else if eq $.Epic.State "running"}}
+    <div class="card-actions justify-end mt-4">
+      <form method="POST" action="/epics/{{$.Epic.ID}}/pause">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <button type="submit" class="btn btn-outline btn-sm">Pause run</button>
+      </form>
+    </div>
+    {{else if eq $.Epic.State "paused"}}
+    <div class="card-actions justify-end mt-4">
+      <form method="POST" action="/epics/{{$.Epic.ID}}/resume">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <button type="submit" class="btn btn-primary btn-sm">Resume run</button>
+      </form>
+    </div>
+    {{else if eq $.Epic.State "awaiting-final-review"}}
+    <div class="card-actions justify-end items-center gap-3 mt-4">
+      {{if $.Epic.FinalPRURL}}<a class="link link-primary text-sm" href="{{$.Epic.FinalPRURL}}" target="_blank" rel="noopener">Final pull request #{{$.Epic.FinalPRNumber}}</a>{{end}}
+      <span class="text-sm opacity-70">All nodes integrated. The final review and merge are yours.</span>
+      <form method="POST" action="/epics/{{$.Epic.ID}}/merge-final" class="flex items-center gap-2">
+        <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
+        <input type="text" name="sha" required placeholder="final SHA on {{$.Epic.BaseBranch}}"
+               class="input input-bordered input-sm font-mono w-72">
+        <button type="submit" class="btn btn-primary btn-sm">Mark completed</button>
+      </form>
+    </div>
+    {{end}}
+  </div>
+</div>
+{{end}}
+
+{{if or (eq .Epic.State "draft") (eq .Epic.State "awaiting-approval")}}
+<div class="card bg-base-100 shadow-sm">
+  <div class="card-body">
+    <h2 class="card-title">{{if .Revision}}Revise plan{{else}}Add plan{{end}}</h2>
+    <p class="text-sm text-base-content/60">
+      A plan revision is immutable JSON: requirements, nodes and hard dependency edges.
+      Saving a new revision{{if .Revision.ApprovedBy}} clears the current approval{{end}} — approval always binds to exact content.
+    </p>
+    <form method="POST" action="/epics/{{.Epic.ID}}/revisions">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <textarea name="plan_json" rows="14" class="textarea textarea-bordered font-mono text-xs w-full"
+                placeholder='{"requirements":[{"id":"R1","text":"..."}],"nodes":[{"key":"T1","title":"...","acceptance_commands":["go test ./..."],"requirement_ids":["R1"]}],"edges":[]}'></textarea>
+      <div class="card-actions justify-end mt-2">
+        <button type="submit" class="btn btn-sm">Validate and save revision</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+{{end}}
+
+<details class="collapse collapse-arrow bg-base-100 shadow-sm mt-6">
+  <summary class="collapse-title font-medium">Original specification</summary>
+  <div class="collapse-content">
+    <pre class="text-sm whitespace-pre-wrap">{{.Epic.SpecMarkdown}}</pre>
+  </div>
+</details>
+{{end}}
