@@ -781,6 +781,12 @@ func ensureRemoteBaseRef(ctx context.Context, repoPath, remote, fetchRef, create
 	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
 		return err
 	}
+	// The check-create below races siblings under git's ref locks rather
+	// than failing on them, but it shares the mirror's refs/golem-base-fetch
+	// scratch ref, so run the whole pass under the per-mirror lock.
+	mu := forge.MirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
 	ls := exec.CommandContext(ctx, "git", "-C", mirror, "ls-remote", remote, "refs/heads/"+createRef)
 	out, err := ls.CombinedOutput()
 	if err != nil {
@@ -796,6 +802,13 @@ func ensureRemoteBaseRef(ctx context.Context, repoPath, remote, fetchRef, create
 	}
 	push := exec.CommandContext(ctx, "git", "-C", mirror, "push", remote, sha+":refs/heads/"+createRef)
 	if out, err := push.CombinedOutput(); err != nil {
+		// Children that finish together race this create: both check, both
+		// push, one wins. The loser holds an error for the state it wanted
+		// — the ref exists — so re-check before reporting a failure.
+		verify := exec.CommandContext(ctx, "git", "-C", mirror, "ls-remote", remote, "refs/heads/"+createRef)
+		if vout, verr := verify.CombinedOutput(); verr == nil && len(bytes.TrimSpace(vout)) > 0 {
+			return nil
+		}
 		return fmt.Errorf("creating remote ref %s: %w\n%s", createRef, err, out)
 	}
 	return nil
@@ -872,13 +885,19 @@ func ensurePushMirror(ctx context.Context, mirror, remote string) error {
 	if remote == "" {
 		return fmt.Errorf("push mirror: no remote for this repository")
 	}
+	// git init --bare is not safe to run twice on the same directory at
+	// once, and the forge merge lane shares this mirror, so create it under
+	// the forge's per-mirror lock.
+	mu := forge.MirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
 	if _, err := os.Stat(filepath.Join(mirror, "HEAD")); err == nil {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(mirror), 0o750); err != nil {
 		return fmt.Errorf("push mirror: %w", err)
 	}
-	init := exec.CommandContext(ctx, "git", "init", "--bare", mirror)
+	init := exec.CommandContext(ctx, "git", "init", "--bare", "--template=", mirror)
 	init.Env = withoutPushCredential(os.Environ())
 	if out, err := init.CombinedOutput(); err != nil {
 		return fmt.Errorf("push mirror: git init --bare: %w\n%s", err, out)

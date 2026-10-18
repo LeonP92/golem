@@ -361,3 +361,34 @@ func TestLocalAlternateRefsDoesNotExecuteAgentConfig(t *testing.T) {
 		t.Fatal("agent-owned alternateRefsCommand executed")
 	}
 }
+
+// The deployed shem integrates repositories owned by the unprivileged agent.
+// Same-UID fixtures miss Git's ownership checks.
+func TestLocalTransportAgentOwnedRepository(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root to create a different-UID repository")
+	}
+	for _, scheme := range []string{"", "file://"} {
+		t.Run(scheme, func(t *testing.T) {
+			l := newLab(t)
+			quotedRemote := filepath.Join(filepath.Dir(l.remote), "agent's repo $(echo injected).git")
+			if err := os.Rename(l.remote, quotedRemote); err != nil {
+				t.Fatal(err)
+			}
+			l.remote = quotedRemote
+			heads := l.seed("feat")
+			if err := filepath.WalkDir(l.remote, func(path string, _ os.DirEntry, err error) error {
+				if err != nil {
+					return err
+				}
+				return os.Chown(path, 65534, 65534)
+			}); err != nil {
+				t.Fatal(err)
+			}
+			res, err := (Git{}).MergeIntoTarget(context.Background(), Merge{Mirror: l.mirror, Remote: scheme + l.remote, Branch: "feat", HeadSHA: heads["feat"], TargetRef: "epic/agent-owned"})
+			if err != nil || res.Status != Merged {
+				t.Fatalf("agent-owned merge failed: %v %v", res, err)
+			}
+		})
+	}
+}

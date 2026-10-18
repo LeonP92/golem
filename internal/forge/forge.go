@@ -11,6 +11,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -90,6 +91,10 @@ func mirrorLock(path string) *sync.Mutex {
 	mu, _ := mirrors.LoadOrStore(filepath.Clean(path), &sync.Mutex{})
 	return mu.(*sync.Mutex)
 }
+
+// MirrorLock shares the merge lane's mutex with worker mirror initialization
+// and base-ref creation, which use the same bare repository.
+func MirrorLock(path string) *sync.Mutex { return mirrorLock(path) }
 
 // HeadSHA implements Forge; ls-remote only talks to the remote, so no
 // local repository is needed.
@@ -256,9 +261,35 @@ func remoteGit(ctx context.Context, dir, remote string, args ...string) (string,
 	if !local {
 		return git(ctx, dir, args...)
 	}
-	helper := "--upload-pack=git -c core.hooksPath=/dev/null -c core.alternateRefsCommand=true -c uploadpack.packObjectsHook=env upload-pack"
+	// The shem owns the mirror, but the agent owns the local repository.
+	// Trust only that repository inside the credential-free transport helper.
+	path := remote
+	if strings.HasPrefix(remote, "file://") {
+		u, err := url.Parse(remote)
+		if err != nil {
+			return "", err
+		}
+		path = u.Path
+		if u.Host != "" && u.Host != "localhost" {
+			path = "//" + u.Host + path
+		}
+	}
+	path, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	path, err = filepath.EvalSymlinks(path)
+	if err != nil {
+		return "", err
+	}
+	// Git runs transport helpers through a shell. Single-quote paths so even
+	// repository names containing spaces or shell syntax stay literal data.
+	quotedPath := strings.ReplaceAll(filepath.ToSlash(path), "'", "'\\''")
+	quotedGitDir := strings.ReplaceAll(filepath.ToSlash(filepath.Join(path, ".git")), "'", "'\\''")
+	trust := " -c 'safe.directory=" + quotedPath + "' -c 'safe.directory=" + quotedGitDir + "'"
+	helper := "--upload-pack=git" + trust + " -c core.hooksPath=/dev/null -c core.alternateRefsCommand=true -c uploadpack.packObjectsHook=env upload-pack"
 	if args[0] == "push" {
-		helper = "--receive-pack=git -c core.hooksPath=/dev/null -c core.alternateRefsCommand=true receive-pack"
+		helper = "--receive-pack=git" + trust + " -c core.hooksPath=/dev/null -c core.alternateRefsCommand=true receive-pack"
 	}
 	args = append([]string{args[0], helper}, args[1:]...)
 	return gitEnv(ctx, dir, agentenv.Environ(), args...)
