@@ -54,10 +54,14 @@ func TestPostCheckpointWithRetry_ExhaustsRetries(t *testing.T) {
 	}
 }
 
-// TestPostCheckpointWithRetry_RestoresRetryAttempts verifies that the client's
-// RetryAttempts field is restored to its original value after the call.
-func TestPostCheckpointWithRetry_RestoresRetryAttempts(t *testing.T) {
+// Check the shared settings while the request is in flight: restoring them on
+// return still races with other tickets and changes their retry budgets.
+func TestPostCheckpointWithRetry_PreservesSharedRetryAttempts(t *testing.T) {
+	entered := make(chan struct{})
+	release := make(chan struct{})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(entered)
+		<-release
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
@@ -65,7 +69,18 @@ func TestPostCheckpointWithRetry_RestoresRetryAttempts(t *testing.T) {
 	c := client.New(srv.URL, "k", "test-shem")
 	origAttempts := c.RetryAttempts
 
-	_ = worker.PostCheckpointWithRetry(c, "ticket-uuid-1", "plan", "sha1", 3)
+	done := make(chan error, 1)
+	go func() {
+		done <- worker.PostCheckpointWithRetry(c, "ticket-uuid-1", "plan", "sha1", 3)
+	}()
+	<-entered
+	if c.RetryAttempts != origAttempts {
+		t.Errorf("in-flight checkpoint changed shared RetryAttempts: got %d, want %d", c.RetryAttempts, origAttempts)
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("PostCheckpointWithRetry: %v", err)
+	}
 
 	if c.RetryAttempts != origAttempts {
 		t.Errorf("RetryAttempts not restored: got %d, want %d", c.RetryAttempts, origAttempts)
