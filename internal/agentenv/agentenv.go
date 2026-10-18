@@ -200,6 +200,26 @@ func passthroughNames(parent []string) map[string]bool {
 // agent exec site passes to cmd.Env.
 func Environ() []string { return Filter(os.Environ()) }
 
+// GolemCLIEnviron is for a trusted nested Golem CLI, not an agent process.
+// The CLI may run a gate, which filters its own child environment again. Keep
+// the operator's allow-list policy across that boundary so explicitly allowed
+// build/test variables survive the second filter; Filter still strips the
+// policy itself before any agent or gate command runs.
+func GolemCLIEnviron() []string { return FilterForGolemCLI(os.Environ()) }
+
+// FilterForGolemCLI applies the agent allow-list and retains only its policy
+// directive for the trusted Golem CLI to apply to its own children.
+func FilterForGolemCLI(parent []string) []string {
+	out := Filter(parent)
+	for _, kv := range parent {
+		name, value, ok := strings.Cut(kv, "=")
+		if ok && name == passthroughVar && strings.TrimSpace(value) != "" {
+			return append(out, kv)
+		}
+	}
+	return out
+}
+
 // FilterPairs returns operator-declared variables as KEY=VALUE pairs, minus
 // golem's own. The allow-list does not apply: the operator named them.
 func FilterPairs(m map[string]string) []string {

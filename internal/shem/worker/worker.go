@@ -604,7 +604,7 @@ func (w *Worker) runGraphBuild(remote string) {
 	log.Printf("worker: building the code graph for %s in %s", remote, repoPath)
 	args := w.agent.subcommandArgs([]string{"graph", "build", "--repo", repoPath},
 		w.agent.StageModel(models.StageGraph))
-	out, err := asAgent(exec.Command("golem", args...)).CombinedOutput() //nolint:gosec
+	out, err := asGolemCLI(exec.Command("golem", args...)).CombinedOutput() //nolint:gosec
 	if err != nil {
 		// CombinedOutput rather than the error alone: `golem graph build`
 		// prints why it failed and exits 1, so the exit status on its own

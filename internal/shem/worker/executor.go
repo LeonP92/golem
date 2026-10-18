@@ -276,7 +276,7 @@ func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketI
 		}
 		baseSHA = sha
 	}
-	cmd := asAgent(exec.CommandContext(ctx, "golem",
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem",
 		golemTicketNewArgs(ticketID, branch, description, e.Agent.ConfigPath, baseSHA, accept...)...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
@@ -341,7 +341,7 @@ func revParse(ctx context.Context, dir, ref string) (string, error) {
 
 // runGolemAdvance advances the local ticket to the given phase.
 func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) error {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -377,7 +377,7 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID, stage, model string) error {
 	args := e.Agent.subcommandArgs([]string{"ticket", "validate",
 		"--ticket", ticketID, "--stage", stage}, model)
-	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -416,7 +416,7 @@ func (e *GolemExecutor) selfVerify(ctx context.Context, c *client.Client,
 // runGolemVerify reports failed only when a check failed (exit 2), not
 // when verification could not run.
 func (e *GolemExecutor) runGolemVerify(ctx context.Context, repoPath, ticketID string) (string, bool) {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "verify", "--ticket", ticketID))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", "ticket", "verify", "--ticket", ticketID))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
@@ -433,7 +433,7 @@ func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, 
 		args = append(args, "--base", "origin/"+baseBranch)
 	}
 	args = e.Agent.subcommandArgs(args, model)
-	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -448,6 +448,15 @@ func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, 
 // in pushTicketBranch keeps root.
 func asAgent(cmd *exec.Cmd) *exec.Cmd {
 	cmd.Env = agentenv.Environ()
+	agentenv.DropPrivileges(cmd)
+	return cmd
+}
+
+// asGolemCLI retains the operator's agent-env policy for Golem's own nested
+// CLI so verification and review gates can apply it again to their children.
+// The policy is not passed to agent or repository commands.
+func asGolemCLI(cmd *exec.Cmd) *exec.Cmd {
+	cmd.Env = agentenv.GolemCLIEnviron()
 	agentenv.DropPrivileges(cmd)
 	return cmd
 }
@@ -590,7 +599,7 @@ func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath, graphMode
 	}
 	configPath := filepath.Join(repoPath, ".golem", "config.yaml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", "init",
+		out, err := asGolemCLI(exec.CommandContext(ctx, "golem", "init",
 			"--backend", e.Agent.Adapter.Name(), "--repo", repoPath)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem init: %w\n%s", err, out)
@@ -609,16 +618,16 @@ func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath, graphMode
 
 	indexPath := filepath.Join(repoPath, ".golem", "index")
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
+		out, err := asGolemCLI(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem graph build: %w\n%s", err, out)
 		}
 		log.Printf("executor: built graph in %s", repoPath)
 	} else {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", graphArgs("update")...)).CombinedOutput()
+		out, err := asGolemCLI(exec.CommandContext(ctx, "golem", graphArgs("update")...)).CombinedOutput()
 		if err != nil {
 			log.Printf("executor: graph update failed, rebuilding: %v\n%s", err, out)
-			out, err = asAgent(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
+			out, err = asGolemCLI(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("golem graph build: %w\n%s", err, out)
 			}
@@ -962,7 +971,7 @@ func firstLineOf(s string) string {
 // row — the one place that actually knows it.
 func (e *GolemExecutor) generatePRDescription(ctx context.Context, repoPath, ticketID, model string) (string, error) {
 	args := e.Agent.subcommandArgs([]string{"ticket", "pr-description", "--ticket", ticketID}, model)
-	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
