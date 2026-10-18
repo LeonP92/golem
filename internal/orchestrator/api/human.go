@@ -137,6 +137,8 @@ func (h *Handlers) ticketAction(w http.ResponseWriter, r *http.Request) {
 		h.actionApprove(w, r, id)
 	case "requeue":
 		h.actionRequeue(w, r, id, body.Feedback, body.Models, body.Backend)
+	case "retry-current-step":
+		h.actionRetryCurrentStep(w, r, id, body.Feedback, body.Models, body.Backend)
 	case "close":
 		h.actionClose(w, r, id)
 	case "needs-attention":
@@ -280,6 +282,7 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 			"assigned_shem":    nil,
 			"checkpoint_phase": nil,
 			"checkpoint_sha":   nil,
+			"retry_phase":      "",
 		}
 		for k, v := range cols {
 			updates[k] = v
@@ -333,6 +336,110 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 		Repo:     ticket.RepoRemote,
 	})
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// actionRetryCurrentStep releases a needs-attention ticket back to the pool
+// while retaining its committed checkpoint and the worker phase that failed.
+// Unlike requeue, this action must have a recoverable SHA so another shem can
+// reconstruct the same branch state before retrying it.
+func (h *Handlers) actionRetryCurrentStep(w http.ResponseWriter, r *http.Request, id, feedback string, raw map[string]string, backend string) {
+	var ticket db.Ticket
+	if err := h.DB.First(&ticket, "id = ?", id).Error; err != nil {
+		http.Error(w, "ticket not found", http.StatusNotFound)
+		return
+	}
+	phase := retryPhaseForTicket(ticket)
+	if ticket.Phase != "needs-attention" || phase == "" || ticket.CheckpointPhase == nil || strings.TrimSpace(*ticket.CheckpointPhase) == "" || ticket.CheckpointSHA == nil || strings.TrimSpace(*ticket.CheckpointSHA) == "" {
+		http.Error(w, "ticket has no saved checkpoint for a current-step retry; use requeue instead", http.StatusConflict)
+		return
+	}
+	cols, ok := h.selectionColumns(w, ticket, raw, backend, false, nil)
+	if !ok {
+		return
+	}
+	var assigned *uint
+	if err := h.DB.Transaction(func(tx *gorm.DB) error {
+		updates := map[string]any{"phase": "unassigned", "assigned_shem": nil, "retry_phase": phase}
+		for k, v := range cols {
+			updates[k] = v
+		}
+		result := tx.Model(&db.Ticket{}).
+			Where("id = ? AND phase = 'needs-attention' AND retry_phase = ? AND checkpoint_sha = ?", id, ticket.RetryPhase, *ticket.CheckpointSHA).
+			Updates(updates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return errNotRetryable
+		}
+		var fresh db.Ticket
+		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+			return fmt.Errorf("reload ticket %s: %w", id, err)
+		}
+		assigned = ticket.AssignedShem
+		if err := tx.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{}).Error; err != nil {
+			return err
+		}
+		if err := appendLogTx(tx, id, "STATUS", "human", "", "Retrying from saved checkpoint at phase "+phase); err != nil {
+			return err
+		}
+		if feedback != "" {
+			if err := tx.Create(&db.HumanInput{TicketID: id, Kind: "feedback", Prompt: feedback, CreatedAt: time.Now()}).Error; err != nil {
+				return err
+			}
+			if err := appendLogTx(tx, id, "HUMAN_FEEDBACK", "human", "developer", feedback); err != nil {
+				return err
+			}
+		}
+		return enqueueGitHubPhase(tx, fresh, "unassigned", h.BaseURL)
+	}); err != nil {
+		if errors.Is(err, errNotRetryable) {
+			http.Error(w, "ticket changed; refresh and try again", http.StatusConflict)
+		} else {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+		}
+		return
+	}
+	if assigned != nil {
+		h.Hub.Push(*assigned, ws.WSMessage{Type: "ticket_requeued", TicketID: strPtr(id), Repo: ticket.RepoRemote}) //nolint:errcheck
+	}
+	h.Hub.Broadcast(ticket.RepoRemote, ws.WSMessage{Type: "ticket_available", TicketID: strPtr(id), Repo: ticket.RepoRemote})
+	w.WriteHeader(http.StatusNoContent)
+}
+
+var errNotRetryable = errors.New("ticket is not retryable")
+
+func retryWorkerPhase(phase string) string {
+	switch phase {
+	case "brainstorm", "plan", "implement", "revising":
+		return phase
+	case "claimed", "in-progress":
+		return "brainstorm"
+	case "review", "ready-for-review":
+		return "implement"
+	default:
+		return ""
+	}
+}
+
+func retryPhaseForTicket(ticket db.Ticket) string {
+	if phase := retryWorkerPhase(ticket.RetryPhase); phase != "" {
+		return phase
+	}
+	// Older needs-attention tickets predate RetryPhase. Their latest saved
+	// checkpoint identifies the next step; a failed work/review gate at the
+	// attention phase itself retries implementation against the saved head.
+	if ticket.CheckpointPhase != nil {
+		switch *ticket.CheckpointPhase {
+		case "brainstorm":
+			return "plan"
+		case "plan":
+			return "implement"
+		case "revising":
+			return "revising"
+		}
+	}
+	return "implement"
 }
 
 func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string) {
@@ -427,7 +534,7 @@ func (h *Handlers) actionNeedsAttention(w http.ResponseWriter, r *http.Request, 
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase != 'pending-approval'", id).
-			Update("phase", "needs-attention")
+			Updates(db.PhaseUpdates("needs-attention"))
 		if result.Error != nil {
 			return result.Error
 		}

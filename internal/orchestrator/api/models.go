@@ -77,6 +77,7 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 		Description:     t.Description,
 		CheckpointPhase: t.CheckpointPhase,
 		CheckpointSHA:   t.CheckpointSHA,
+		RetryPhase:      t.RetryPhase,
 		LogEntries:      entries,
 		Backend:         backend,
 		Models:          resolved,

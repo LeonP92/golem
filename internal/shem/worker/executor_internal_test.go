@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/leonp92/golem/internal/promptfence"
+	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/ticket"
 	"github.com/leonp92/golem/internal/workspace"
@@ -50,6 +51,47 @@ func TestPromptsFenceUntrustedDescription(t *testing.T) {
 			closeAt := strings.Index(got, descriptionFenceClose)
 			if open >= at || at >= closeAt {
 				t.Errorf("%s prompt places the description outside the fence", name)
+			}
+		})
+	}
+}
+
+func TestRetryWorkerPhaseAndFeedback(t *testing.T) {
+	for _, phase := range []string{"brainstorm", "plan", "implement", "revising"} {
+		if got := retryWorkerPhase(phase); got != phase {
+			t.Errorf("retryWorkerPhase(%q) = %q", phase, got)
+		}
+	}
+	if got := retryWorkerPhase("needs-attention"); got != "" {
+		t.Errorf("unsupported retry phase = %q, want empty", got)
+	}
+
+	const prompt = "implement this"
+	if got := withHumanFeedback(prompt, "  "); got != prompt {
+		t.Errorf("empty feedback changed prompt: %q", got)
+	}
+	if got := withHumanFeedback(prompt, "keep the existing implementation"); !strings.Contains(got, "Human retry feedback:\nkeep the existing implementation") {
+		t.Errorf("retry feedback missing from prompt: %q", got)
+	}
+}
+
+func TestResumeWorkerPhaseUsesNextUnfinishedPhase(t *testing.T) {
+	brainstorm, plan := "brainstorm", "plan"
+	tests := []struct {
+		name  string
+		claim client.ClaimResponse
+		want  string
+	}{
+		{name: "no checkpoint starts from brainstorm"},
+		{name: "ordinary resume continues after brainstorm", claim: client.ClaimResponse{CheckpointPhase: &brainstorm}, want: "plan"},
+		{name: "ordinary resume continues after plan", claim: client.ClaimResponse{CheckpointPhase: &plan}, want: "implement"},
+		{name: "explicit retry overrides checkpoint", claim: client.ClaimResponse{CheckpointPhase: &brainstorm, RetryPhase: "plan"}, want: "plan"},
+		{name: "revision retry overrides checkpoint", claim: client.ClaimResponse{CheckpointPhase: &plan, RetryPhase: "revising"}, want: "revising"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := resumeWorkerPhase(&tt.claim); got != tt.want {
+				t.Errorf("resumeWorkerPhase() = %q, want %q", got, tt.want)
 			}
 		})
 	}

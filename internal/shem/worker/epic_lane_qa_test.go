@@ -40,14 +40,10 @@ func laneQABase(t *testing.T, remote, repoPath, targetRef string, pushEnabled bo
 	return "refs/golem-qa/base"
 }
 
-func laneQAChildID(epicID, key string) string {
-	return fmt.Sprintf("epic-%s-%s", epicID[:8], strings.ToLower(key))
-}
-
 func laneQAReceipt(t *testing.T, stack *laneStack, epicID, key string) string {
 	t.Helper()
 	var child db.Ticket
-	if err := stack.gdb.First(&child, "id = ?", laneQAChildID(epicID, key)).Error; err != nil {
+	if err := stack.gdb.First(&child, "id = ?", laneChildID(t, stack.gdb, epicID, key)).Error; err != nil {
 		t.Fatal(err)
 	}
 	return child.EpicIntegratedSHA
@@ -90,10 +86,10 @@ func TestEpicLaneQA_WideDeepDiamond(t *testing.T) {
 	targetRef := "epic/" + epicID
 
 	// Gating: dependents are unclaimable until every predecessor is merged.
-	if _, err := stack.shem.ClaimTicket(laneQAChildID(epicID, "B")); err == nil {
+	if _, err := stack.shem.ClaimTicket(laneChildID(t, stack.gdb, epicID, "B")); err == nil {
 		t.Fatal("claimed B before A integrated")
 	}
-	if _, err := stack.shem.ClaimTicket(laneQAChildID(epicID, "G")); err == nil {
+	if _, err := stack.shem.ClaimTicket(laneChildID(t, stack.gdb, epicID, "G")); err == nil {
 		t.Fatal("claimed deep node G before the chain integrated")
 	}
 
@@ -104,7 +100,7 @@ func TestEpicLaneQA_WideDeepDiamond(t *testing.T) {
 	}
 	laneQAFinish(t, stack, ex, cfg, bin, epicID, "B", repoPath, laneQABase(t, remote, repoPath, targetRef, true))
 	// Diamond: one predecessor merged is not enough for D.
-	if _, err := stack.shem.ClaimTicket(laneQAChildID(epicID, "D")); err == nil {
+	if _, err := stack.shem.ClaimTicket(laneChildID(t, stack.gdb, epicID, "D")); err == nil {
 		t.Fatal("claimed D with only one diamond side integrated")
 	}
 	laneQAFinish(t, stack, ex, cfg, bin, epicID, "C", repoPath, laneQABase(t, remote, repoPath, targetRef, true))
@@ -253,7 +249,7 @@ func TestEpicLaneQA_RepeatedMultiFileConflict(t *testing.T) {
 	epicID := stack.startLaneEpic(remote,
 		[]map[string]any{laneNode("X", "first"), laneNode("Y", "second")}, nil)
 	targetRef := "epic/" + epicID
-	yID := laneQAChildID(epicID, "Y")
+	yID := laneChildID(t, stack.gdb, epicID, "Y")
 
 	claimX, dirX := stack.laneChildClaims(t, bin, epicID, "X", repoPath, "main")
 	wtX := filepath.Join(dirX, "worktree")
@@ -326,7 +322,7 @@ func TestEpicLaneQA_RepeatedMultiFileConflict(t *testing.T) {
 		t.Fatalf("refinish Y (proper): %v", err)
 	}
 	stack.gdb.First(&child, "id = ?", yID)
-	if child.Phase != "ready-for-review" || child.EpicIntegratedSHA == "" || child.PRFixAttempts != 2 {
+	if child.Phase != "closed" || child.EpicIntegratedSHA == "" || child.PRFixAttempts != 2 {
 		t.Fatalf("proper fix did not integrate: %+v", child)
 	}
 	if got := laneEpicState(t, stack.gdb, epicID); got != "awaiting-final-review" {
@@ -459,14 +455,14 @@ func TestEpicLaneQA_PauseWithIntegratedSibling(t *testing.T) {
 		t.Fatalf("pause=%d", code)
 	}
 	// Claims stop while paused.
-	if _, err := stack.shem.ClaimTicket(laneQAChildID(epicID, "C")); err == nil {
+	if _, err := stack.shem.ClaimTicket(laneChildID(t, stack.gdb, epicID, "C")); err == nil {
 		t.Fatal("claimed a new child while the run is paused")
 	}
 	// Already-claimed work finishes but does not merge.
 	if err := ex.finishWorkPhase(ctx, cfg, stack.shem, claimB, repoPath, dirB, "Implementation", claimB.Branch); err != nil {
 		t.Fatalf("finish B paused: %v", err)
 	}
-	if got := laneTicketPhase(t, stack.gdb, laneQAChildID(epicID, "B")); got != "ready-for-review" {
+	if got := laneTicketPhase(t, stack.gdb, laneChildID(t, stack.gdb, epicID, "B")); got != "ready-for-review" {
 		t.Fatalf("paused B phase = %q, want ready-for-review", got)
 	}
 	if laneQAReceipt(t, stack, epicID, "B") != "" {
@@ -504,7 +500,7 @@ func TestEpicLaneQA_ConflictThenTesterFailThenRecover(t *testing.T) {
 	epicID := stack.startLaneEpic(remote,
 		[]map[string]any{laneNode("X", "one"), laneNode("Y", "two")}, nil)
 	targetRef := "epic/" + epicID
-	yID := laneQAChildID(epicID, "Y")
+	yID := laneChildID(t, stack.gdb, epicID, "Y")
 
 	claimX, dirX := stack.laneChildClaims(t, bin, epicID, "X", repoPath, "main")
 	wtX := filepath.Join(dirX, "worktree")
@@ -572,7 +568,7 @@ func TestEpicLaneQA_ConflictThenTesterFailThenRecover(t *testing.T) {
 		t.Fatalf("refinish Y (fixed): %v", err)
 	}
 	stack.gdb.First(&child, "id = ?", yID)
-	if child.Phase != "ready-for-review" || child.EpicIntegratedSHA == "" || child.PRFixAttempts != 2 {
+	if child.Phase != "closed" || child.EpicIntegratedSHA == "" || child.PRFixAttempts != 2 {
 		t.Fatalf("fixed child did not integrate: %+v", child)
 	}
 	fixedHead := laneGit(t, wtY, "rev-parse", "HEAD")

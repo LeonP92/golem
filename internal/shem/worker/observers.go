@@ -51,7 +51,7 @@ func (e *GolemExecutor) runObservers(ctx context.Context, repoPath, worktree, ti
 			args = append(args, "--base", "origin/"+baseBranch)
 		}
 		args = e.Agent.subcommandArgs(args, model)
-		cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+		cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 		cmd.Dir = repoPath
 		if out, err := cmd.CombinedOutput(); err != nil {
 			errs = append(errs, fmt.Errorf("observer %s: %w\n%s", role, err, out))

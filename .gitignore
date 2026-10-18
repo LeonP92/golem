@@ -48,3 +48,4 @@ Thumbs.db
 # .claude/settings.json ARE tracked on purpose — these two are not.
 .claude/projects/
 .claude/backups/
+

@@ -104,6 +104,52 @@ func TestAgentEnv(t *testing.T) {
 	}
 }
 
+func TestGolemCLIEnvCarriesAllowListAcrossNestedGate(t *testing.T) {
+	parent := []string{
+		"GOLEM_AGENT_ENV=APP_TEST_DATABASE_URL,GOFLAGS",
+		"APP_TEST_DATABASE_URL=postgres://app@localhost/app_test",
+		"GOFLAGS=-p=4",
+		"GOLEM_SHEM_API_KEY=secret",
+		"PATH=/usr/bin",
+	}
+
+	cliEnv := FilterForGolemCLI(parent)
+	for _, want := range []string{
+		"GOLEM_AGENT_ENV=APP_TEST_DATABASE_URL,GOFLAGS",
+		"APP_TEST_DATABASE_URL=postgres://app@localhost/app_test",
+		"GOFLAGS=-p=4",
+	} {
+		if !containsEnv(cliEnv, want) {
+			t.Errorf("trusted Golem CLI environment is missing %q: %v", want, cliEnv)
+		}
+	}
+	if containsEnv(cliEnv, "GOLEM_SHEM_API_KEY=secret") {
+		t.Fatal("trusted Golem CLI environment contains the shem API key")
+	}
+
+	gateEnv := Filter(cliEnv)
+	for _, want := range []string{
+		"APP_TEST_DATABASE_URL=postgres://app@localhost/app_test",
+		"GOFLAGS=-p=4",
+	} {
+		if !containsEnv(gateEnv, want) {
+			t.Errorf("nested gate environment is missing %q after its second filter: %v", want, gateEnv)
+		}
+	}
+	if containsEnv(gateEnv, "GOLEM_AGENT_ENV=APP_TEST_DATABASE_URL,GOFLAGS") {
+		t.Fatal("nested gate environment contains Golem's allow-list policy")
+	}
+}
+
+func containsEnv(env []string, want string) bool {
+	for _, kv := range env {
+		if kv == want {
+			return true
+		}
+	}
+	return false
+}
+
 // TestAgentEnvStripsEveryVariableGolemItselfReads is the invariant behind the
 // allow-list, checked against the source rather than against a hand-written
 // list that would go stale. Every os.Getenv/os.LookupEnv literal in

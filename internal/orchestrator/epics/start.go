@@ -9,6 +9,7 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
+	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/epic"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/slug"
@@ -22,8 +23,10 @@ var (
 )
 
 // Start materializes the approved plan into ordinary child tickets and
-// moves the run to running. Child IDs are deterministic, so a repeated
-// start creates nothing.
+// moves the run to running. Child IDs are ordinary UUIDs like any other
+// ticket's; a repeated start still creates nothing, because the
+// (epic_id, epic_node_key) unique index rejects children that already
+// exist.
 func Start(gdb *gorm.DB, epicID string) (int, error) {
 	created := 0
 	err := gdb.Transaction(func(tx *gorm.DB) error {
@@ -42,7 +45,7 @@ func Start(gdb *gorm.DB, epicID string) (int, error) {
 			return err
 		}
 		for _, n := range plan.Nodes {
-			id := fmt.Sprintf("epic-%s-%s", e.ID[:8], strings.ToLower(n.Key))
+			id := uuid.NewString()
 			res := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&db.Ticket{
 				ID:               id,
 				RepoRemote:       e.RepoRemote,
@@ -165,7 +168,15 @@ func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string, emit ...func(t
 		// fail. A DIFFERENT sha still conflicts in any state.
 		switch child.EpicIntegratedSHA {
 		case sha:
-			return nil
+			// A receipt closes the child. Repair legacy rows as well: older
+			// runs recorded the integration SHA but left the ticket at
+			// ready-for-review, which made a merged child look unfinished.
+			if child.Phase == "closed" {
+				return nil
+			}
+			return tx.Model(&child).Updates(map[string]any{
+				"phase": "closed", "retry_phase": "",
+			}).Error
 		case "":
 		default:
 			return ErrIntegrationConflict
@@ -176,7 +187,11 @@ func RecordIntegration(gdb *gorm.DB, epicID, nodeKey, sha string, emit ...func(t
 		if err := tx.Where("epic_id = ? AND node_key = ?", epicID, nodeKey).Delete(&db.EpicIntegrationSlot{}).Error; err != nil {
 			return err
 		}
-		if err := tx.Model(&child).Update("epic_integrated_sha", sha).Error; err != nil {
+		if err := tx.Model(&child).Updates(map[string]any{
+			"epic_integrated_sha": sha,
+			"phase":               "closed",
+			"retry_phase":         "",
+		}).Error; err != nil {
 			return err
 		}
 		plan, _, err := LoadPlan(tx, epicID, e.ApprovedRevision)

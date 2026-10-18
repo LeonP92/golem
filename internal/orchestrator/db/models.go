@@ -61,8 +61,12 @@ type Ticket struct {
 	CreatedByUserID *uint   `gorm:"index" json:"created_by_user_id"`
 	CheckpointPhase *string `json:"checkpoint_phase"`
 	CheckpointSHA   *string `json:"checkpoint_sha"`
-	IssueNumber     *int    `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
-	IssueURL        string  `json:"issue_url"`
+	// RetryPhase remembers the active worker phase when a ticket is parked for
+	// attention. It is consumed by an explicit human retry; ordinary requeue
+	// clears it and starts the ticket over.
+	RetryPhase  string `gorm:"not null;default:''" json:"-"`
+	IssueNumber *int   `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
+	IssueURL    string `json:"issue_url"`
 	// IntakeApproved records that a human released this externally-sourced
 	// ticket from pending-approval via actionStart — the ONLY writer of this
 	// column. It is provenance, not phase: no sequence of phase transitions
@@ -195,6 +199,20 @@ type Ticket struct {
 	BranchPushed    bool      `gorm:"not null;default:false" json:"branch_pushed"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// PhaseUpdates builds the common fields for an orchestrator phase transition.
+// A needs-attention transition remembers the previous active phase atomically;
+// every other transition clears the retry hint so stale phases cannot leak
+// into a later run.
+func PhaseUpdates(phase string) map[string]any {
+	updates := map[string]any{"phase": phase}
+	if phase == "needs-attention" {
+		updates["retry_phase"] = gorm.Expr("CASE WHEN phase = ? THEN retry_phase ELSE phase END", phase)
+	} else {
+		updates["retry_phase"] = ""
+	}
+	return updates
 }
 
 func (s Shem) RepoList() []string {

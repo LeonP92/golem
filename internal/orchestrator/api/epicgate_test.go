@@ -241,6 +241,45 @@ func TestEpicRunEndpoints(t *testing.T) {
 	if !b.EpicReady {
 		t.Fatal("B not ready after A's receipt")
 	}
+	var a db.Ticket
+	h.DB.First(&a, "epic_id = ? AND epic_node_key = 'A'", e.ID)
+	if a.Phase != "closed" {
+		t.Fatalf("integrated A phase = %q, want closed", a.Phase)
+	}
+}
+
+func TestIntegrationResultClosesChild(t *testing.T) {
+	h, mux := setupTicketTest(t)
+	h.RegisterEpicRoutes(mux)
+	shem := seedShem(t, h, "shem-a", "testkey")
+	e := seedRunningEpic(t, h.DB)
+	if err := h.DB.Model(&db.Epic{}).Where("id = ?", e.ID).Update("auto_merge_children", true).Error; err != nil {
+		t.Fatal(err)
+	}
+	child := epicChild(t, h.DB, e.ID, "A")
+	if err := h.DB.Model(&child).Updates(map[string]any{"phase": "ready-for-review", "assigned_shem": shem.ID}).Error; err != nil {
+		t.Fatal(err)
+	}
+	gate, err := epics.GateIntegration(h.DB, e.ID, "A", "tested-head", shem.ID, time.Now())
+	if err != nil || gate.Outcome != epics.GateGranted {
+		t.Fatalf("integration gate = %+v, %v", gate, err)
+	}
+	body := `{"local_only":true,"lease_id":"` + gate.LeaseID + `","head_sha":"tested-head","status":"merged","merge_sha":"merge-sha"}`
+	w := httptest.NewRecorder()
+	req := shemRequest(http.MethodPost, "/api/epics/"+e.ID+"/nodes/A/integrate-result", "shem-a", "testkey")
+	req.Body = io.NopCloser(strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	mux.ServeHTTP(w, req)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("integration result = %d: %s", w.Code, w.Body.String())
+	}
+	var got db.Ticket
+	if err := h.DB.First(&got, "id = ?", child.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	if got.Phase != "closed" || got.EpicIntegratedSHA != "merge-sha" {
+		t.Fatalf("integrated child phase/receipt = %q/%q", got.Phase, got.EpicIntegratedSHA)
+	}
 }
 
 // The claim payload hands the worker the run context it needs: which run

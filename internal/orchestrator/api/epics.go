@@ -209,7 +209,14 @@ func (h *Handlers) integrateEpicNode(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON", http.StatusBadRequest)
 		return
 	}
-	writeEpicResult(w, 0, nil, epics.RecordIntegration(h.DB, r.PathValue("id"), r.PathValue("key"), body.SHA, ghsync.EnqueueFinalPR))
+	err := epics.RecordIntegration(h.DB, r.PathValue("id"), r.PathValue("key"), body.SHA, ghsync.EnqueueFinalPR)
+	if err == nil {
+		var child db.Ticket
+		if h.DB.Where("epic_id = ? AND epic_node_key = ?", r.PathValue("id"), r.PathValue("key")).First(&child).Error == nil {
+			h.notifyIntegratedChildClosed(child)
+		}
+	}
+	writeEpicResult(w, 0, nil, err)
 }
 
 func (h *Handlers) postEpicVerdict(w http.ResponseWriter, r *http.Request) {
@@ -371,6 +378,9 @@ func (h *Handlers) integrateEpicNodeResult(w http.ResponseWriter, r *http.Reques
 	if err == nil && revise {
 		h.pushIntegrationRevision(child)
 	}
+	if err == nil && (body.Status == "merged" || body.Status == "contained") {
+		h.notifyIntegratedChildClosed(child)
+	}
 	writeEpicResult(w, 0, nil, err)
 }
 
@@ -422,6 +432,16 @@ func (h *Handlers) pushIntegrationRevision(child db.Ticket) {
 	h.Hub.Push(*child.AssignedShem, ws.WSMessage{Type: "ticket_revise", TicketID: &child.ID, Repo: child.RepoRemote}) //nolint:errcheck
 }
 
+// notifyIntegratedChildClosed releases the shem's worktree after the receipt
+// made the child terminal. The phase and receipt are committed before this
+// notification is sent.
+func (h *Handlers) notifyIntegratedChildClosed(child db.Ticket) {
+	if child.AssignedShem == nil || h.Hub == nil {
+		return
+	}
+	h.Hub.Push(*child.AssignedShem, ws.WSMessage{Type: "ticket_closed", TicketID: &child.ID, Repo: child.RepoRemote}) //nolint:errcheck
+}
+
 // parkEpicChild moves a child to needs-attention with the reason on the
 // activity log: the integration lane could not land it and a human has to
 // look.
@@ -429,7 +449,7 @@ func (h *Handlers) parkEpicChild(child db.Ticket, message string) error {
 	return h.DB.Transaction(func(tx *gorm.DB) error {
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = ? AND epic_integrated_sha = ?", child.ID, "ready-for-review", "").
-			Update("phase", "needs-attention")
+			Updates(db.PhaseUpdates("needs-attention"))
 		if result.Error != nil {
 			return result.Error
 		}

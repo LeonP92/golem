@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -728,6 +729,8 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 
 	data := h.base(r, "")
 	data["Ticket"] = ticket
+	data["CanRetryCurrentStep"] = ticket.Phase == "needs-attention" && ticket.CheckpointPhase != nil &&
+		strings.TrimSpace(*ticket.CheckpointPhase) != "" && ticket.CheckpointSHA != nil && strings.TrimSpace(*ticket.CheckpointSHA) != ""
 	data["ResolvedModels"] = inStageOrder(ticketModels(fleet, ticket, assigned))
 	data["Selections"] = ticket.ModelSelections()
 	picker := modelPicker(fleet, pickerBackend, ticket.ModelSelections())
@@ -735,6 +738,9 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	requeue := singleModelSelect(picker, models.FieldPrefix+models.DefaultKey, "Model for every stage")
 	requeue.Select.Empty = "keep current"
 	data["RequeueSelect"] = requeue
+	retry := singleModelSelect(picker, models.FieldPrefix+models.DefaultKey, "Model for every stage")
+	retry.Select.Empty = "keep current"
+	data["RetrySelect"] = retry
 	data["ReviseSelect"] = singleModelSelect(revisePicker(picker, assigned), models.FieldPrefix+string(models.StageRevise), "Revision model")
 	data["WaitingFor"] = fleet.WaitingFor(ticket)
 	data["CreatedByName"] = createdBy

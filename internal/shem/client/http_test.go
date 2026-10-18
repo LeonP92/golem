@@ -54,6 +54,19 @@ func TestClient_AuthorizationHeader(t *testing.T) {
 	}
 }
 
+func TestClient_PostPhaseRejectsUnauthorizedResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	c := client.New(srv.URL, "key", "test-shem")
+	err := c.PostPhase("ticket-1", "plan")
+	if err == nil || !strings.Contains(err.Error(), "401") {
+		t.Fatalf("PostPhase error = %v, want unauthorized status error", err)
+	}
+}
+
 func TestClient_ExhaustsRetries(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server error", http.StatusInternalServerError)

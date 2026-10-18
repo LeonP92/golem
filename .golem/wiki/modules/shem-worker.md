@@ -17,7 +17,7 @@ Graceful shutdown: `Shutdown()` cancels all running tickets and spin-waits up to
 **GolemExecutor** (`executor.go`) runs a claimed ticket by:
 1. Resolving the local repo path from `config.Repos` by normalized remote URL.
 2. Starting a `tailLog` goroutine that polls `.golem/tickets/<id>/log.jsonl` every 500 ms and POSTs new JSON-lines to `/api/tickets/{id}/log`.
-3. When `CheckpointPhase != nil`, calling `RecoverTicket` to restore local worktree state before resuming.
+3. Resuming from a completed checkpoint at the next unfinished phase, or from an explicit retry phase with `RecoverTicketForRetry`; startup recovery preserves that phase rather than moving the orchestrator back to the checkpoint.
 4. Driving the brainstorm → plan → implement → review lifecycle via `golem ticket new` / `golem ticket resume`. `golem ticket new` is invoked with `--branch claim.Branch` so the worktree is created on the server-computed slug branch instead of `golem ticket new`'s own `ticket/<id>` default. When the claim carries a `BaseBranch`, the worker fetches it and pins it to an exact commit (`resolveBaseSHA`), passing `--base <sha>`. With no_push or a `local://` remote nothing is fetched. If the base cannot be resolved, an ordinary ticket starts from HEAD (the pre-pinning behavior) and an epic child falls back to the run's base branch. Brainstorm and plan phases loop: run Claude, post approval request, wait; if a `feedback` HumanInput is pending after approval, the loop re-runs the phase with the feedback injected into the prompt.
 5. A `"revising"` phase case (reached only via `ReviseClaim`'s `CheckpointPhase: "revising"` sentinel, not a local ticket phase): consumes the pending `feedback` HumanInput, runs `buildRevisePrompt` in the existing worktree/branch (no plan restatement, no `golem ticket close`), then re-reads local state and posts the resulting phase (`ready-for-review` or `needs-attention`) back — same checkpoint/post-phase pattern as the `implement` case.
 6. After the CLI returns, reading `.golem/tickets/<id>/state.json` and posting a final checkpoint via `PostCheckpointWithRetry`.
@@ -26,6 +26,7 @@ The `tailDone` channel ensures the tail goroutine fully exits (flushing its last
 
 **Recovery** (`recover.go`) restores a checkpointed ticket's local worktree after a node failure:
 - `RecoverTicket(ctx, claim, cfg)` — clones repo if absent, fetches, checks out `claim.Branch` (the server-computed slug branch carried through the claim, not re-derived from the ticket ID), resets to checkpoint SHA, then calls `ReconstructState`.
+- An explicit current-step retry uses `RecoverTicketForRetry`: it keeps the existing worktree when it is already on the ticket branch (including uncommitted edits), refuses to reset an existing wrong-branch or detached worktree, and restores from the saved SHA only when the worktree is absent.
 - `ReconstructState(ticketDir, claim)` — writes `state.json` (phase/branch/sha) and `log.jsonl` from the `ClaimResponse`. Idempotent.
 - `CloneIfMissing(ctx, repoPath, remote)` — runs `git clone` only if `repoPath` does not exist.
 

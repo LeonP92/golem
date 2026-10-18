@@ -108,7 +108,33 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 	// Determine starting phase and ensure the ticket exists locally.
 	startPhase := "brainstorm"
-	if claim.CheckpointPhase != nil {
+	if claim.RetryPhase != "" {
+		postStatus(c, ticketID, "Retrying "+claim.RetryPhase+" from the saved branch checkpoint")
+		startPhase = retryWorkerPhase(claim.RetryPhase)
+		if startPhase == "" {
+			return fmt.Errorf("unsupported retry phase %q", claim.RetryPhase)
+		}
+		if claim.CheckpointPhase != nil && claim.CheckpointSHA != nil {
+			recoveryClaim := *claim
+			if startPhase == "revising" {
+				recoveryClaim.CheckpointPhase = &startPhase
+			}
+			if err := RecoverTicketForRetry(ctx, &recoveryClaim, cfg, e.Agent.Adapter.WorktreeSetup); err != nil {
+				return fmt.Errorf("retry recovery failed: %w", err)
+			}
+		}
+		if startPhase != "revising" {
+			if err := runGolemAdvance(ctx, repoPath, ticketID, startPhase); err != nil {
+				return fmt.Errorf("restore local ticket phase for retry: %w", err)
+			}
+		}
+		if err := c.PostPhase(ticketID, startPhase); err != nil {
+			if errors.Is(err, client.ErrNotOwner) {
+				return nil
+			}
+			return fmt.Errorf("set retry phase: %w", err)
+		}
+	} else if claim.CheckpointPhase != nil {
 		postStatus(c, ticketID, "Resuming from checkpoint: "+*claim.CheckpointPhase)
 		if err := RecoverTicket(ctx, claim, cfg, e.Agent.Adapter.WorktreeSetup); err != nil {
 			return fmt.Errorf("recovery failed: %w", err)
@@ -175,7 +201,10 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 		case "implement":
 			model := e.claimModel(c, claim, models.StageImplement)
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, "implement")
-			if err := e.runPhase(ctx, repoPath, buildImplementPrompt(ticketID, claim.Branch, claim.Description), ticketDir, "implement", model); err != nil {
+			postCurrentHeadCheckpoint(ctx, c, ticketID, "implement", filepath.Join(ticketDir, "worktree"))
+			feedback := consumeFeedback(ctx, c, ticketID)
+			prompt := withHumanFeedback(buildImplementPrompt(ticketID, claim.Branch, claim.Description), feedback)
+			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, "implement", model); err != nil {
 				return err
 			}
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
@@ -188,6 +217,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 		case "revising":
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
+			postCurrentHeadCheckpoint(ctx, c, ticketID, "revising", filepath.Join(ticketDir, "worktree"))
 			// Make origin/<base> current before the agent runs. A revision
 			// asked for by the pull-request monitor may be "this no longer
 			// merges into main", and the fix is `git merge origin/main` —
@@ -276,7 +306,7 @@ func (e *GolemExecutor) runGolemTicketNew(ctx context.Context, repoPath, ticketI
 		}
 		baseSHA = sha
 	}
-	cmd := asAgent(exec.CommandContext(ctx, "golem",
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem",
 		golemTicketNewArgs(ticketID, branch, description, e.Agent.ConfigPath, baseSHA, accept...)...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
@@ -341,7 +371,7 @@ func revParse(ctx context.Context, dir, ref string) (string, error) {
 
 // runGolemAdvance advances the local ticket to the given phase.
 func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) error {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", "ticket", "advance", "--ticket", ticketID, "--to", toPhase))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -377,7 +407,7 @@ func runGolemAdvance(ctx context.Context, repoPath, ticketID, toPhase string) er
 func (e *GolemExecutor) runGolemValidate(ctx context.Context, repoPath, ticketID, stage, model string) error {
 	args := e.Agent.subcommandArgs([]string{"ticket", "validate",
 		"--ticket", ticketID, "--stage", stage}, model)
-	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -416,7 +446,7 @@ func (e *GolemExecutor) selfVerify(ctx context.Context, c *client.Client,
 // runGolemVerify reports failed only when a check failed (exit 2), not
 // when verification could not run.
 func (e *GolemExecutor) runGolemVerify(ctx context.Context, repoPath, ticketID string) (string, bool) {
-	cmd := asAgent(exec.CommandContext(ctx, "golem", "ticket", "verify", "--ticket", ticketID))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", "ticket", "verify", "--ticket", ticketID))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	var exit *exec.ExitError
@@ -433,7 +463,7 @@ func (e *GolemExecutor) runGolemReview(ctx context.Context, repoPath, ticketID, 
 		args = append(args, "--base", "origin/"+baseBranch)
 	}
 	args = e.Agent.subcommandArgs(args, model)
-	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -452,6 +482,15 @@ func asAgent(cmd *exec.Cmd) *exec.Cmd {
 	return cmd
 }
 
+// asGolemCLI retains the operator's agent-env policy for Golem's own nested
+// CLI so verification and review gates can apply it again to their children.
+// The policy is not passed to agent or repository commands.
+func asGolemCLI(cmd *exec.Cmd) *exec.Cmd {
+	cmd.Env = agentenv.GolemCLIEnviron()
+	agentenv.DropPrivileges(cmd)
+	return cmd
+}
+
 // consumeFeedback retrieves the pending feedback for a ticket and acks it so
 // the shem doesn't re-read it on a restart. Returns "" if none.
 func consumeFeedback(ctx context.Context, c *client.Client, ticketID string) string {
@@ -463,6 +502,31 @@ func consumeFeedback(ctx context.Context, c *client.Client, ticketID string) str
 		log.Printf("executor: ack feedback %d: %v", fb.ID, err)
 	}
 	return fb.Prompt
+}
+
+func retryWorkerPhase(phase string) string {
+	switch phase {
+	case "brainstorm", "plan", "implement", "revising":
+		return phase
+	default:
+		return ""
+	}
+}
+
+func withHumanFeedback(prompt, feedback string) string {
+	if strings.TrimSpace(feedback) == "" {
+		return prompt
+	}
+	return prompt + "\n\nHuman retry feedback:\n" + feedback
+}
+
+func postCurrentHeadCheckpoint(ctx context.Context, c *client.Client, ticketID, phase, worktree string) {
+	sha, err := revParse(ctx, worktree, "HEAD")
+	if err != nil {
+		log.Printf("executor: checkpoint %s at %s: %v", ticketID, phase, err)
+		return
+	}
+	PostCheckpointWithRetry(c, ticketID, phase, sha, 5) //nolint:errcheck
 }
 
 // postDocumentEntry streams filePath to the orchestrator as a document log entry.
@@ -534,6 +598,7 @@ func (e *GolemExecutor) runDesignPhase(ctx context.Context, c *client.Client,
 			return nil
 		})
 	if gErr != nil {
+		postCurrentHeadCheckpoint(ctx, c, ticketID, dp.name, filepath.Join(ticketDir, "worktree"))
 		return false, gErr
 	}
 	if out == approvalGone {
@@ -590,7 +655,7 @@ func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath, graphMode
 	}
 	configPath := filepath.Join(repoPath, ".golem", "config.yaml")
 	if _, err := os.Stat(configPath); os.IsNotExist(err) {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", "init",
+		out, err := asGolemCLI(exec.CommandContext(ctx, "golem", "init",
 			"--backend", e.Agent.Adapter.Name(), "--repo", repoPath)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem init: %w\n%s", err, out)
@@ -609,16 +674,16 @@ func (e *GolemExecutor) ensureRepoReady(ctx context.Context, repoPath, graphMode
 
 	indexPath := filepath.Join(repoPath, ".golem", "index")
 	if _, err := os.Stat(indexPath); os.IsNotExist(err) {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
+		out, err := asGolemCLI(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
 		if err != nil {
 			return fmt.Errorf("golem graph build: %w\n%s", err, out)
 		}
 		log.Printf("executor: built graph in %s", repoPath)
 	} else {
-		out, err := asAgent(exec.CommandContext(ctx, "golem", graphArgs("update")...)).CombinedOutput()
+		out, err := asGolemCLI(exec.CommandContext(ctx, "golem", graphArgs("update")...)).CombinedOutput()
 		if err != nil {
 			log.Printf("executor: graph update failed, rebuilding: %v\n%s", err, out)
-			out, err = asAgent(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
+			out, err = asGolemCLI(exec.CommandContext(ctx, "golem", graphArgs("build")...)).CombinedOutput()
 			if err != nil {
 				return fmt.Errorf("golem graph build: %w\n%s", err, out)
 			}
@@ -857,6 +922,13 @@ func pushTicketBranch(ctx context.Context, repoPath, worktreePath, branch, remot
 	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
 		return err
 	}
+	// Every child for this repository publishes through the same bare mirror.
+	// Serialize both git operations: fetch writes objects and refs into the
+	// mirror, and pushing must not race an integration merge or another branch
+	// fetch in that same object store.
+	mu := forge.MirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Step 1 — token-free. Anything the agent's repo can make git run during
 	// this fetch runs without the credential.
@@ -962,7 +1034,7 @@ func firstLineOf(s string) string {
 // row — the one place that actually knows it.
 func (e *GolemExecutor) generatePRDescription(ctx context.Context, repoPath, ticketID, model string) (string, error) {
 	args := e.Agent.subcommandArgs([]string{"ticket", "pr-description", "--ticket", ticketID}, model)
-	cmd := asAgent(exec.CommandContext(ctx, "golem", args...))
+	cmd := asGolemCLI(exec.CommandContext(ctx, "golem", args...))
 	cmd.Dir = repoPath
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout

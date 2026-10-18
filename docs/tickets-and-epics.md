@@ -173,7 +173,7 @@ approval binds the approver's name to the revision *and* its content hash, so
 ### The run
 
 Starting an approved epic materializes each node into an ordinary ticket
-(`epic-<id>-<key>`). From then on the run is just tickets, plus scheduling:
+with its own UUID. From then on the run is just tickets, plus scheduling:
 
 - A child is claimable only while the run is `running` and all of its
   predecessors are integrated. The dashboard shows this directly: children
@@ -207,6 +207,12 @@ lease per epic. The shem merges through a shared bare Git mirror and pushes
 with a lease against the target's previous SHA. The orchestrator then records
 the receipt and releases dependents atomically. Child integration does not
 require GitHub or child pull requests.
+
+A child stays `ready-for-review` while it waits for its integration receipt.
+Once the receipt is recorded, Golem closes that child; the epic itself remains
+open for final review until every node has integrated. This keeps a merged
+child from looking unfinished while preserving the final manual review of the
+combined result.
 
 - Tester **FAIL** returns the child to `revising` with its evidence.
 - A merge conflict returns the child to `revising` to resolve against the
