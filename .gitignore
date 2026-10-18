@@ -49,5 +49,3 @@ Thumbs.db
 .claude/projects/
 .claude/backups/
 
-# Local Siren worker deployment configs and Compose override
-/.golem/local-siren-workers/
