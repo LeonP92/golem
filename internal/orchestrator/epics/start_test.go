@@ -69,6 +69,17 @@ func readyKeys(t *testing.T, gdb *gorm.DB, epicID string) map[string]bool {
 	return out
 }
 
+func assertChildPhase(t *testing.T, gdb *gorm.DB, epicID, nodeKey, want string) {
+	t.Helper()
+	var child db.Ticket
+	if err := gdb.Where("epic_id = ? AND epic_node_key = ?", epicID, nodeKey).First(&child).Error; err != nil {
+		t.Fatalf("load child %s: %v", nodeKey, err)
+	}
+	if child.Phase != want {
+		t.Errorf("child %s phase = %q, want %q", nodeKey, child.Phase, want)
+	}
+}
+
 func TestStartMaterializesChildrenOnce(t *testing.T) {
 	gdb, _ := db.Open(":memory:")
 	e := approvedDiamond(t, gdb)
@@ -164,6 +175,10 @@ func TestReadinessFollowsIntegrationReceipts(t *testing.T) {
 	if err := RecordIntegration(gdb, e.ID, "D", "sha-d"); err != nil {
 		t.Fatalf("integrate D: %v", err)
 	}
+	assertChildPhase(t, gdb, e.ID, "A", "closed")
+	assertChildPhase(t, gdb, e.ID, "B", "closed")
+	assertChildPhase(t, gdb, e.ID, "C", "closed")
+	assertChildPhase(t, gdb, e.ID, "D", "closed")
 	var fresh db.Epic
 	gdb.First(&fresh, "id = ?", e.ID)
 	if fresh.State != "awaiting-final-review" {
@@ -189,9 +204,13 @@ func TestRecordIntegrationFailsClosed(t *testing.T) {
 	if err := RecordIntegration(gdb, e.ID, "A", "sha-a"); err != nil {
 		t.Fatalf("integrate A: %v", err)
 	}
+	if err := gdb.Model(&db.Ticket{}).Where("epic_id = ? AND epic_node_key = ?", e.ID, "A").Update("phase", "ready-for-review").Error; err != nil {
+		t.Fatalf("simulate legacy integrated phase: %v", err)
+	}
 	if err := RecordIntegration(gdb, e.ID, "A", "sha-a"); err != nil {
 		t.Fatalf("identical repeat: %v", err)
 	}
+	assertChildPhase(t, gdb, e.ID, "A", "closed")
 	if err := RecordIntegration(gdb, e.ID, "A", "sha-other"); !errors.Is(err, ErrIntegrationConflict) {
 		t.Fatalf("conflicting repeat = %v", err)
 	}

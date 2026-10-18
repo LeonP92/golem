@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -175,7 +176,11 @@ func buildLaneCLI(t *testing.T) string {
 			golemBin.err = err
 			return
 		}
-		golemBin.path = filepath.Join(dir, "golem")
+		name := "golem"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		golemBin.path = filepath.Join(dir, name)
 		cmd := exec.Command("go", "build", "-o", golemBin.path, "github.com/leonp92/golem/cmd/golem")
 		if out, err := cmd.CombinedOutput(); err != nil {
 			golemBin.err = fmt.Errorf("go build: %v\n%s", err, out)
@@ -252,13 +257,25 @@ func laneConfig(remote, repoPath string, noPush bool) *config.Config {
 	}
 }
 
+// laneChildID resolves a child's ticket ID from the run and node key:
+// child IDs are ordinary UUIDs, so tests look them up instead of
+// predicting them.
+func laneChildID(t *testing.T, gdb *gorm.DB, epicID, key string) string {
+	t.Helper()
+	var child db.Ticket
+	if err := gdb.First(&child, "epic_id = ? AND epic_node_key = ?", epicID, key).Error; err != nil {
+		t.Fatalf("child %s/%s: %v", epicID, key, err)
+	}
+	return child.ID
+}
+
 // laneChildClaims claims one ready child of the run and scaffolds its
 // local ticket with the real CLI, the way the executor's runGolemTicketNew
 // does, then simulates the agent: one committed file and the review gate
 // passed. Returns the claim and the ticket dir.
 func (s *laneStack) laneChildClaims(t *testing.T, bin, epicID, key, repoPath, baseRef string) (*client.ClaimResponse, string) {
 	t.Helper()
-	ticketID := fmt.Sprintf("epic-%s-%s", epicID[:8], strings.ToLower(key))
+	ticketID := laneChildID(t, s.gdb, epicID, key)
 	claim, err := s.shem.ClaimTicket(ticketID)
 	if err != nil {
 		t.Fatalf("claim %s: %v", ticketID, err)
@@ -340,7 +357,7 @@ func testEpicLaneMatrix(t *testing.T, pushEnabled bool) {
 	targetRef := "epic/" + epicID
 
 	// B must not be claimable before A is integrated.
-	bID := fmt.Sprintf("epic-%s-%s", epicID[:8], "b")
+	bID := laneChildID(t, stack.gdb, epicID, "B")
 	if _, err := stack.shem.ClaimTicket(bID); err == nil {
 		t.Fatalf("claimed blocked child %s before its predecessor integrated", bID)
 	}
@@ -483,7 +500,7 @@ func TestEpicLaneE2E_ConflictBounce(t *testing.T) {
 	if err := ex.finishWorkPhase(ctx, cfg, stack.shem, claimY, repoPath, dirY, "Implementation", claimY.Branch); err != nil {
 		t.Fatalf("finish Y: %v", err)
 	}
-	yID := fmt.Sprintf("epic-%s-%s", epicID[:8], "y")
+	yID := laneChildID(t, stack.gdb, epicID, "Y")
 	if got := laneTicketPhase(t, stack.gdb, yID); got != "revising" {
 		t.Fatalf("conflicted child phase = %q, want revising", got)
 	}
@@ -525,7 +542,7 @@ func TestEpicLaneE2E_RestartResume(t *testing.T) {
 
 	epicID := stack.startLaneEpic(remote, []map[string]any{laneNode("A", "first")}, nil)
 	targetRef := "epic/" + epicID
-	aID := fmt.Sprintf("epic-%s-%s", epicID[:8], "a")
+	aID := laneChildID(t, stack.gdb, epicID, "A")
 
 	claim, dir := stack.laneChildClaims(t, bin, epicID, "A", repoPath, "main")
 	worktree := filepath.Join(dir, "worktree")
@@ -570,6 +587,9 @@ func TestEpicLaneE2E_RestartResume(t *testing.T) {
 	}
 	if child.EpicIntegratedSHA == "" {
 		t.Fatalf("resume recorded no receipt")
+	}
+	if child.Phase != "closed" {
+		t.Fatalf("integrated child phase = %q, want closed", child.Phase)
 	}
 	laneTargetSHA(t, remote, repoPath, targetRef, true)
 	if got := laneEpicState(t, stack.gdb, epicID); got != "awaiting-final-review" {
@@ -798,7 +818,7 @@ func TestEpicLaneE2E_TesterFailFixRetest(t *testing.T) {
 		t.Fatal(err)
 	}
 	stack.gdb.First(&child, "id = ?", claim.TicketID)
-	if child.Phase != "ready-for-review" || child.EpicIntegratedSHA == "" {
+	if child.Phase != "closed" || child.EpicIntegratedSHA == "" {
 		t.Fatalf("fixed/retested child not integrated: %+v", child)
 	}
 	newHead := laneGit(t, wt, "rev-parse", "HEAD")
@@ -813,7 +833,7 @@ func TestEpicLaneE2E_TesterFailFixRetest(t *testing.T) {
 	if err := stack.shem.PostEpicVerdict(id, client.EpicVerdictPayload{EpicNodeKey: "A", HeadSHA: oldHead, Verdict: "inconclusive", Evidence: "delayed old result"}); err != nil {
 		t.Fatal(err)
 	}
-	if got := laneTicketPhase(t, stack.gdb, child.ID); got != "ready-for-review" {
+	if got := laneTicketPhase(t, stack.gdb, child.ID); got != "closed" {
 		t.Fatalf("late verdict changed integrated child: %s", got)
 	}
 }

@@ -922,6 +922,13 @@ func pushTicketBranch(ctx context.Context, repoPath, worktreePath, branch, remot
 	if err := ensurePushMirror(ctx, mirror, remote); err != nil {
 		return err
 	}
+	// Every child for this repository publishes through the same bare mirror.
+	// Serialize both git operations: fetch writes objects and refs into the
+	// mirror, and pushing must not race an integration merge or another branch
+	// fetch in that same object store.
+	mu := forge.MirrorLock(mirror)
+	mu.Lock()
+	defer mu.Unlock()
 
 	// Step 1 — token-free. Anything the agent's repo can make git run during
 	// this fetch runs without the credential.

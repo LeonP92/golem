@@ -22,6 +22,9 @@ func TestCompleteFinal(t *testing.T) {
 	if _, err := Start(gdb, e.ID); err != nil {
 		t.Fatalf("start: %v", err)
 	}
+	if err := gdb.Model(&db.Ticket{}).Where("epic_id = ?", e.ID).Update("phase", "ready-for-review").Error; err != nil {
+		t.Fatalf("mark children ready for review: %v", err)
+	}
 
 	// The attestation needs a run that is awaiting it, and a SHA.
 	if err := CompleteFinal(gdb, e.ID, "base-sha"); !errors.Is(err, ErrWrongState) {
@@ -33,9 +36,12 @@ func TestCompleteFinal(t *testing.T) {
 	if err := RecordIntegration(gdb, e.ID, "T1", "m1"); err != nil {
 		t.Fatalf("receipt T1: %v", err)
 	}
+	assertChildPhase(t, gdb, e.ID, "T1", "closed")
+	assertChildPhase(t, gdb, e.ID, "T2", "ready-for-review")
 	if err := RecordIntegration(gdb, e.ID, "T2", "m2"); err != nil {
 		t.Fatalf("receipt T2: %v", err)
 	}
+	assertChildPhase(t, gdb, e.ID, "T2", "closed")
 	if err := CompleteFinal(gdb, e.ID, "base-sha"); err != nil {
 		t.Fatalf("attestation: %v", err)
 	}

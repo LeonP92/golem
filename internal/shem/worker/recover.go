@@ -1,9 +1,11 @@
 package worker
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/ticket"
@@ -65,6 +68,10 @@ func RecoverTicket(ctx context.Context, claim *client.ClaimResponse, cfg *config
 		return fmt.Errorf("RecoverTicket: reconstruct state: %w", err)
 	}
 
+	if err := RestoreDesignDocuments(ticketDir, claim); err != nil {
+		return fmt.Errorf("RecoverTicket: %w", err)
+	}
+
 	return nil
 }
 
@@ -84,7 +91,14 @@ func RecoverTicketForRetry(ctx context.Context, claim *client.ClaimResponse, cfg
 		if branch != claim.Branch {
 			return fmt.Errorf("RecoverTicketForRetry: existing worktree is on branch %q, want %q; refusing to reset it", branch, claim.Branch)
 		}
-		return ReconstructState(filepath.Dir(worktreePath), worktreePath, claim)
+		ticketDir := filepath.Dir(worktreePath)
+		if err := ReconstructState(ticketDir, worktreePath, claim); err != nil {
+			return err
+		}
+		if err := RestoreDesignDocuments(ticketDir, claim); err != nil {
+			return fmt.Errorf("RecoverTicketForRetry: %w", err)
+		}
+		return nil
 	} else if _, statErr := os.Stat(worktreePath); statErr == nil {
 		// An existing but detached or unreadable worktree may contain edits.
 		// RecoverTicket hard-resets existing worktrees, so do not fall through
@@ -194,6 +208,105 @@ func ReconstructState(ticketDir, worktreePath string, claim *client.ClaimRespons
 		}
 	}
 	return f.Close()
+}
+
+// RestoreDesignDocuments makes the design documents a resumed ticket's
+// remaining phases read from disk — spec.md for the plan phase, plan.md and
+// spec.md for implementation — exist on this host. A design phase writes its
+// document only into the ticket directory of the host that ran it, so a
+// checkpoint resume on a fresh shem or container used to skip the design
+// phases and implement from a plan that was not there: the implement prompt
+// cats .golem/tickets/<id>/plan.md, gets nothing, and the reviewer later
+// finds no plan.
+//
+// The orchestrator keeps a copy of each document: the phase posts it as a
+// SPEC/PLAN log entry before validation runs, and every claim carries the
+// ticket's full log. A missing local file is restored from that copy — in
+// manual-approval mode, exactly the text the human approved. A present local
+// file always wins: it is what validation actually ran against. Restored or
+// present, every required document is re-checked for content, the same floor
+// requireDesignDocument applies after a phase.
+//
+// A required document that exists in neither place fails the resume for
+// brainstorm and plan checkpoints: the next phase exists only to produce or
+// consume that document, and continuing is the silent plan-free run this
+// function exists to remove. Later checkpoints (a crashed implementation or
+// review) restore what they can and only log a gap — those resumes ran
+// without the documents before, and the tickets are already past the phases
+// that read them.
+func RestoreDesignDocuments(ticketDir string, claim *client.ClaimResponse) error {
+	checkpoint := safeDeref(claim.CheckpointPhase)
+	documents, strict := designDocsForCheckpoint(checkpoint, claim.RetryPhase)
+	for _, document := range documents {
+		path := filepath.Join(ticketDir, document)
+		if data, err := os.ReadFile(path); err == nil && len(bytes.TrimSpace(data)) > 0 { //nolint:gosec
+			continue
+		}
+		content, ok := latestDocumentEntry(claim.LogEntries, document)
+		if !ok {
+			reason := fmt.Sprintf("resuming from the %s checkpoint needs %s, "+
+				"but it exists neither on this host nor on the orchestrator", checkpoint, document)
+			if !strict {
+				log.Printf("executor: %s; continuing without it", reason)
+				continue
+			}
+			return fmt.Errorf("%s: requeue the ticket to rerun its design phases", reason)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil { //nolint:gosec
+			return fmt.Errorf("restoring %s: %w", document, err)
+		}
+		log.Printf("executor: restored %s from the orchestrator's posted copy", document)
+	}
+	return nil
+}
+
+// designDocsForCheckpoint returns the design documents the phases after a
+// checkpoint read, and whether a document missing everywhere must fail the
+// resume. Brainstorm and plan are strict: their successor phases exist to
+// produce or consume those files. Later checkpoints restore best-effort.
+func designDocsForCheckpoint(checkpoint, retryPhase string) (documents []string, strict bool) {
+	spec, plan := designPhases["brainstorm"].document, designPhases["plan"].document
+	// A retry checkpoint marks where the failed phase stopped, so that phase's
+	// output may not exist yet. Restore only its inputs; requiring plan.md while
+	// retrying plan would reject the very retry that is meant to create it.
+	switch retryPhase {
+	case "brainstorm":
+		return nil, false
+	case "plan":
+		return []string{spec}, true
+	case "implement", "review":
+		return []string{spec, plan}, false
+	}
+	switch checkpoint {
+	case "brainstorm":
+		return []string{spec}, true
+	case "plan":
+		return []string{spec, plan}, true
+	case "implement", "review":
+		return []string{spec, plan}, false
+	default:
+		return nil, false
+	}
+}
+
+// latestDocumentEntry returns the content of the most recent document entry
+// for document (SPEC for spec.md, PLAN for plan.md) in entries. Documents
+// are singletons per ticket on the orchestrator — re-posts upsert — so at
+// most one entry per kind exists; scanning from the end tolerates history
+// from before that invariant.
+func latestDocumentEntry(entries []db.LogEntry, document string) (string, bool) {
+	kind := ""
+	for _, dp := range designPhases {
+		if dp.document == document {
+			kind = dp.docKind
+		}
+	}
+	for i := len(entries) - 1; i >= 0; i-- {
+		if entries[i].EntryType == kind && strings.TrimSpace(entries[i].Message) != "" {
+			return entries[i].Message, true
+		}
+	}
+	return "", false
 }
 
 // Retain the pinned base and local metadata through a revision or restart.
