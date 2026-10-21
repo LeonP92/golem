@@ -214,7 +214,7 @@ func mergeOpenCodePermission(existing json.RawMessage) (json.RawMessage, error) 
 		bash = append(bash, jsonField{g, jsonString("deny")})
 	}
 	perm = setField(perm, "bash", encodeObject(bash))
-	// edit mirrors claude's Edit(**); webfetch is denied as claude denies
+	// edit mirrors claude's Edit(/**); webfetch is denied as claude denies
 	// an unlisted WebFetch. The rest default to "ask" in opencode, so pin
 	// them to deny for the reason above.
 	for _, d := range []jsonField{

@@ -250,3 +250,17 @@ func TestSettingsWritersAreIdempotent(t *testing.T) {
 		t.Errorf("complete committed file was rewritten:\n%s", got)
 	}
 }
+
+// The Edit rule must be anchored to the settings file's directory. Claude Code
+// resolves an unanchored pattern against the session's current directory, so
+// with "Edit(**)" an agent that cd's into its worktree can no longer write the
+// ticket's spec.md or plan.md one level up, and --print cannot answer the
+// permission prompt that follows.
+func TestEditRuleIsAnchoredToSettingsRoot(t *testing.T) {
+	if !slices.Contains(claudeCodeAllowList, "Edit(/**)") {
+		t.Errorf("allow list lacks the anchored Edit(/**) rule: %v", claudeCodeAllowList)
+	}
+	if slices.Contains(claudeCodeAllowList, "Edit(**)") {
+		t.Error("allow list has the cwd-relative Edit(**) rule, which a cd into the worktree narrows")
+	}
+}
