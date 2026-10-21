@@ -15,6 +15,8 @@ type WSMessage struct {
 	Repo     string  `json:"repo,omitempty"`
 	InputID  *uint   `json:"input_id,omitempty"`
 	Response string  `json:"response,omitempty"`
+	// JobID carries an epic plan-generation job for "epic_plan" messages.
+	JobID *string `json:"job_id,omitempty"`
 }
 
 type connEntry struct {

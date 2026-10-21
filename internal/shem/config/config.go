@@ -14,6 +14,10 @@ type RepoConfig struct {
 	Path             string `yaml:"path"`
 	Remote           string `yaml:"remote"`
 	NormalizedRemote string `yaml:"-"`
+	// AutoRetry defaults on. This host-owned setting cannot be changed by a ticket.
+	AutoRetry *bool `yaml:"auto_retry"`
+	// AttentionFixAttempts caps diagnosis/repair dispatches for a ticket; nil means 3.
+	AttentionFixAttempts *int `yaml:"attention_fix_attempts"`
 }
 
 // Config holds all shem configuration loaded from shem.yaml.
@@ -44,6 +48,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	for i := range cfg.Repos {
+		if n := cfg.Repos[i].AttentionFixAttempts; n != nil && *n < 1 {
+			return nil, fmt.Errorf("repos[%d].attention_fix_attempts must be positive", i)
+		}
 		cfg.Repos[i].NormalizedRemote = urlnorm.Normalize(cfg.Repos[i].Remote)
 	}
 	b := agentrunner.ResolveBackend(cfg.Backend)
@@ -60,4 +67,19 @@ func Load(path string) (*Config, error) {
 		cfg.Name = name
 	}
 	return &cfg, nil
+}
+
+// AttentionPolicy returns the host-owned recovery policy for a repository.
+// Load rejects attempts below 1, so the cap is always positive here.
+func (c *Config) AttentionPolicy(remote string) (bool, int) {
+	for _, r := range c.Repos {
+		if r.NormalizedRemote == remote {
+			max := 3
+			if r.AttentionFixAttempts != nil {
+				max = *r.AttentionFixAttempts
+			}
+			return r.AutoRetry == nil || *r.AutoRetry, max
+		}
+	}
+	return false, 3
 }

@@ -48,6 +48,9 @@ name: shem-local
 # lane: gate check, merge into the run's target ref, receipt.
 no_push: false
 max_concurrent: 5
+# Per-repo recovery defaults on. Under a repos entry, set auto_retry: false
+# to opt out, or attention_fix_attempts: 3 to set its lifetime dispatch cap.
+# The diagnose model is selected with backend.stage_defaults like other stages.
 
 repos:
   # Golem repo — mounted at /repos/golem via GOLEM_REPO_PATH in docker-compose.
@@ -72,7 +75,7 @@ repos:
 #   tiers: [small]
 #   models:
 #     - {id: ollama/kimi-k2.7-code, label: "Kimi K2.7 Code", tier: small}
-#   stage_defaults: {brainstorm: small, plan: small, implement: small, revise: small, validate: small, observe: small, review: small, pr-description: small, graph: small}
+#   stage_defaults: {brainstorm: small, plan: small, implement: small, revise: small, validate: small, observe: small, review: small, pr-description: small, graph: small, epic-plan: small}
 #
 # `golem models list --config /etc/golem/shem.yaml` prints what this shem will
 # report; `golem models probe` with the same flag prints a block holding only

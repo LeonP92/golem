@@ -78,7 +78,7 @@ func (c Codex) argv(model string) ([]string, error) {
 // list translated to prefix rules: codex patterns are literal token
 // prefixes with no glob syntax, so "Bash(git *)" becomes ["git"]. Rules
 // govern command execution; file edits stay governed by the workspace-write
-// sandbox, which is why claude's Edit(**) entry has no counterpart here.
+// sandbox, which is why claude's Edit(/**) entry has no counterpart here.
 var codexAllowPrefixes = [][]string{
 	{"git"},
 	{"golem"}, {"./golem"}, {"./golem.exe"},

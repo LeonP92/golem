@@ -51,15 +51,16 @@ var (
 )
 
 type CreateParams struct {
-	RepoRemote        string
-	Title             string
-	SpecMarkdown      string
-	BaseBranch        string
-	BranchStrategy    string
-	DeliveryTarget    string
-	AutoMergeChildren bool
-	AutoApprovePhases bool
-	CreatedByUserID   *uint
+	RepoRemote             string
+	Title                  string
+	SpecMarkdown           string
+	BaseBranch             string
+	BranchStrategy         string
+	DeliveryTarget         string
+	AutoMergeChildren      bool
+	AutoApprovePhases      bool
+	AutoStartGeneratedPlan bool
+	CreatedByUserID        *uint
 }
 
 // Create stores a new epic in draft. Strategy and delivery target never
@@ -89,19 +90,20 @@ func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 
 	sum := sha256.Sum256([]byte(p.SpecMarkdown))
 	e := &db.Epic{
-		ID:                uuid.NewString(),
-		RepoRemote:        p.RepoRemote,
-		Title:             p.Title,
-		SpecMarkdown:      p.SpecMarkdown,
-		SpecHash:          hex.EncodeToString(sum[:]),
-		BaseBranch:        p.BaseBranch,
-		BranchStrategy:    p.BranchStrategy,
-		DeliveryTarget:    p.DeliveryTarget,
-		AutoMergeChildren: p.AutoMergeChildren,
-		TesterRequired:    p.AutoMergeChildren,
-		AutoApprovePhases: p.AutoApprovePhases,
-		State:             StateDraft,
-		CreatedByUserID:   p.CreatedByUserID,
+		ID:                     uuid.NewString(),
+		RepoRemote:             p.RepoRemote,
+		Title:                  p.Title,
+		SpecMarkdown:           p.SpecMarkdown,
+		SpecHash:               hex.EncodeToString(sum[:]),
+		BaseBranch:             p.BaseBranch,
+		BranchStrategy:         p.BranchStrategy,
+		DeliveryTarget:         p.DeliveryTarget,
+		AutoMergeChildren:      p.AutoMergeChildren,
+		TesterRequired:         p.AutoMergeChildren,
+		AutoApprovePhases:      p.AutoApprovePhases,
+		AutoStartGeneratedPlan: p.AutoStartGeneratedPlan,
+		State:                  StateDraft,
+		CreatedByUserID:        p.CreatedByUserID,
 	}
 	if p.BranchStrategy == StrategyEpicBranch {
 		e.IntegrationRef = "epic/" + e.ID
@@ -159,16 +161,7 @@ func AddRevision(gdb *gorm.DB, epicID string, plan epic.Plan, repoSHA string) (*
 			return ErrNotEditable
 		}
 		target := TargetRef(e)
-		var errs []error
-		for i, n := range plan.Nodes {
-			switch n.BranchTarget {
-			case "":
-				plan.Nodes[i].BranchTarget = target
-			case target:
-			default:
-				errs = append(errs, fmt.Errorf("node %q targets %q; this run integrates into %q", n.Key, n.BranchTarget, target))
-			}
-		}
+		errs := epic.ApplyBranchTarget(&plan, target)
 		if errs = append(errs, epic.Validate(plan)...); len(errs) > 0 {
 			return fmt.Errorf("%w: plan: %w", ErrInvalid, errors.Join(errs...))
 		}

@@ -225,3 +225,32 @@ func TestEpicDetail_StartAndProgress(t *testing.T) {
 		t.Fatalf("repeat start produced %d children", n)
 	}
 }
+
+// The plan-job block renders in every job state, including none: an
+// unguarded .PlanJob field access on a jobless epic breaks the whole page.
+func TestEpicDetailRendersPlanJobStates(t *testing.T) {
+	_, mux, cookie := setupEpicUITest(t)
+	w := epicFormPost(t, mux, cookie, "/epics/new", url.Values{
+		"repo_remote":     {"https://github.com/org/repo"},
+		"base_branch":     {"main"},
+		"title":           {"t"},
+		"spec_markdown":   {"s"},
+		"branch_strategy": {"epic-branch"},
+		"delivery_target": {"feature-branch"},
+	})
+	if w.Code != http.StatusFound {
+		t.Fatalf("create: %d", w.Code)
+	}
+	page := epicGet(t, mux, cookie, w.Header().Get("Location"))
+	if !strings.Contains(page.Body.String(), "Generate plan") {
+		t.Fatal("jobless epic does not offer generation")
+	}
+	id := strings.TrimPrefix(w.Header().Get("Location"), "/epics/")
+	if rec := epicFormPost(t, mux, cookie, "/epics/"+id+"/plan/generate", url.Values{}); rec.Code != http.StatusFound {
+		t.Fatalf("generate: %d", rec.Code)
+	}
+	page = epicGet(t, mux, cookie, "/epics/"+id)
+	if !strings.Contains(page.Body.String(), "Plan generation queued") {
+		t.Fatal("queued job not shown")
+	}
+}

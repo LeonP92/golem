@@ -84,6 +84,7 @@ func newLaneStack(t *testing.T, remote string) *laneStack {
 	mux := http.NewServeMux()
 	h.RegisterHumanRoutes(mux)
 	h.RegisterTicketRoutes(mux)
+	h.RegisterLogRoutes(mux)
 	h.RegisterEpicRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

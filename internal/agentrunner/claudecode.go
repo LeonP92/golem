@@ -157,8 +157,12 @@ var claudeCodeAllowList = []string{
 	"PowerShell(git *)",
 	"PowerShell(go *)",
 	`PowerShell(.\golem*)`,
-	// File operations
-	"Edit(**)",
+	// File operations. Anchored to the settings file's directory (the repo
+	// or worktree root): an unanchored "Edit(**)" is relative to the session's
+	// current directory, so an agent that cd's into its worktree to read code
+	// loses write access to the ticket directory above it, and spec.md or
+	// plan.md writes there need a permission prompt --print cannot answer.
+	"Edit(/**)",
 }
 
 // claudeCodeDenyList blocks destructive or network-exfiltrating commands that

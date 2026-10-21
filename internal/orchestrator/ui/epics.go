@@ -12,6 +12,7 @@ import (
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/epics"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
+	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
 
 // Epics list, New Epic and epic detail pages.
@@ -33,14 +34,15 @@ func (h *Handlers) epicsList(w http.ResponseWriter, r *http.Request) {
 }
 
 type epicForm struct {
-	RepoRemote        string
-	BaseBranch        string
-	Title             string
-	SpecMarkdown      string
-	BranchStrategy    string
-	DeliveryTarget    string
-	AutoMergeChildren bool
-	AutoApprovePhases bool
+	RepoRemote             string
+	BaseBranch             string
+	Title                  string
+	SpecMarkdown           string
+	BranchStrategy         string
+	DeliveryTarget         string
+	AutoMergeChildren      bool
+	AutoApprovePhases      bool
+	AutoStartGeneratedPlan bool
 }
 
 func (h *Handlers) renderEpicNew(w http.ResponseWriter, r *http.Request, form epicForm, errMsg string) {
@@ -61,25 +63,27 @@ func (h *Handlers) epicNewSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form := epicForm{
-		RepoRemote:        r.FormValue("repo_remote"),
-		BaseBranch:        r.FormValue("base_branch"),
-		Title:             r.FormValue("title"),
-		SpecMarkdown:      r.FormValue("spec_markdown"),
-		BranchStrategy:    r.FormValue("branch_strategy"),
-		DeliveryTarget:    r.FormValue("delivery_target"),
-		AutoMergeChildren: r.FormValue("auto_merge_children") == "on",
-		AutoApprovePhases: r.FormValue("auto_approve_phases") == "on",
+		RepoRemote:             r.FormValue("repo_remote"),
+		BaseBranch:             r.FormValue("base_branch"),
+		Title:                  r.FormValue("title"),
+		SpecMarkdown:           r.FormValue("spec_markdown"),
+		BranchStrategy:         r.FormValue("branch_strategy"),
+		DeliveryTarget:         r.FormValue("delivery_target"),
+		AutoMergeChildren:      r.FormValue("auto_merge_children") == "on",
+		AutoApprovePhases:      r.FormValue("auto_approve_phases") == "on",
+		AutoStartGeneratedPlan: r.FormValue("auto_start_generated_plan") == "on",
 	}
 	user := auth.SessionUser(r)
 	params := epics.CreateParams{
-		RepoRemote:        urlnorm.Normalize(form.RepoRemote),
-		Title:             form.Title,
-		SpecMarkdown:      form.SpecMarkdown,
-		BaseBranch:        form.BaseBranch,
-		BranchStrategy:    form.BranchStrategy,
-		DeliveryTarget:    form.DeliveryTarget,
-		AutoMergeChildren: form.AutoMergeChildren,
-		AutoApprovePhases: form.AutoApprovePhases,
+		RepoRemote:             urlnorm.Normalize(form.RepoRemote),
+		Title:                  form.Title,
+		SpecMarkdown:           form.SpecMarkdown,
+		BaseBranch:             form.BaseBranch,
+		BranchStrategy:         form.BranchStrategy,
+		DeliveryTarget:         form.DeliveryTarget,
+		AutoMergeChildren:      form.AutoMergeChildren,
+		AutoApprovePhases:      form.AutoApprovePhases,
+		AutoStartGeneratedPlan: form.AutoStartGeneratedPlan,
 	}
 	if user != nil {
 		params.CreatedByUserID = &user.ID
@@ -114,6 +118,10 @@ func (h *Handlers) epicDetail(w http.ResponseWriter, r *http.Request) {
 	data := h.base(r, "epics")
 	data["Epic"] = e
 	data["Error"] = r.URL.Query().Get("error")
+	if job, err := epics.LatestPlanJob(h.DB, e.ID); err == nil && job != nil {
+		data["PlanJob"] = job
+		data["PlanJobActive"] = job.Status == epics.PlanJobQueued || job.Status == epics.PlanJobRunning
+	}
 	if e.CurrentRevision > 0 {
 		plan, rev, err := epics.LoadPlan(h.DB, e.ID, e.CurrentRevision)
 		if err != nil {
@@ -195,6 +203,18 @@ func (h *Handlers) epicApproveSubmit(r *http.Request, id string) error {
 func (h *Handlers) epicStartSubmit(r *http.Request, id string) error {
 	_, err := epics.Start(h.DB, id)
 	return err
+}
+
+// epicPlanGenerateSubmit queues a plan-generation job; a shem picks it up.
+func (h *Handlers) epicPlanGenerateSubmit(r *http.Request, id string) error {
+	e, job, err := epics.RequestPlanJob(h.DB, id)
+	if err != nil {
+		return err
+	}
+	if h.Hub != nil {
+		h.Hub.Broadcast(e.RepoRemote, ws.WSMessage{Type: "epic_plan", JobID: &job.ID})
+	}
+	return nil
 }
 
 // epicMergeFinalSubmit records the human final merge: the operator attests

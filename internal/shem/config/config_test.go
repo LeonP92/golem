@@ -2,6 +2,7 @@ package config_test
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/leonp92/golem/internal/shem/config"
@@ -78,5 +79,37 @@ func TestLoad_MissingFile(t *testing.T) {
 	_, err := config.Load("/nonexistent/path/shem.yaml")
 	if err == nil {
 		t.Error("expected error for missing file")
+	}
+}
+
+func TestAttentionPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name, fields string
+		on           bool
+		max          int
+	}{
+		{"default", "", true, 3},
+		{"opt out", "    auto_retry: false\n", false, 3},
+		{"custom max", "    attention_fix_attempts: 7\n", true, 7},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "shem.yaml")
+			if err := os.WriteFile(path, []byte("repos:\n  - path: /repo\n    remote: local://repo\n"+tc.fields), 0644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			on, max := cfg.AttentionPolicy(cfg.Repos[0].NormalizedRemote)
+			if on != tc.on || max != tc.max {
+				t.Fatalf("policy %v %d", on, max)
+			}
+		})
+	}
+	path := filepath.Join(t.TempDir(), "shem.yaml")
+	os.WriteFile(path, []byte("repos:\n  - remote: local://repo\n    attention_fix_attempts: -1\n"), 0644)
+	if _, err := config.Load(path); err == nil {
+		t.Fatal("negative retry max accepted")
 	}
 }

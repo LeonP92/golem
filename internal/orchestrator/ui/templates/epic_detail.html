@@ -124,16 +124,73 @@
       A plan revision is immutable JSON: requirements, nodes and hard dependency edges.
       Saving a new revision{{if .Revision.ApprovedBy}} clears the current approval{{end}} — approval always binds to exact content.
     </p>
+    <div class="flex items-center gap-3 flex-wrap">
+      <form method="POST" action="/epics/{{.Epic.ID}}/plan/generate">
+        <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+        <button type="submit" class="btn btn-sm btn-secondary" id="generate-plan-btn"
+                {{if .PlanJobActive}}disabled{{end}}>
+          Generate plan with an agent</button>
+      </form>
+      <span id="plan-job-status" class="text-sm text-base-content/60"
+            data-epic-id="{{.Epic.ID}}" data-active="{{if .PlanJob}}{{if or (eq .PlanJob.Status "queued") (eq .PlanJob.Status "running")}}1{{else}}0{{end}}{{else}}0{{end}}">
+        {{- if .PlanJob -}}
+          {{- if eq .PlanJob.Status "queued"}}Plan generation queued — waiting for a shem.
+          {{- else if eq .PlanJob.Status "running"}}A shem is generating the plan…
+          {{- else if eq .PlanJob.Status "done"}}{{if .PlanJob.Err}}Draft generated, but {{.PlanJob.Err}}{{else}}Draft generated — review and edit below, then save it as a revision.{{end}}
+          {{- else if eq .PlanJob.Status "failed"}}Plan generation failed: {{.PlanJob.Err}}
+          {{- end -}}
+        {{- end -}}
+      </span>
+    </div>
+    <pre id="plan-job-log" class="text-xs bg-base-200 rounded p-2 mt-2 max-h-32 overflow-y-auto{{if .PlanJob}}{{if not .PlanJob.LogTail}} hidden{{end}}{{else}} hidden{{end}}">{{if .PlanJob}}{{.PlanJob.LogTail}}{{end}}</pre>
     <form method="POST" action="/epics/{{.Epic.ID}}/revisions">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
-      <textarea name="plan_json" rows="14" class="textarea textarea-bordered font-mono text-xs w-full"
-                placeholder='{"requirements":[{"id":"R1","text":"..."}],"nodes":[{"key":"T1","title":"...","acceptance_commands":["go test ./..."],"requirement_ids":["R1"]}],"edges":[]}'></textarea>
+      <textarea name="plan_json" id="plan-json-box" rows="14" class="textarea textarea-bordered font-mono text-xs w-full"
+                placeholder='{"requirements":[{"id":"R1","text":"..."}],"nodes":[{"key":"T1","title":"...","acceptance_commands":["go test ./..."],"requirement_ids":["R1"]}],"edges":[]}'>{{if .PlanJob}}{{if eq .PlanJob.Status "done"}}{{planJobDraft .PlanJob}}{{end}}{{end}}</textarea>
       <div class="card-actions justify-end mt-2">
         <button type="submit" class="btn btn-sm">Validate and save revision</button>
       </div>
     </form>
   </div>
 </div>
+<script>
+(function () {
+  var statusEl = document.getElementById("plan-job-status");
+  var epicID = statusEl.getAttribute("data-epic-id");
+  var box = document.getElementById("plan-json-box");
+  var logEl = document.getElementById("plan-job-log");
+  var btn = document.getElementById("generate-plan-btn");
+  var lastDraft = box.value; // only fill the box while the user has not typed over the draft
+  function render(job) {
+    if (!job) { return; }
+    if (job.status === "queued") { statusEl.textContent = "Plan generation queued — waiting for a shem."; btn.disabled = true; }
+    else if (job.status === "running") { statusEl.textContent = "A shem is generating the plan…"; btn.disabled = true; }
+    else if (job.status === "done") {
+      statusEl.textContent = job.error ? "Draft generated, but " + job.error : "Draft generated — review and edit below, then save it as a revision.";
+      btn.disabled = false;
+      if (job.draft_json && (box.value === "" || box.value === lastDraft)) {
+        try { box.value = JSON.stringify(JSON.parse(job.draft_json), null, 2); lastDraft = box.value; } catch (e) { box.value = job.draft_json; lastDraft = box.value; }
+      }
+    } else if (job.status === "failed") {
+      statusEl.textContent = "Plan generation failed: " + (job.error || "unknown error");
+      btn.disabled = false;
+    }
+    if (job.log_tail) { logEl.textContent = job.log_tail; logEl.classList.remove("hidden"); }
+  }
+  if (statusEl.getAttribute("data-active") === "1") {
+    var timer = setInterval(function () {
+      fetch("/api/epics/" + encodeURIComponent(epicID) + "/plan/job", {headers: {"Accept": "application/json"}})
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (job) {
+          if (!job) { return; }
+          render(job);
+          if (job.status === "done" || job.status === "failed") { clearInterval(timer); }
+        })
+        .catch(function () {});
+    }, 3000);
+  }
+})();
+</script>
 
 {{end}}
 

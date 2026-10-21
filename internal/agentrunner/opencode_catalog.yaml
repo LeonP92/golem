@@ -25,3 +25,6 @@ stage_defaults:
   pr-description: small
   graph: small
   test: medium
+  # Epic planning runs once per epic and shapes every ticket downstream.
+  epic-plan: large
+  diagnose: medium

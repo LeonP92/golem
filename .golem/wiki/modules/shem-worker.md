@@ -100,3 +100,29 @@ commands.
 - Self-verification (`golem ticket verify`) runs before the review gate for
   every ticket, unless the ticket opted out at creation (`verify_disabled`);
   a failed check bounces the implementer once with the output.
+
+## Bounded attention recovery
+
+`attention.go` adds the `Diagnoser` interface and its `ModelDiagnoser`
+implementation over the configured backend's role runner. The host-owned
+per-repo policy defaults on with a three-dispatch lifetime budget. Known
+operational errors bypass inference. Structured retry/human output is checked
+before the worker asks the server to resume a failed phase with feedback.
+The existing running map enforces worker slots. Dirty branch state is kept;
+unchanged failed code repairs stop, while spec/plan repair can progress without
+a commit. Worker output tails preserve usage/auth messages in the failure.
+Server fencing, counters and eligibility are in `api/attention.go`.
+
+Startup and steady-state attention polling share `pollAttention`; failed reads
+are logged rather than silently treated as an empty queue.
+
+## Plan jobs (planjob.go)
+`tryClaimPlanJob` claims an epic plan-generation job (pushed as an
+`epic_plan` message, or found by the periodic `GetAvailablePlanJob` poll) and
+`runPlanJob` runs one agent session in the repo checkout at the `epic-plan`
+stage model, writing `.golem/epic-plan/<job>/plan.json`, which is removed when
+the run ends. The draft is validated with `epic.CanonicalPlan`; an invalid
+draft gets one repair session seeded with the errors. A heartbeat posts a
+bounded, mutex-guarded `tailWriter` of the session log every minute to keep
+the lease fresh. Every exit posts a result, and an agent error posts its error
+text plus the log tail so it never reads as success.

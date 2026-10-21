@@ -752,3 +752,101 @@ func (c *Client) PostTicketVerdict(ticketID string, v TicketVerdictPayload) erro
 	defer func() { _ = resp.Body.Close() }()
 	return statusError(resp)
 }
+
+// PlanJob is the shem-facing view of an epic plan-generation job.
+type PlanJob struct {
+	ID      string `json:"id"`
+	EpicID  string `json:"epic_id"`
+	Status  string `json:"status"`
+	Attempt int    `json:"attempt"`
+}
+
+// PlanJobClaim is the payload returned when a plan job is claimed: the job
+// plus everything the planning session needs.
+type PlanJobClaim struct {
+	Job          PlanJob `json:"job"`
+	EpicTitle    string  `json:"epic_title"`
+	SpecMarkdown string  `json:"spec_markdown"`
+	RepoRemote   string  `json:"repo_remote"`
+	BranchTarget string  `json:"branch_target"`
+}
+
+// GetAvailablePlanJob returns the first claimable plan job for a repo, or
+// nil when there is none — the plan-job counterpart of GetAvailable.
+func (c *Client) GetAvailablePlanJob(repo string) (*PlanJob, error) {
+	path := "/api/epics/plan-jobs/available"
+	if repo != "" {
+		path += "?repo=" + repo
+	}
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, statusError(resp)
+	}
+	var jobs []PlanJob
+	if err := json.NewDecoder(resp.Body).Decode(&jobs); err != nil {
+		return nil, err
+	}
+	if len(jobs) == 0 {
+		return nil, nil
+	}
+	return &jobs[0], nil
+}
+
+// ErrPlanJobNotClaimable mirrors the ticket claim's ErrNotAvailable: losing
+// the claim race is routine, not an error worth logging.
+var ErrPlanJobNotClaimable = errors.New("plan job not claimable")
+
+// ClaimPlanJob takes the lease on a plan job and returns its payload.
+func (c *Client) ClaimPlanJob(id string) (*PlanJobClaim, error) {
+	resp, err := c.do("POST", "/api/epics/plan-jobs/"+id+"/claim", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusConflict {
+		return nil, ErrPlanJobNotClaimable
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, statusError(resp)
+	}
+	var claim PlanJobClaim
+	if err := json.NewDecoder(resp.Body).Decode(&claim); err != nil {
+		return nil, err
+	}
+	return &claim, nil
+}
+
+// PostPlanJobProgress refreshes the lease and reports the session log tail.
+// newAttempt marks the start of a fresh agent session (the first try, or
+// the repair pass after invalid output) and consumes one attempt.
+func (c *Client) PostPlanJobProgress(id, tail string, newAttempt bool) error {
+	resp, err := c.do("POST", "/api/epics/plan-jobs/"+id+"/progress",
+		map[string]any{"log_tail": tail, "new_attempt": newAttempt})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return statusError(resp)
+	}
+	return nil
+}
+
+// PostPlanJobResult reports the outcome: the generated draft JSON, or an
+// error. The orchestrator re-validates the draft before storing it.
+func (c *Client) PostPlanJobResult(id, draftJSON, runErr string) error {
+	resp, err := c.do("POST", "/api/epics/plan-jobs/"+id+"/result",
+		map[string]any{"draft_json": draftJSON, "error": runErr})
+	if err != nil {
+		return err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		return statusError(resp)
+	}
+	return nil
+}

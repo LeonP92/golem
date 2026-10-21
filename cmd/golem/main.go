@@ -29,6 +29,7 @@ var commandGroups = []struct {
 	{"wiki", []string{"wiki"}},
 	{"issue", []string{"issue"}},
 	{"log", []string{"log"}},
+	{"epic", []string{"epic-plan"}},
 	{"misc", []string{"ask", "answer", "observer", "models", "version"}},
 }
 
@@ -48,6 +49,7 @@ func init() {
 	commandTable["graph"] = commandEntry{fn: graphDispatch, desc: "Graph commands: build, update, status, who-imports, check-boundary, deps."}
 	commandTable["issue"] = commandEntry{fn: issueDispatch, desc: "GitHub issue commands: list, sync."}
 	commandTable["models"] = commandEntry{fn: modelsDispatch, desc: "Model commands: list, probe."}
+	commandTable["epic-plan"] = commandEntry{fn: epicPlanDispatch, desc: "Epic plan commands: validate."}
 }
 
 func helpCommand(args []string, stdout, stderr io.Writer) int {
@@ -136,6 +138,20 @@ func observerDispatch(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	return cli.ObserverDispatch(args[1:], stdout, stderr)
+}
+
+func epicPlanDispatch(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 0 {
+		_, _ = fmt.Fprintln(stderr, "usage: golem epic-plan <validate> [flags]")
+		return 1
+	}
+	switch args[0] {
+	case "validate":
+		return cli.EpicPlanValidate(args[1:], stdout, stderr)
+	default:
+		fmt.Fprintf(stderr, "unknown epic-plan subcommand %q\n", args[0])
+		return 1
+	}
 }
 
 func graphDispatch(args []string, stdout, stderr io.Writer) int {

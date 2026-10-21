@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
@@ -50,8 +51,18 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 		// pass, and reporting that as "did not complete" would blame the
 		// agent for work the gate deliberately rejected.
 		if localPhase == "needs-attention" {
-			return fmt.Errorf("%s finished but the review gate did not pass — "+
-				"see the reviewer attestation in the log above", what)
+			evidence := ""
+			if entries, err := blog.ReadAll(filepath.Join(ticketDir, "log.jsonl")); err == nil {
+				for i := len(entries) - 1; i >= 0; i-- {
+					if entries[i].Role == "reviewer" || entries[i].Role == "gate" {
+						evidence = entries[i].Message + "\n" + evidence
+						if entries[i].Role == "gate" {
+							break
+						}
+					}
+				}
+			}
+			return fmt.Errorf("%s finished but the review gate did not pass; reviewer attestation and gate evidence:\n%s", what, evidence)
 		}
 		// The local phase is named because it is the whole diagnosis: "plan"
 		// means the agent stopped at the planning gate, "implement" means the

@@ -70,7 +70,7 @@ func TestRetryWorkerPhaseAndFeedback(t *testing.T) {
 	if got := withHumanFeedback(prompt, "  "); got != prompt {
 		t.Errorf("empty feedback changed prompt: %q", got)
 	}
-	if got := withHumanFeedback(prompt, "keep the existing implementation"); !strings.Contains(got, "Human retry feedback:\nkeep the existing implementation") {
+	if got := withHumanFeedback(prompt, "keep the existing implementation"); !strings.Contains(got, "Repair feedback (human or automated, scoped to this ticket):\nkeep the existing implementation") {
 		t.Errorf("retry feedback missing from prompt: %q", got)
 	}
 }

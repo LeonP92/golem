@@ -159,7 +159,7 @@ func buildBrainstormPrompt(ticketID, description, feedback string) string {
 	feedbackSection := ""
 	if feedback != "" {
 		feedbackSection = fmt.Sprintf(`
-HUMAN FEEDBACK ON PREVIOUS SPEC (you MUST address all points):
+REPAIR FEEDBACK ON PREVIOUS SPEC (human or automated, scoped to this ticket):
 %s
 
 `, feedback)
@@ -194,7 +194,7 @@ func buildPlanPrompt(ticketID, description, feedback string) string {
 	feedbackSection := ""
 	if feedback != "" {
 		feedbackSection = fmt.Sprintf(`
-HUMAN FEEDBACK ON PREVIOUS PLAN (you MUST address all points):
+REPAIR FEEDBACK ON PREVIOUS PLAN (human or automated, scoped to this ticket):
 %s
 
 `, feedback)
@@ -288,7 +288,7 @@ Description:
 %s
 Worktree: .golem/tickets/%s/worktree/  (checked out on branch %s)
 
-Human feedback on the review:
+Review feedback (human or automated, scoped to this ticket):
 %s
 
 Instructions:

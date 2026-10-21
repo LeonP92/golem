@@ -54,8 +54,11 @@ func (h *Handlers) actionStop(w http.ResponseWriter, r *http.Request, id string)
 				// close.
 				[]string{PhaseStopped, "closed", "pending-approval"}).
 			Updates(map[string]any{
-				"phase":              PhaseStopped,
-				"stopped_from_phase": ticket.Phase,
+				"phase":                 PhaseStopped,
+				"attention_token":       "",
+				"attention_lease_until": nil,
+				"attention_eligible":    false,
+				"stopped_from_phase":    ticket.Phase,
 			})
 		if result.Error != nil {
 			return result.Error

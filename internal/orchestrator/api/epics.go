@@ -271,7 +271,7 @@ func (h *Handlers) postEpicVerdict(w http.ResponseWriter, r *http.Request) {
 			revise, err = scoped.bounceIntegrationTx(tx, fresh, v.HeadSHA, fmt.Sprintf("The tester failed head %s.\n\nScenarios: %s\nEvidence: %s\n\nFix the cause on the existing branch.", v.HeadSHA, v.Scenarios, v.Evidence))
 			return err
 		case "inconclusive":
-			return scoped.parkEpicChild(fresh, fmt.Sprintf("The tester could not reach a verdict for head %s: %s", v.HeadSHA, v.Evidence))
+			return scoped.parkEpicChild(fresh, fmt.Sprintf("The tester could not reach a verdict for head %s: %s", v.HeadSHA, v.Evidence), true)
 		}
 		return nil
 	})
@@ -370,7 +370,7 @@ func (h *Handlers) integrateEpicNodeResult(w http.ResponseWriter, r *http.Reques
 			revise, err = scoped.bounceIntegrationTx(tx, fresh, body.HeadSHA, feedback)
 			return err
 		case "error":
-			return scoped.parkEpicChild(fresh, "Integrating this branch into the run's integration branch failed: "+body.Detail)
+			return scoped.parkEpicChild(fresh, "Integrating this branch into the run's integration branch failed: "+body.Detail, false)
 		default: // moved: the lease is consumed; polling retries the new head.
 			return nil
 		}
@@ -404,10 +404,10 @@ func (h *Handlers) bounceIntegrationTx(tx *gorm.DB, child db.Ticket, headSHA, fe
 	scoped := *h
 	scoped.DB = tx
 	if max := config.MaxFixAttempts(); max != config.UnlimitedPRFixAttempts && child.PRFixAttempts >= max {
-		return false, scoped.parkEpicChild(child, fmt.Sprintf("Stopping after %d automatic fix attempt(s) — the limit set by GOLEM_FIX_ATTEMPTS. The branch still needs work:\n\n%s", child.PRFixAttempts, feedback))
+		return false, scoped.parkEpicChild(child, fmt.Sprintf("Stopping after %d automatic fix attempt(s) — the limit set by GOLEM_FIX_ATTEMPTS. The branch still needs work:\n\n%s", child.PRFixAttempts, feedback), false)
 	}
 	if child.AssignedShem == nil {
-		return false, scoped.parkEpicChild(child, "No shem is assigned, so this cannot be fixed automatically.\n\n"+feedback)
+		return false, scoped.parkEpicChild(child, "No shem is assigned, so this cannot be fixed automatically.\n\n"+feedback, false)
 	}
 	res := tx.Model(&db.Ticket{}).Where("id = ? AND phase = ? AND epic_integrated_sha = ?", child.ID, "ready-for-review", "").Updates(map[string]any{
 		"phase": "revising", "pr_fix_attempts": gorm.Expr("pr_fix_attempts + 1"), "pr_dispatched_sha": headSHA,
@@ -444,12 +444,16 @@ func (h *Handlers) notifyIntegratedChildClosed(child db.Ticket) {
 
 // parkEpicChild moves a child to needs-attention with the reason on the
 // activity log: the integration lane could not land it and a human has to
-// look.
-func (h *Handlers) parkEpicChild(child db.Ticket, message string) error {
+// look. A recoverable park also marks the ticket for automatic diagnosis.
+func (h *Handlers) parkEpicChild(child db.Ticket, message string, recoverable bool) error {
 	return h.DB.Transaction(func(tx *gorm.DB) error {
+		updates := db.PhaseUpdates("needs-attention")
+		if recoverable {
+			markAttention(updates, child, message)
+		}
 		result := tx.Model(&db.Ticket{}).
 			Where("id = ? AND phase = ? AND epic_integrated_sha = ?", child.ID, "ready-for-review", "").
-			Updates(db.PhaseUpdates("needs-attention"))
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}
@@ -465,4 +469,100 @@ func (h *Handlers) parkEpicChild(child db.Ticket, message string) error {
 		}
 		return enqueueGitHubPhase(tx, fresh, "needs-attention", h.BaseURL)
 	})
+}
+
+// --- Plan-generation jobs -----------------------------------------------
+
+// RegisterEpicPlanJobRoutes adds the plan-generation job routes. The
+// generate/status pair is session-authenticated for the page; the rest are
+// shem-authenticated, mirroring the ticket claim pattern.
+func (h *Handlers) RegisterEpicPlanJobRoutes(mux *http.ServeMux) {
+	session := func(p rbac.Permission, f http.HandlerFunc) http.Handler {
+		return auth.RequireSession(h.DB)(rbac.Require(p)(f))
+	}
+	write := func(p rbac.Permission, f http.HandlerFunc) http.Handler {
+		return auth.RequireSession(h.DB)(auth.RequireCSRF(rbac.Require(p)(f)))
+	}
+	mux.Handle("POST /api/epics/{id}/plan/generate", write(rbac.PermTicketCreate, h.generateEpicPlan))
+	mux.Handle("GET /api/epics/{id}/plan/job", session(rbac.PermTicketView, h.getEpicPlanJob))
+	mux.Handle("GET /api/epics/plan-jobs/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availablePlanJobs)))
+	mux.Handle("POST /api/epics/plan-jobs/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimPlanJob)))
+	mux.Handle("POST /api/epics/plan-jobs/{id}/progress", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.progressPlanJob)))
+	mux.Handle("POST /api/epics/plan-jobs/{id}/result", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resultPlanJob)))
+}
+
+// writePlanJobResult maps plan-job errors to statuses; like the ticket
+// claim handlers, ownership and availability conflicts are 409s, never
+// disguised as server failures.
+func writePlanJobResult(w http.ResponseWriter, status int, body any, err error) {
+	switch {
+	case errors.Is(err, epics.ErrNotFound), errors.Is(err, epics.ErrPlanJobNotFound):
+		http.Error(w, err.Error(), http.StatusNotFound)
+	case errors.Is(err, epics.ErrPlanJobActive), errors.Is(err, epics.ErrPlanJobNotClaimable),
+		errors.Is(err, epics.ErrPlanJobNotOwned), errors.Is(err, epics.ErrNotEditable):
+		http.Error(w, err.Error(), http.StatusConflict)
+	case err != nil:
+		http.Error(w, "internal error", http.StatusInternalServerError)
+	case body != nil:
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(body) //nolint:errcheck
+	default:
+		w.WriteHeader(status)
+	}
+}
+
+func (h *Handlers) generateEpicPlan(w http.ResponseWriter, r *http.Request) {
+	e, job, err := epics.RequestPlanJob(h.DB, r.PathValue("id"))
+	if err != nil {
+		writePlanJobResult(w, 0, nil, err)
+		return
+	}
+	h.Hub.Broadcast(e.RepoRemote, ws.WSMessage{Type: "epic_plan", JobID: &job.ID})
+	writePlanJobResult(w, http.StatusAccepted, job, nil)
+}
+
+func (h *Handlers) getEpicPlanJob(w http.ResponseWriter, r *http.Request) {
+	job, err := epics.LatestPlanJob(h.DB, r.PathValue("id"))
+	writePlanJobResult(w, http.StatusOK, job, err)
+}
+
+func (h *Handlers) availablePlanJobs(w http.ResponseWriter, r *http.Request) {
+	repo := urlnorm.Normalize(r.URL.Query().Get("repo"))
+	jobs, err := epics.AvailablePlanJobs(h.DB, repo, time.Now().UTC())
+	writePlanJobResult(w, http.StatusOK, jobs, err)
+}
+
+func (h *Handlers) claimPlanJob(w http.ResponseWriter, r *http.Request) {
+	shem := auth.ShemFromRequest(r)
+	payload, err := epics.ClaimPlanJob(h.DB, r.PathValue("id"), shem.ID, time.Now().UTC())
+	writePlanJobResult(w, http.StatusOK, payload, err)
+}
+
+func (h *Handlers) progressPlanJob(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		LogTail    string `json:"log_tail"`
+		NewAttempt bool   `json:"new_attempt"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	shem := auth.ShemFromRequest(r)
+	err := epics.PostPlanJobProgress(h.DB, r.PathValue("id"), shem.ID, body.LogTail, body.NewAttempt, time.Now().UTC())
+	writePlanJobResult(w, http.StatusNoContent, nil, err)
+}
+
+func (h *Handlers) resultPlanJob(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		DraftJSON string `json:"draft_json"`
+		Error     string `json:"error"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	shem := auth.ShemFromRequest(r)
+	err := epics.CompletePlanJob(h.DB, r.PathValue("id"), shem.ID, body.DraftJSON, body.Error)
+	writePlanJobResult(w, http.StatusNoContent, nil, err)
 }

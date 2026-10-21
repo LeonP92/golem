@@ -22,7 +22,7 @@ import (
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 )
 
-// TestTemplateScanFindsExactlySevenInlineScripts is a narrow sanity/regression
+// TestTemplateScanFindsExactlyEightInlineScripts is a narrow sanity/regression
 // pin: Amendment 4 enumerated six inline <script> blocks (two in layout.html,
 // one each in dashboard.html, github_settings.html, ticket_detail.html,
 // ticket_new.html); users.html brought a seventh when RBAC merged in, and its
@@ -35,13 +35,13 @@ import (
 // actually receives — see the doc comment below on why an earlier version
 // of this test claimed that and was wrong, and TestCSPAuthorizesEveryRenderedInlineScript,
 // which is the test that actually proves it.
-func TestTemplateScanFindsExactlySevenInlineScripts(t *testing.T) {
+func TestTemplateScanFindsExactlyEightInlineScripts(t *testing.T) {
 	hashes, err := server.InlineScriptHashes(ui.TemplateFS())
 	if err != nil {
 		t.Fatalf("InlineScriptHashes: %v", err)
 	}
-	if len(hashes) != 7 {
-		t.Errorf("found %d distinct inline scripts, want 7 (Amendment 4's six, plus users.html): %v", len(hashes), hashes)
+	if len(hashes) != 8 {
+		t.Errorf("found %d distinct inline scripts, want 8 (Amendment 4's six, plus users.html and epic_detail.html): %v", len(hashes), hashes)
 	}
 }
 

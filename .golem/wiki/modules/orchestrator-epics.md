@@ -62,3 +62,18 @@ or the dashboard's mark-completed form) is an attestation, not an action:
 the caller states the integration branch is merged to base and names the
 resulting head SHA, and the run closes on that word. Repeating the same
 attestation is a no-op; `AutoMergeFinal` is gone.
+
+## Plan jobs (planjob.go)
+A durable `epic_plan_jobs` row asks a shem to generate the plan.
+`RequestPlanJob` needs a `draft`/`awaiting-approval` epic; a partial unique
+index allows one active (queued/running) job per epic, and only a
+unique-constraint violation maps to `ErrPlanJobActive`. `AvailablePlanJobs`
+lists queued jobs (and running ones with a stale lease) for epics still in
+those two states. `ClaimPlanJob` is a compare-and-swap on the lease
+(`PlanJobStaleAfter`); `PostPlanJobProgress` refreshes it and consumes an
+attempt (`PlanJobMaxAttempts`: first try plus one repair). `CompletePlanJob`
+re-validates the draft with `epic.CanonicalPlan` before storing it; the shem's
+validation is never trusted. The draft is not a revision: a human saves it
+unless the epic set `AutoStartGeneratedPlan`, in which case the job calls
+`AddRevision` -> `Approve` (actor `auto:plan-generation`) -> `Start`, and a
+refusal is recorded on the job's `Err` while the draft stays stored.

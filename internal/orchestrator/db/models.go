@@ -61,12 +61,20 @@ type Ticket struct {
 	CreatedByUserID *uint   `gorm:"index" json:"created_by_user_id"`
 	CheckpointPhase *string `json:"checkpoint_phase"`
 	CheckpointSHA   *string `json:"checkpoint_sha"`
-	// RetryPhase remembers the active worker phase when a ticket is parked for
-	// attention. It is consumed by an explicit human retry; ordinary requeue
-	// clears it and starts the ticket over.
-	RetryPhase  string `gorm:"not null;default:''" json:"-"`
-	IssueNumber *int   `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
-	IssueURL    string `json:"issue_url"`
+	// RetryPhase records the failed worker phase for an explicit checkpoint
+	// retry (human or automatic). Requeue clears it and starts over.
+	RetryPhase string `gorm:"not null;default:''" json:"-"`
+	// Recovery is opt-in by the failure source, not by the badge. Old rows,
+	// human parks and exhausted PR/epic retries remain human-owned.
+	AttentionEligible    bool       `gorm:"not null;default:false" json:"attention_eligible"`
+	AttentionReason      string     `gorm:"not null;default:''" json:"attention_reason"`
+	AttentionAttempts    int        `gorm:"not null;default:0" json:"attention_attempts"`
+	AttentionFingerprint string     `gorm:"not null;default:''" json:"-"`
+	AttentionRepeats     int        `gorm:"not null;default:0" json:"-"`
+	AttentionToken       string     `gorm:"not null;default:''" json:"-"`
+	AttentionLeaseUntil  *time.Time `json:"-"`
+	IssueNumber          *int       `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
+	IssueURL             string     `json:"issue_url"`
 	// IntakeApproved records that a human released this externally-sourced
 	// ticket from pending-approval via actionStart — the ONLY writer of this
 	// column. It is provenance, not phase: no sequence of phase transitions
@@ -206,7 +214,7 @@ type Ticket struct {
 // every other transition clears the retry hint so stale phases cannot leak
 // into a later run.
 func PhaseUpdates(phase string) map[string]any {
-	updates := map[string]any{"phase": phase}
+	updates := map[string]any{"phase": phase, "attention_eligible": false, "attention_token": "", "attention_lease_until": nil}
 	if phase == "needs-attention" {
 		updates["retry_phase"] = gorm.Expr("CASE WHEN phase = ? THEN retry_phase ELSE phase END", phase)
 	} else {
@@ -437,8 +445,14 @@ type Epic struct {
 	FinalPRNumber *int   `json:"final_pr_number"`
 	FinalPRURL    string `gorm:"not null;default:''" json:"final_pr_url"`
 	// AutoApprovePhases is snapshotted into each child's ManualApproval at Start.
-	AutoApprovePhases bool   `gorm:"not null;default:false" json:"auto_approve_phases"`
-	State             string `gorm:"not null;default:'draft'" json:"state"` // epics.State* constants
+	AutoApprovePhases bool `gorm:"not null;default:false" json:"auto_approve_phases"`
+	// AutoStartGeneratedPlan is opt-in: a successfully generated and
+	// validated plan draft is saved as a revision, approved and started
+	// without human clicks. Approval is recorded under the automation's
+	// name, not a human's. Off by default: the plan approval gate otherwise
+	// stays manual and hash-bound.
+	AutoStartGeneratedPlan bool   `gorm:"not null;default:false" json:"auto_start_generated_plan"`
+	State                  string `gorm:"not null;default:'draft'" json:"state"` // epics.State* constants
 	// ApprovedRevision/ApprovedPlanHash bind approval to exact content; a
 	// new revision clears both.
 	CurrentRevision  int    `gorm:"not null;default:0" json:"current_revision"`
@@ -499,4 +513,37 @@ type TesterVerdict struct {
 	Evidence    string `gorm:"not null;default:''" json:"evidence"`
 	Backend     string `gorm:"not null;default:''" json:"backend"`
 	CreatedAt   time.Time
+}
+
+// EpicPlanJob is one durable plan-generation job for an epic. The
+// orchestrator owns the row; a shem claims it (ShemID + ClaimedAt act as
+// the lease, refreshed while the session runs) and posts back a draft plan
+// or an error. The draft is not a plan revision: it becomes one only when
+// a human saves it through the ordinary revision flow (unless the epic set
+// AutoStartGeneratedPlan), so by default approval keeps
+// binding to content a human saw.
+type EpicPlanJob struct {
+	ID     string `gorm:"primaryKey" json:"id"`
+	EpicID string `gorm:"not null;index" json:"epic_id"`
+	// Status: queued -> running -> done | failed. An active job (queued or
+	// running) blocks a new one for the same epic — enforced by a partial
+	// unique index created in Open.
+	Status    string     `gorm:"not null;default:'queued'" json:"status"`
+	ShemID    *uint      `json:"shem_id"`
+	ClaimedAt *time.Time `json:"claimed_at"`
+	// DraftJSON is the canonical plan JSON the shem produced, validated
+	// against the epic's target ref before it was stored.
+	DraftJSON string `gorm:"not null;default:''" json:"draft_json"`
+	// Err names the failure when Status is failed (validator errors or the
+	// agent's own output); empty otherwise.
+	Err string `gorm:"column:error;not null;default:''" json:"error"`
+	// LogTail is the last slice of the agent session's output, for the
+	// epic page's live status.
+	LogTail string `gorm:"not null;default:''" json:"log_tail"`
+	// Attempt counts agent sessions run for this job (first try plus at
+	// most one repair), so a reclaimed job does not restart the repair
+	// loop forever.
+	Attempt   int `gorm:"not null;default:0" json:"attempt"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }

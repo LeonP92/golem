@@ -170,6 +170,38 @@ immutable revision. A human then **approves** a specific revision — the
 approval binds the approver's name to the revision *and* its content hash, so
 "approved" always means "this exact plan".
 
+### Generating the plan
+
+Writing the plan JSON by hand is one option; the epic page also has a
+**Generate plan** button. That queues a durable plan job: a shem with a
+checkout of the repo claims it (same lease pattern as tickets, so a dead
+shem's job is reclaimed), and runs one planning agent session there — the
+session reads the spec, the code graph and the wiki, writes the plan JSON,
+and iterates against `golem epic-plan validate --target <ref> <file>`
+until the same validator that checks a hand-pasted plan passes. Invalid
+output gets one repair session seeded with the validator's errors.
+
+The model comes from the `epic-plan` stage default in `shem.yaml`
+(large tier by default — planning shapes every ticket downstream and runs
+once per epic).
+
+The finished draft fills the plan box on the epic page. Unless the epic opted
+into auto-start (below), nothing becomes a revision until you review, edit if
+needed, and click save: approval still binds to the exact content hash, and a
+generated plan carries no approval. The orchestrator also re-validates the
+posted draft server-side before showing it, so a shem's say-so is never
+trusted. Pasting JSON by hand works exactly as before whether or not any plan
+job exists.
+
+**Auto-start (opt-in).** An epic created with *auto start generated plan*
+(`auto_start_generated_plan`) skips the human step: when a job produces a valid
+draft, the orchestrator saves it as a revision, approves that revision and
+starts the run, with no human involved. The approval is recorded under the
+actor `auto:plan-generation` and still binds the revision's content hash. It is
+off by default, so the human gate holds unless the epic opted in. If a step
+fails (for example the epic moved on while the job ran), the job keeps the
+draft and shows the failure on the epic page.
+
 ### The run
 
 Starting an approved epic materializes each node into an ordinary ticket
@@ -324,3 +356,62 @@ The run plays out as:
 Every step above happened through the same ticket lifecycle a standalone
 ticket uses. The epic added the plan, the scheduling, and the receipts —
 nothing else.
+
+## Automatic recovery from failed work
+
+New worker failures enter bounded automatic diagnosis by default. A ticket
+still shows `needs-attention` while the worker diagnoses it. Known usage,
+authentication, permissions and missing-command errors, and provider outages
+(overloaded, 503 or 529, timeouts, connection resets), stay parked without a
+model call: a retry would fail the same way. For a failed review gate only the
+failure's headline is checked, so test names in the gate output do not count.
+Other failures go to the `diagnose` stage, which returns either concrete
+repair feedback or a reason a person is needed. Malformed output, missing
+evidence or a failed diagnoser stays parked, never passes a gate. Stopping a
+ticket ends automatic recovery for it; starting it again does not re-enter
+diagnosis.
+
+The worker resumes the failed phase on its existing branch, preserving dirty
+work. It uses the normal checkpoint retry and feedback channels. Review,
+validation, manual approvals and exact-head tester gates still run normally;
+diagnosis never approves or merges work. PR/epic conflict and tester-FAIL
+revisions retain their existing bounded revision loop. An inconclusive epic
+tester verdict can enter diagnosis; exhausted revision budgets, human parks,
+legacy parked tickets and infrastructure integration errors remain human-owned.
+
+Configure the policy in the host's `shem.yaml`, per repository:
+
+```yaml
+repos:
+  - path: /repos/my-repo
+    remote: https://example.com/team/my-repo.git
+    auto_retry: true             # absent means true; false opts out
+    attention_fix_attempts: 3   # positive integer; absent means 3
+backend:
+  # Use this backend's usual catalog and model IDs.
+  stage_defaults:
+    diagnose: medium
+```
+
+`diagnose` is a normal model stage: backend catalogs, stage defaults and ticket
+model selections apply. A custom catalog without a diagnose default uses the
+vendor default, like other unspecified stages. Changing `stage_defaults` is
+an override of that map, so retain the other stage entries you already use.
+The policy belongs to the host config, not an agent-editable repository file.
+Restart the shem after changing it.
+
+Three is the default lifetime dispatch budget per ticket, not three attempts
+on every restart. Dispatch is recorded before the model runs; an interrupted
+or expired dispatch still counts. A repeated normalized failure stops after
+the second occurrence, and a failed code repair with unchanged HEAD and
+tracked diff stops for no progress. Spec/plan repairs do not need a code
+commit. Each automatic dispatch can include the usual phase, verification,
+review and tester calls in addition to diagnosis.
+
+Human stop, requeue, park, edited intake text and paused/changed epic runs
+invalidate an in-flight diagnosis. A ten-minute lease fences late results;
+the model has an eight-minute timeout. Workers poll eligible failures using
+the existing ten-second work loop, including after restart. A worker upgrade
+alone can report errors to an older server, but automatic recovery requires
+both the orchestrator and shem to be upgraded. Schema changes are additive;
+existing parked tickets are not silently retried.

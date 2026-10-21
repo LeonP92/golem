@@ -1,6 +1,7 @@
 package db
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -69,7 +70,14 @@ func Open(dsn string) (*gorm.DB, error) {
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
 		&GitHubRepo{}, &GitHubOutbox{},
 		&Epic{}, &EpicPlanRevision{}, &TesterVerdict{}, &EpicIntegrationSlot{},
+		&EpicPlanJob{},
 	); err != nil {
+		return nil, err
+	}
+	// One active plan job per epic. AutoMigrate cannot express the partial
+	// index, so it is created here; identical on SQLite and Postgres.
+	if err := gdb.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_epic_plan_jobs_active " +
+		"ON epic_plan_jobs(epic_id) WHERE status IN ('queued','running')").Error; err != nil {
 		return nil, err
 	}
 	if err := ensureAdmin(gdb); err != nil {
@@ -110,4 +118,18 @@ func ensureAdmin(gdb *gorm.DB) error {
 	// admin out-of-band should be able to see where the new one came from.
 	log.Printf("no admin user found; promoted %q (id %d) to admin", first[0].Username, first[0].ID)
 	return nil
+}
+
+// IsDuplicateKey reports whether err is a unique-constraint violation. GORM
+// surfaces gorm.ErrDuplicatedKey for drivers that support translation; the
+// string checks cover the SQLite and Postgres messages that reach us
+// untranslated.
+func IsDuplicateKey(err error) bool {
+	if errors.Is(err, gorm.ErrDuplicatedKey) {
+		return true
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "unique constraint") ||
+		strings.Contains(msg, "duplicate key") ||
+		strings.Contains(msg, "unique_violation")
 }

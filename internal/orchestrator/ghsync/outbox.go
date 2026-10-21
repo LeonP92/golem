@@ -6,7 +6,6 @@ package ghsync
 
 import (
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -143,7 +142,7 @@ func EnqueueFinalPR(tx *gorm.DB, e *db.Epic) error {
 // back, and a re-gated ticket could never be approved again.
 //
 // With DO NOTHING the server raises nothing at all, so no transaction is
-// ever aborted, on either backend. isDuplicateKey is kept for
+// ever aborted, on either backend. db.IsDuplicateKey is kept for
 // createTicketFromIssue, whose Create is standalone (its own implicit
 // transaction) and therefore poisons nothing.
 //
@@ -158,7 +157,7 @@ func Enqueue(tx *gorm.DB, row db.GitHubOutbox) error {
 		row.NextAttempt = time.Now()
 	}
 	err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&row).Error
-	if err != nil && isDuplicateKey(err) {
+	if err != nil && db.IsDuplicateKey(err) {
 		return nil
 	}
 	return err
@@ -179,20 +178,6 @@ func MilestoneComment(phase, ticketID, baseURL string) (string, string, bool) {
 	default:
 		return "", "", false
 	}
-}
-
-// isDuplicateKey reports whether err is a unique-constraint violation. GORM
-// surfaces gorm.ErrDuplicatedKey for drivers that support translation; the
-// string checks cover the SQLite and Postgres messages that reach us
-// untranslated.
-func isDuplicateKey(err error) bool {
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unique constraint") ||
-		strings.Contains(msg, "duplicate key") ||
-		strings.Contains(msg, "unique_violation")
 }
 
 // ParkedRow is one outbox row that has exhausted MaxAttempts: left undone,

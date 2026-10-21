@@ -5,6 +5,7 @@ package ui
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -85,6 +86,14 @@ var tmplFuncs = template.FuncMap{
 			return s
 		}
 		return string(runes[:n]) + "…"
+	},
+	// planJobDraft pretty-prints a finished job's draft for the edit box.
+	"planJobDraft": func(job db.EpicPlanJob) string {
+		var buf bytes.Buffer
+		if json.Indent(&buf, []byte(job.DraftJSON), "", "  ") != nil {
+			return job.DraftJSON
+		}
+		return buf.String()
 	},
 	"displayTitle": func(title, description string) string {
 		if title != "" {
@@ -215,6 +224,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /epics/new", h.sessionWriteRoute(rbac.PermTicketCreate, h.epicNewSubmit))
 	mux.Handle("GET /epics/{id}", h.sessionRoute(rbac.PermTicketView, h.epicDetail))
 	mux.Handle("POST /epics/{id}/revisions", h.sessionWriteRoute(rbac.PermTicketCreate, h.epicAction(h.epicRevisionSubmit)))
+	mux.Handle("POST /epics/{id}/plan/generate", h.sessionWriteRoute(rbac.PermTicketCreate, h.epicAction(h.epicPlanGenerateSubmit)))
 	mux.Handle("POST /epics/{id}/approve", h.sessionWriteRoute(rbac.PermTicketManage, h.epicAction(h.epicApproveSubmit)))
 	mux.Handle("POST /epics/{id}/start", h.sessionWriteRoute(rbac.PermTicketManage, h.epicAction(h.epicStartSubmit)))
 	mux.Handle("POST /epics/{id}/merge-final", h.sessionWriteRoute(rbac.PermTicketManage, h.epicAction(h.epicMergeFinalSubmit)))
