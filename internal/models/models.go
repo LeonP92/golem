@@ -25,12 +25,18 @@ const (
 	StageGraph         Stage = "graph"
 	// StageTest is the epic tester, whose verdict gates auto-merge.
 	StageTest Stage = "test"
+	// StageEpicPlan is the plan-generation session a shem runs for an epic:
+	// one long-form session that writes the plan JSON. Planning shapes every
+	// ticket downstream, so it defaults to the large tier.
+	StageEpicPlan Stage = "epic-plan"
+	// StageDiagnose classifies a failed run and writes repair feedback.
+	StageDiagnose Stage = "diagnose"
 )
 
 // Stages is the closed set of stages, in display order.
 var Stages = []Stage{
 	StageBrainstorm, StagePlan, StageImplement, StageRevise, StageValidate,
-	StageObserve, StageReview, StagePRDescription, StageGraph, StageTest,
+	StageObserve, StageReview, StagePRDescription, StageGraph, StageTest, StageEpicPlan, StageDiagnose,
 }
 
 func isStage(s string) bool {

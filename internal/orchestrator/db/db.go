@@ -69,7 +69,14 @@ func Open(dsn string) (*gorm.DB, error) {
 		&User{}, &Session{}, &Shem{}, &Ticket{}, &LogEntry{}, &HumanInput{},
 		&GitHubRepo{}, &GitHubOutbox{},
 		&Epic{}, &EpicPlanRevision{}, &TesterVerdict{}, &EpicIntegrationSlot{},
+		&EpicPlanJob{},
 	); err != nil {
+		return nil, err
+	}
+	// One active plan job per epic. AutoMigrate cannot express the partial
+	// index, so it is created here; identical on SQLite and Postgres.
+	if err := gdb.Exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_epic_plan_jobs_active " +
+		"ON epic_plan_jobs(epic_id) WHERE status IN ('queued','running')").Error; err != nil {
 		return nil, err
 	}
 	if err := ensureAdmin(gdb); err != nil {

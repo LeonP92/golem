@@ -19,3 +19,6 @@ stage_defaults:
   # The tester runs the acceptance scenarios end to end and argues from
   # their evidence: same weight class as validate, not a cheap observer.
   test: medium
+  # Epic planning runs once per epic and shapes every ticket downstream.
+  epic-plan: large
+  diagnose: medium

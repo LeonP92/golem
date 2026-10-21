@@ -5,7 +5,7 @@ resolution. Stdlib only, no catalog data as a runtime source of truth.
 
 ## Types
 
-- `Stage` and `Stages` — the closed set of nine agent invocation sites, in
+- `Stage` and `Stages` — the closed set of agent invocation sites, in
   display order.
 - `Tier` — an operator-defined label. `Catalog.Tiers` lists them cheapest
   first.
@@ -33,3 +33,10 @@ resolution. Stdlib only, no catalog data as a runtime source of truth.
 - `FieldPrefix`, `BackendField` and `FromValues` are the one decoder for the
   `model_backend` / `model_<stage>` wire format, shared by the API form reader,
   the UI form reader and the htmx query reader.
+
+`diagnose` is the failure diagnosis invocation site. It uses the same
+backend catalog, stage-default resolution and ticket selection as every stage.
+Embedded Claude Code, Codex and OpenCode catalogs default it to medium.
+
+`epic-plan` is the stage for epic plan-generation sessions (shem `runPlanJob`).
+It defaults to the large tier because the plan shapes every downstream ticket.

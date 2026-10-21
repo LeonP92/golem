@@ -210,8 +210,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
 			e.selfVerify(ctx, c, claim, repoPath, ticketDir, ticketID, model)
 			if revErr := e.runGolemReview(ctx, repoPath, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageReview)); revErr != nil {
-				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
-				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
+				return fmt.Errorf("review gate could not run: %w", revErr)
 			}
 			return e.finishWorkPhase(ctx, cfg, c, claim, repoPath, ticketDir, "Implementation", claim.Branch)
 
@@ -244,8 +243,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			e.observe(ctx, c, repoPath, ticketDir, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageObserve))
 			e.selfVerify(ctx, c, claim, repoPath, ticketDir, ticketID, model)
 			if revErr := e.runGolemReview(ctx, repoPath, ticketID, claim.BaseBranch, e.claimModel(c, claim, models.StageReview)); revErr != nil {
-				postStatus(c, ticketID, "Review gate failed to run: "+firstLineOf(revErr.Error()))
-				log.Printf("executor: review gate for %s: %v", ticketID, revErr)
+				return fmt.Errorf("review gate could not run: %w", revErr)
 			}
 			// Previously defaulted an unreadable state to "ready-for-review",
 			// so a revise run that left no state reported success outright.
@@ -517,7 +515,7 @@ func withHumanFeedback(prompt, feedback string) string {
 	if strings.TrimSpace(feedback) == "" {
 		return prompt
 	}
-	return prompt + "\n\nHuman retry feedback:\n" + feedback
+	return prompt + "\n\nRepair feedback (human or automated, scoped to this ticket):\n" + feedback
 }
 
 func postCurrentHeadCheckpoint(ctx context.Context, c *client.Client, ticketID, phase, worktree string) {

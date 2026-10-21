@@ -210,3 +210,45 @@ func findCycle(p Plan) []string {
 	}
 	return nil
 }
+
+// ApplyBranchTarget fills each node's empty BranchTarget with target and
+// reports every node naming any other ref. It is the shared rule for every
+// path a plan enters the system by — pasted JSON, a generated draft, the
+// validate command — so a plan means the same thing no matter who wrote
+// it. Call it before Validate: a node with no branch target is otherwise
+// rejected there.
+func ApplyBranchTarget(p *Plan, target string) []error {
+	var errs []error
+	for i, n := range p.Nodes {
+		switch n.BranchTarget {
+		case "":
+			p.Nodes[i].BranchTarget = target
+		case target:
+		default:
+			errs = append(errs, fmt.Errorf("node %q targets %q; this run integrates into %q", n.Key, n.BranchTarget, target))
+		}
+	}
+	return errs
+}
+
+// CanonicalPlan parses raw plan JSON, fills empty branch targets with
+// target (rejecting any node naming another ref), runs the full structural
+// validation, and returns the canonical re-marshalled JSON. It is the one
+// gate every plan passes through no matter how it enters the system — the
+// epic-plan validate command, a shem checking its generated draft, or the
+// orchestrator storing it.
+func CanonicalPlan(data []byte, target string) (string, []error) {
+	var plan Plan
+	if err := json.Unmarshal(data, &plan); err != nil {
+		return "", []error{fmt.Errorf("plan JSON does not parse: %w", err)}
+	}
+	errs := ApplyBranchTarget(&plan, target)
+	if errs = append(errs, Validate(plan)...); len(errs) > 0 {
+		return "", errs
+	}
+	canonical, err := json.Marshal(plan)
+	if err != nil {
+		return "", []error{err}
+	}
+	return string(canonical), nil
+}

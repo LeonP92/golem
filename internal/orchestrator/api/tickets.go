@@ -18,6 +18,7 @@ import (
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/slug"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // ticketResponse wraps a db.Ticket with a resolved creator username for
@@ -172,6 +173,9 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/tickets/{id}",
 		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.getTicket))))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
+	mux.Handle("GET /api/tickets/attention", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.attentionTickets)))
+	mux.Handle("POST /api/tickets/{id}/attention-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimAttention)))
+	mux.Handle("POST /api/tickets/{id}/attention-result", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resolveAttention)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("POST /api/tickets/{id}/reclaim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reclaimTicket)))
 	mux.Handle("POST /api/tickets/{id}/tester-verdict", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.postTicketVerdict)))
@@ -479,7 +483,8 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 	}
 	shem := auth.ShemFromRequest(r)
 	var body struct {
-		Phase string `json:"phase"`
+		Phase           string `json:"phase"`
+		AttentionReason string `json:"attention_reason"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Phase == "" {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -522,6 +527,25 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 	// just BranchPushed — none of them can come from a snapshot older than
 	// this transaction's own write once sourced this way.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
+		updates := db.PhaseUpdates(body.Phase)
+		if body.Phase != "needs-attention" {
+			// A retry must remain a retry if this shem dies after its first
+			// phase report, before the executor completes the saved phase.
+			updates["retry_phase"] = gorm.Expr("CASE WHEN retry_phase = ? THEN retry_phase ELSE '' END", body.Phase)
+		}
+		if body.Phase == "needs-attention" && strings.TrimSpace(body.AttentionReason) != "" {
+			var failed db.Ticket
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).First(&failed, "id = ? AND assigned_shem = ? AND phase IN ?", id, shem.ID,
+				[]string{"claimed", "in-progress", "brainstorm", "plan", "implement", "review", "revising"}).Error; err != nil {
+				return errNotOwner
+			}
+			markAttention(updates, failed, body.AttentionReason)
+			if eligible, _ := updates["attention_eligible"].(bool); !eligible {
+				if err := appendLogTx(tx, id, "BLOCKER", "orchestrator", "", updates["attention_reason"].(string)); err != nil {
+					return err
+				}
+			}
+		}
 		result := tx.Model(&db.Ticket{}).
 			// phase <> 'stopped' is what makes a stop hold. Cancelling
 			// the agent is asynchronous, so when a human stops a ticket a
@@ -529,8 +553,10 @@ func (h *Handlers) updatePhase(w http.ResponseWriter, r *http.Request) {
 			// clause that report wrote straight over the stop and answered
 			// 204, leaving the ticket assigned, idle and resumable — the
 			// opposite of the invariant actionStop documents.
-			Where("id = ? AND assigned_shem = ? AND phase <> ?", id, shem.ID, PhaseStopped).
-			Updates(db.PhaseUpdates(body.Phase))
+			// closed and needs-attention are excluded too: a late report must not
+			// reopen a finished ticket or overwrite a parked one.
+			Where("id = ? AND assigned_shem = ? AND phase NOT IN ?", id, shem.ID, []string{PhaseStopped, "closed", "needs-attention"}).
+			Updates(updates)
 		if result.Error != nil {
 			return result.Error
 		}

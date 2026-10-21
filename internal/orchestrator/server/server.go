@@ -74,6 +74,7 @@ func (s *Server) Routes() http.Handler {
 	h.RegisterGitHubRoutes(mux)
 	h.RegisterModelRoutes(mux)
 	h.RegisterEpicRoutes(mux)
+	h.RegisterEpicPlanJobRoutes(mux)
 
 	uiHandlers := ui.NewHandlersWithMap(s.DB, tmpls, s.SecureCookie)
 	uiHandlers.GitHubDefaultLabel = s.GitHubDefaultLabel

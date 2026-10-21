@@ -1,11 +1,14 @@
 package worker
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/models"
@@ -77,8 +80,43 @@ func (e *GolemExecutor) runPhase(ctx context.Context, repoPath, prompt, ticketDi
 	f, err := os.Create(logPath) //nolint:gosec
 	if err != nil {
 		log.Printf("executor: could not create phase log %s: %v", logPath, err)
-		return e.Agent.Adapter.RunPhase(ctx, repoPath, prompt, os.Stdout, model)
+		return runPhaseWithEvidence(ctx, e.Agent.Adapter, repoPath, prompt, os.Stdout, model)
 	}
 	defer func() { _ = f.Close() }()
-	return e.Agent.Adapter.RunPhase(ctx, repoPath, prompt, io.MultiWriter(os.Stdout, f), model)
+	return runPhaseWithEvidence(ctx, e.Agent.Adapter, repoPath, prompt, io.MultiWriter(os.Stdout, f), model)
+}
+
+// tailWriter bounds error evidence while the complete output streams to disk.
+type tailWriter struct {
+	mu   sync.Mutex
+	data []byte
+	max  int
+}
+
+func (w *tailWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	max := w.max
+	if max == 0 {
+		max = 8192
+	}
+	w.data = append(w.data, p...)
+	if len(w.data) > max {
+		w.data = bytes.Clone(w.data[len(w.data)-max:])
+	}
+	return len(p), nil
+}
+
+func (w *tailWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return string(w.data)
+}
+
+func runPhaseWithEvidence(ctx context.Context, runner agentrunner.Runner, dir, prompt string, out io.Writer, model string) error {
+	tail := &tailWriter{}
+	if err := runner.RunPhase(ctx, dir, prompt, io.MultiWriter(out, tail), model); err != nil {
+		return fmt.Errorf("%w\n%s", err, tail.data)
+	}
+	return nil
 }

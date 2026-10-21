@@ -26,14 +26,15 @@ type Executor interface {
 
 // Worker polls for available tickets, claims them, and runs them via Executor.
 type Worker struct {
-	cfg      *config.Config
-	client   *client.Client
-	executor Executor
-	agent    *Agent
-	wsc      *client.WSClient
-	stop     chan struct{}
-	mu       sync.Mutex
-	running  map[string]context.CancelFunc // ticketID → cancel for each active ticket
+	cfg       *config.Config
+	client    *client.Client
+	executor  Executor
+	diagnoser Diagnoser
+	agent     *Agent
+	wsc       *client.WSClient
+	stop      chan struct{}
+	mu        sync.Mutex
+	running   map[string]context.CancelFunc // ticketID → cancel for each active ticket
 
 	// graphBuildMu serialises `golem graph build` runs on this shem. Two of
 	// them over one checkout would fight over the graph index, and the
@@ -133,6 +134,7 @@ func (w *Worker) Start() {
 	// the receipt. The lane is idempotent at every step, so re-running it
 	// for a child whose receipt already landed costs one gate check.
 	w.integrateAssigned(assigned)
+	w.pollAttention()
 
 	log.Printf("worker: poll loop started")
 	go w.pollLoop()
@@ -240,7 +242,7 @@ func (w *Worker) failTicket(ticketID string, cause error) {
 		// an unexplained badge, so the shem log should say why.
 		log.Printf("worker: ticket %s: could not record the failure on the ticket: %v", ticketID, logErr)
 	}
-	if phaseErr := w.client.PostPhase(ticketID, "needs-attention"); phaseErr != nil {
+	if phaseErr := w.client.PostFailure(ticketID, cause.Error()); phaseErr != nil {
 		log.Printf("worker: post phase error: %v", phaseErr)
 	}
 }
@@ -251,6 +253,10 @@ func (w *Worker) HandleMessage(msg ws.WSMessage) {
 	case "ticket_available":
 		if msg.TicketID != nil {
 			go w.tryClaimAndRun(*msg.TicketID)
+		}
+	case "epic_plan":
+		if msg.JobID != nil {
+			go w.tryClaimPlanJob(*msg.JobID)
 		}
 	case "graph_build":
 		// Serialised per repository by graphBuildMu: the orchestrator claims
@@ -497,6 +503,7 @@ func (w *Worker) pollLoop() {
 			// had one, is picked up here rather than waiting for a restart
 			// or a person.
 			w.reclaimReaped()
+			w.pollAttention()
 			if assigned, err := w.client.GetAssigned(); err == nil {
 				w.reviseAssigned(assigned)
 				w.integrateAssigned(assigned)
@@ -524,6 +531,17 @@ func (w *Worker) pollLoop() {
 				}
 				if id != nil {
 					go w.tryClaimAndRun(*id)
+				}
+				// Plan jobs self-heal the same way: a job whose push was
+				// lost is found here, and a dead shem's job becomes
+				// claimable again once its lease goes stale.
+				job, err := w.client.GetAvailablePlanJob(r.NormalizedRemote)
+				if err != nil {
+					log.Printf("worker: get available plan jobs error: %v", err)
+					continue
+				}
+				if job != nil {
+					go w.tryClaimPlanJob(job.ID)
 				}
 			}
 		}

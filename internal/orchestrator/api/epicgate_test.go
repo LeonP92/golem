@@ -315,7 +315,7 @@ func TestClaimResponseCarriesEpicContext(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("plain claim = %d", w.Code)
 	}
-	if strings.Contains(w.Body.String(), "epic") {
+	if strings.Contains(w.Body.String(), `"epic":`) {
 		t.Fatalf("ordinary ticket payload mentions epics: %s", w.Body.String())
 	}
 }
