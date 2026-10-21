@@ -550,7 +550,7 @@ type designPhase struct {
 	gatePrompt   string // approval request text in manual-approval mode
 	validating   string // status posted while validation runs
 	cleared      string // status posted after the gate passes
-	buildPrompt  func(ticketID, description, feedback string) string
+	buildPrompt  func(ticketID, description, feedback, decisions string) string
 }
 
 var designPhases = map[string]designPhase{
@@ -583,7 +583,7 @@ func (e *GolemExecutor) runDesignPhase(ctx context.Context, c *client.Client,
 			feedback := consumeFeedback(ctx, c, claim.TicketID)
 			model := e.claimModel(c, claim, models.Stage(dp.name))
 			postPhaseStart(c, ticketID, e.Agent.Adapter.Name(), model, dp.name)
-			prompt := dp.buildPrompt(ticketID, claim.Description, feedback)
+			prompt := dp.buildPrompt(ticketID, claim.Description, feedback, decisionBlock(claim, dp.document))
 			if err := e.runPhase(ctx, repoPath, prompt, ticketDir, dp.name, model); err != nil {
 				return err
 			}

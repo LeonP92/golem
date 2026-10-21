@@ -62,6 +62,9 @@ func Start(gdb *gorm.DB, epicID string) (int, error) {
 				// snapshotted like ManualApproval, so a later policy edit
 				// never silently changes an existing child's gate.
 				TesterRequired: e.TesterRequired,
+				// Snapshotted the same way.
+				AskDecisions:     e.AskDecisions,
+				DecisionGuidance: e.DecisionGuidance,
 			})
 			if res.Error != nil {
 				return res.Error

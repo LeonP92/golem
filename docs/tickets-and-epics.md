@@ -93,6 +93,46 @@ Per ticket, the human chooses how much control to keep:
 
 ![Creating a ticket: approval mode, tester flag, self-verification opt-out, model selection](images/ticket-new.png)
 
+### Decisions (human on the loop)
+
+Agents meet open product and design questions: which of two spec texts wins,
+what a vague instruction should mean. Each ticket and epic has an
+`ask_decisions` flag for these:
+
+- **Off (default): agents decide** — the developer decides from the guidance,
+  records each decision and carries on. The reviewer accepts a deviation from an
+  instruction that conflicts with the spec or cannot be built when a recorded
+  decision backs it. The failure diagnoser may answer `decide`: it records the
+  decision and retries with it as feedback, counting toward
+  `attention_fix_attempts` like any retry.
+- **On: ask** — open questions go to a human, exactly as before.
+
+Every decision is a `DECISION` entry in the activity log (question, choice,
+reason, basis) with its own badge, so a person reviews them by reading the
+log. To overturn one, give ordinary feedback (request changes, or retry with
+feedback).
+
+Guidance is optional text set alongside it. Empty guidance uses the built-in
+default: prefer the option the spec states as its default; where two binding
+texts conflict, the later amendment wins; otherwise choose the option that
+supports the most use cases without weakening a stated invariant or security
+property; keep scope to the ticket.
+
+Where it is set: the "Ask me about open questions" checkbox on the new-ticket
+and new-epic forms, or `ask_decisions` and `decision_guidance` in the create
+API bodies. There is no repository-level
+setting. An epic's flag and guidance are snapshotted into each child when it
+is created, so editing the epic later never changes a running child. Tickets
+and epics that existed before this feature read as autonomous.
+
+These always go to a human, in every mode: weakening a stated invariant,
+security property or gate; editing files the repo marks protected; effects
+involving real money or real external providers; contradicting an explicit
+owner instruction that is buildable. Brainstorm and plan prompts and the
+diagnoser list them. A decision never bypasses a check: it becomes feedback
+and an ordinary retry, so every gate, the reviewer and the tester run again on
+the result. The implement and revise prompts do not carry the decision block.
+
 ### The tester gate
 
 The tester is a per-ticket flag, set at creation with "Run the tester on the
@@ -145,6 +185,8 @@ binds back to it. Creation also fixes the run's topology and policy:
 - **Auto-approve child phases** — children inherit automatic approval. The
   choice is snapshotted into each child when it is created; editing the epic
   later never changes a child already running.
+- **Open questions** — the decision mode (autonomous by default) and optional
+  guidance, snapshotted into each child the same way; see "Decisions".
 
 Auto-merge children makes the tester gate mandatory: no child merges without
 a tester pass. For `epic-branch` runs, the final merge to base is a human step.
@@ -366,7 +408,8 @@ authentication, permissions and missing-command errors, and provider outages
 model call: a retry would fail the same way. For a failed review gate only the
 failure's headline is checked, so test names in the gate output do not count.
 Other failures go to the `diagnose` stage, which returns either concrete
-repair feedback or a reason a person is needed. Malformed output, missing
+repair feedback, a recorded decision (autonomous tickets only, see "Decisions"),
+or a reason a person is needed. Malformed output, missing
 evidence or a failed diagnoser stays parked, never passes a gate. Stopping a
 ticket ends automatic recovery for it; starting it again does not re-enter
 diagnosis.

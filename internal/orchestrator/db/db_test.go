@@ -113,3 +113,36 @@ func TestOpen_EmptyUsersTable(t *testing.T) {
 		t.Errorf("got %d users, want 0", count)
 	}
 }
+
+// A database from before the decision columns upgrades to autonomous: the
+// column default fills every existing ticket and epic.
+func TestOpen_BackfillsDecisionsAsAutonomous(t *testing.T) {
+	dir := t.TempDir()
+	gdb := openFile(t, dir)
+	if err := gdb.Create(&db.Ticket{ID: "t1", RepoRemote: "r", Title: "t", Description: "d", Phase: "unassigned"}).Error; err != nil {
+		t.Fatalf("create ticket: %v", err)
+	}
+	if err := gdb.Create(&db.Epic{ID: "e1", RepoRemote: "r", Title: "e", SpecMarkdown: "s", SpecHash: "h"}).Error; err != nil {
+		t.Fatalf("create epic: %v", err)
+	}
+	for _, table := range []string{"tickets", "epics"} {
+		for _, col := range []string{"ask_decisions", "decision_guidance"} {
+			if err := gdb.Exec("ALTER TABLE " + table + " DROP COLUMN " + col).Error; err != nil {
+				t.Fatalf("drop %s.%s: %v", table, col, err)
+			}
+		}
+	}
+
+	gdb = openFile(t, dir)
+	var tk db.Ticket
+	var ep db.Epic
+	if err := gdb.First(&tk, "id = ?", "t1").Error; err != nil {
+		t.Fatal(err)
+	}
+	if err := gdb.First(&ep, "id = ?", "e1").Error; err != nil {
+		t.Fatal(err)
+	}
+	if tk.AskDecisions || ep.AskDecisions || tk.DecisionGuidance != "" || ep.DecisionGuidance != "" {
+		t.Fatalf("backfill: ticket %v/%q epic %v/%q", tk.AskDecisions, tk.DecisionGuidance, ep.AskDecisions, ep.DecisionGuidance)
+	}
+}

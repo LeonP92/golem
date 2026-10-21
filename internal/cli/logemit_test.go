@@ -104,3 +104,20 @@ func TestAskReturnsAnswerWhenPostedInTime(t *testing.T) {
 		t.Fatal("expected the answer text on stdout")
 	}
 }
+
+func TestLogEmitAcceptsDecisionEntries(t *testing.T) {
+	repo := t.TempDir()
+	var stdout, stderr bytes.Buffer
+	msg := "which sort order? -> newest first: spec default (basis: spec section 3)"
+	code := LogEmit([]string{"--repo", repo, "--ticket", "t1", "--role", "developer", "--type", "DECISION", msg}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("LogEmit failed: exit %d, stderr=%s", code, stderr.String())
+	}
+	entries, err := blog.ReadAll(filepath.Join(repo, ".golem", "tickets", "t1", "log.jsonl"))
+	if err != nil {
+		t.Fatalf("ReadAll: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Type != blog.TypeDecision || entries[0].Message != msg {
+		t.Fatalf("got %+v", entries)
+	}
+}

@@ -13,6 +13,7 @@ const (
 	TypeTimeout         EntryType = "TIMEOUT"
 	TypeBlockedToolCall EntryType = "BLOCKED_TOOL_CALL"
 	TypeResolved        EntryType = "RESOLVED"
+	TypeDecision        EntryType = "DECISION"
 )
 
 // Entry is one line of a ticket's append-only blackboard log.

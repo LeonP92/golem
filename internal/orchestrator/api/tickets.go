@@ -70,6 +70,10 @@ type ClaimResponse struct {
 	// review gate. Verification is the default; a ticket opts out at
 	// creation.
 	VerifyDisabled bool `json:"verify_disabled"`
+	// AskDecisions and DecisionGuidance: how agents treat open questions on
+	// this ticket; see db.Ticket.
+	AskDecisions     bool   `json:"ask_decisions"`
+	DecisionGuidance string `json:"decision_guidance"`
 	// Epic is set only for an epic child.
 	Epic *EpicClaim `json:"epic,omitempty"`
 }
@@ -283,9 +287,11 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 		Backend     string            `json:"backend"`
 		Models      map[string]string `json:"models"`
 		// ManualApproval: require a human to approve the spec and the plan.
-		ManualApproval bool `json:"manual_approval"`
-		TesterRequired bool `json:"tester_required"`
-		VerifyDisabled bool `json:"verify_disabled"`
+		ManualApproval   bool   `json:"manual_approval"`
+		TesterRequired   bool   `json:"tester_required"`
+		VerifyDisabled   bool   `json:"verify_disabled"`
+		AskDecisions     bool   `json:"ask_decisions"`
+		DecisionGuidance string `json:"decision_guidance"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "bad request", http.StatusBadRequest)
@@ -298,16 +304,18 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 	user := auth.SessionUser(r)
 	id := uuid.NewString()
 	ticket := db.Ticket{
-		ID:             id,
-		RepoRemote:     urlnorm.Normalize(body.RepoRemote),
-		BaseBranch:     body.Branch,
-		Title:          body.Title,
-		Branch:         slug.Branch(body.Title, id),
-		Description:    body.Description,
-		Phase:          "unassigned",
-		ManualApproval: body.ManualApproval,
-		TesterRequired: body.TesterRequired,
-		VerifyDisabled: body.VerifyDisabled,
+		ID:               id,
+		RepoRemote:       urlnorm.Normalize(body.RepoRemote),
+		BaseBranch:       body.Branch,
+		Title:            body.Title,
+		Branch:           slug.Branch(body.Title, id),
+		Description:      body.Description,
+		Phase:            "unassigned",
+		ManualApproval:   body.ManualApproval,
+		TesterRequired:   body.TesterRequired,
+		VerifyDisabled:   body.VerifyDisabled,
+		AskDecisions:     body.AskDecisions,
+		DecisionGuidance: body.DecisionGuidance,
 	}
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID
