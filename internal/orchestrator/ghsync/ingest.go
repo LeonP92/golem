@@ -354,7 +354,7 @@ func (s *Syncer) createTicketFromIssue(ctx context.Context, repo *db.GitHubRepo,
 		IssueURL:    issue.HTMLURL,
 	}
 	createErr := s.DB.Create(&ticket).Error
-	if createErr != nil && isDuplicateKey(createErr) {
+	if createErr != nil && db.IsDuplicateKey(createErr) {
 		// A concurrent pass already created this ticket; its row is the one
 		// that counts.
 		return nil

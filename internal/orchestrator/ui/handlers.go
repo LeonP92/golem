@@ -87,19 +87,13 @@ var tmplFuncs = template.FuncMap{
 		}
 		return string(runes[:n]) + "…"
 	},
-	// planJobDraft pretty-prints a finished job's draft for the edit box;
-	// unparseable drafts (cannot happen — the draft is validated before
-	// storage, but the template must render something) pass through as-is.
+	// planJobDraft pretty-prints a finished job's draft for the edit box.
 	"planJobDraft": func(job db.EpicPlanJob) string {
-		var v any
-		if err := json.Unmarshal([]byte(job.DraftJSON), &v); err != nil {
+		var buf bytes.Buffer
+		if json.Indent(&buf, []byte(job.DraftJSON), "", "  ") != nil {
 			return job.DraftJSON
 		}
-		data, err := json.MarshalIndent(v, "", "  ")
-		if err != nil {
-			return job.DraftJSON
-		}
-		return string(data)
+		return buf.String()
 	},
 	"displayTitle": func(title, description string) string {
 		if title != "" {

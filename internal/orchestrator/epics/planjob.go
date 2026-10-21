@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -71,7 +70,7 @@ func RequestPlanJob(gdb *gorm.DB, epicID string) (*db.Epic, *db.EpicPlanJob, err
 	}
 	job := &db.EpicPlanJob{ID: uuid.NewString(), EpicID: epicID, Status: PlanJobQueued}
 	if err := gdb.Create(job).Error; err != nil {
-		if isDuplicateKey(err) {
+		if db.IsDuplicateKey(err) {
 			return nil, nil, ErrPlanJobActive
 		}
 		return nil, nil, err
@@ -234,35 +233,24 @@ func CompletePlanJob(gdb *gorm.DB, jobID string, shemID uint, draftJSON, runErr 
 }
 
 // autoStartGeneratedPlan runs the standard revision/approve/start chain
-// for a validated generated draft. Any refusal (the epic moved on while
-// the job ran, an invalid plan — impossible here but checked again, a
-// start conflict) is returned for the job record; the draft itself stays
-// stored and visible.
+// for a validated generated draft in one transaction, so a refusal at any
+// step (the epic moved on while the job ran, a start conflict) leaves the
+// epic exactly as it was, never approved without being started. The error is
+// returned for the job record; the draft itself stays stored and visible.
 func autoStartGeneratedPlan(gdb *gorm.DB, epicID, draftJSON string) error {
 	var plan epic.Plan
 	if err := json.Unmarshal([]byte(draftJSON), &plan); err != nil {
 		return err
 	}
-	rev, err := AddRevision(gdb, epicID, plan, "")
-	if err != nil {
+	return gdb.Transaction(func(tx *gorm.DB) error {
+		rev, err := AddRevision(tx, epicID, plan, "")
+		if err != nil {
+			return err
+		}
+		if err := Approve(tx, epicID, rev.Revision, rev.PlanHash, "auto:plan-generation"); err != nil {
+			return err
+		}
+		_, err = Start(tx, epicID)
 		return err
-	}
-	if err := Approve(gdb, epicID, rev.Revision, rev.PlanHash, "auto:plan-generation"); err != nil {
-		return err
-	}
-	_, err = Start(gdb, epicID)
-	return err
-}
-
-// isDuplicateKey reports whether err is a unique-constraint violation: the
-// translated GORM error, or the SQLite/Postgres messages that reach us
-// untranslated.
-func isDuplicateKey(err error) bool {
-	if errors.Is(err, gorm.ErrDuplicatedKey) {
-		return true
-	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unique constraint") ||
-		strings.Contains(msg, "duplicate key") ||
-		strings.Contains(msg, "unique_violation")
+	})
 }

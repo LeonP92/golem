@@ -3,6 +3,7 @@ package epics
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,6 +198,48 @@ func TestCompletePlanJobAutoStartWhenOptedIn(t *testing.T) {
 	gdb.Model(&db.Ticket{}).Where("epic_id = ?", e.ID).Count(&children)
 	if children != int64(len(validPlan().Nodes)) {
 		t.Errorf("children = %d, want %d", children, len(validPlan().Nodes))
+	}
+}
+
+// A failed auto-start must leave no half-done chain: Start refusing after
+// the revision and approval were written would otherwise strand the epic
+// approved but never started.
+func TestCompletePlanJobAutoStartFailureLeavesEpicUntouched(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	e, err := Create(gdb, CreateParams{
+		RepoRemote: "https://github.com/org/repo", Title: "Auto", SpecMarkdown: "# Auto",
+		AutoStartGeneratedPlan: true,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	// Start materializes child tickets; refusing that insert makes the last step fail.
+	if err := gdb.Exec(`CREATE TRIGGER refuse_children BEFORE INSERT ON tickets
+		BEGIN SELECT RAISE(ABORT, 'children refused'); END`).Error; err != nil {
+		t.Fatal(err)
+	}
+	_, job, _ := RequestPlanJob(gdb, e.ID)
+	if _, err := ClaimPlanJob(gdb, job.ID, 7, time.Now().UTC()); err != nil {
+		t.Fatalf("ClaimPlanJob: %v", err)
+	}
+	data, _ := json.Marshal(validPlan())
+	if err := CompletePlanJob(gdb, job.ID, 7, string(data), ""); err != nil {
+		t.Fatalf("CompletePlanJob: %v", err)
+	}
+	var after db.Epic
+	if err := gdb.First(&after, "id = ?", e.ID).Error; err != nil {
+		t.Fatal(err)
+	}
+	var revisions int64
+	gdb.Model(&db.EpicPlanRevision{}).Where("epic_id = ?", e.ID).Count(&revisions)
+	if after.State != StateDraft || after.ApprovedRevision != 0 || revisions != 0 {
+		t.Fatalf("a failed auto-start left state = %q approved = %d revisions = %d, want draft/0/0",
+			after.State, after.ApprovedRevision, revisions)
+	}
+	var stored db.EpicPlanJob
+	gdb.First(&stored, "id = ?", job.ID)
+	if stored.Status != PlanJobDone || !strings.Contains(stored.Err, "auto-start failed") {
+		t.Errorf("job = %q / %q, want done with the auto-start failure recorded", stored.Status, stored.Err)
 	}
 }
 

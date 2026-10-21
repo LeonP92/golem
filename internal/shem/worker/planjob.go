@@ -30,10 +30,6 @@ const planJobLogLimit = 4000
 // lease; PlanJobStaleAfter on the orchestrator is the matching window.
 const planJobProgressInterval = time.Minute
 
-// planJobMaxSessions bounds agent sessions per job: the first try plus one
-// repair pass, matching PlanJobMaxAttempts on the orchestrator.
-const planJobMaxSessions = 2
-
 // tryClaimPlanJob attempts to claim and run a plan-generation job. On
 // ErrPlanJobNotClaimable it returns silently, exactly like a lost ticket
 // claim race.
@@ -137,14 +133,11 @@ func (w *Worker) runPlanJob(ctx context.Context, claim *client.PlanJobClaim) {
 			log.Printf("worker: plan job %s finished", jobID)
 			return
 		}
-		joined := errors.Join(valErrs...).Error()
-		if attempt >= planJobMaxSessions {
-			w.postPlanJobError(jobID, "generated plan is invalid after the repair pass: "+joined)
-			return
-		}
-		repairErrors = joined
-		if err := w.client.PostPlanJobProgress(jobID, "first plan failed validation; starting repair pass", true); err != nil {
-			w.postPlanJobError(jobID, "generated plan is invalid and the repair attempt was refused: "+joined)
+		// The orchestrator owns the session budget (PlanJobMaxAttempts): it
+		// refuses the new attempt once the repair pass is spent.
+		repairErrors = errors.Join(valErrs...).Error()
+		if err := w.client.PostPlanJobProgress(jobID, "plan failed validation; starting repair pass", true); err != nil {
+			w.postPlanJobError(jobID, fmt.Sprintf("generated plan is invalid and no repair session is left (%v): %s", err, repairErrors))
 			return
 		}
 	}
