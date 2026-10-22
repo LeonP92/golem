@@ -19,19 +19,23 @@ import (
 )
 
 func TestDiagnosisContractFailsClosed(t *testing.T) {
-	for _, s := range []string{`{"route":"retry","reason":"code broken","feedback":"fix assertion"}`, `{"route":"human","reason":"need product choice"}`} {
+	for _, s := range []string{`{"route":"retry","reason":"code broken","feedback":"fix assertion"}`, `{"route":"human","reason":"need product choice"}`,
+		"```json\n{\"route\":\"human\",\"reason\":\"x\"}\n```",
+		`{"route":"human","reason":"x"}` + "\n\nThe gate failed because the seed is missing.",
+		"Diagnosis:\n" + `{"route":"retry","reason":"r","feedback":"f"}`} {
 		if _, err := parseDiagnosis(s); err != nil {
 			t.Fatalf("valid: %v", err)
 		}
 	}
-	for _, s := range []string{"", `{"route":"retry","reason":"unknown"}`, `{"route":"pass","reason":"good"}`, `{"route":"human","reason":"x","shell":"run"}`, `{"route":"human","reason":"x"} {}`, "```json\n{}\n```"} {
+	for _, s := range []string{"", "no json here", `{"route":"human"`, `{"route":"retry","reason":"unknown"}`, `{"route":"pass","reason":"good"}`, `{"route":"human","reason":"x","shell":"run"}`, `{"route":"human","reason":"x"} {}`,
+		`{"route":"human","reason":"x"} then {"route":"retry","reason":"y","feedback":"z"}`, "```json\n{}\n```"} {
 		if _, err := parseDiagnosis(s); err == nil {
 			t.Fatalf("unsafe diagnosis accepted: %s", s)
 		}
 	}
 }
 func TestKnownOperationalStops(t *testing.T) {
-	for _, s := range []string{"Usage limit reached", "Not logged in · Please run /login", "quota exhausted", "billing disabled", "executable file not found in PATH", "permission denied", "429 rate limit exceeded", "You've hit your limit", "API Error: 529 overloaded", "connection reset by peer"} {
+	for _, s := range []string{"Usage limit reached", "Not logged in · Please run /login", "quota exhausted", "billing disabled", "executable file not found in PATH", "permission denied", "429 rate limit exceeded", "You've hit your limit", "You've hit your session limit · resets 7:40am (UTC)", "API Error: 529 overloaded", "connection reset by peer"} {
 		if !humanOnlyFailure(s) {
 			t.Errorf("not human: %s", s)
 		}
@@ -66,7 +70,37 @@ func (r *evidenceRunner) RunAgent(_ context.Context, role string, in agentrunner
 	}
 	return agentrunner.Result{Output: `{"route":"retry","reason":"assertion wrong","feedback":"fix assertion"}`}, nil
 }
-func TestDiagnoserReceivesEvidenceAndModel(t *testing.T) {
+
+// scriptedRunner answers the diagnoser with outputs in order.
+type scriptedRunner struct {
+	agentrunner.Runner
+	outputs []string
+	calls   int
+}
+
+func (r *scriptedRunner) RunAgent(context.Context, string, agentrunner.Context, string) (agentrunner.Result, error) {
+	out := r.outputs[min(r.calls, len(r.outputs)-1)]
+	r.calls++
+	return agentrunner.Result{Output: out}, nil
+}
+
+func TestDiagnoserRetriesOneMalformedAnswer(t *testing.T) {
+	valid := `{"route":"retry","reason":"r","feedback":"f"}`
+	for _, tc := range []struct {
+		outputs []string
+		ok      bool
+	}{{[]string{"", valid}, true}, {[]string{"", ""}, false}} {
+		runner := &scriptedRunner{outputs: tc.outputs}
+		_, err := ModelDiagnoser{Runner: runner}.Diagnose(context.Background(), &client.ClaimResponse{}, "gate failed", diagnoseFixture(t))
+		if (err == nil) != tc.ok || runner.calls != 2 {
+			t.Fatalf("outputs %q: err=%v calls=%d", tc.outputs, err, runner.calls)
+		}
+	}
+}
+
+// diagnoseFixture is a ticket directory with a worktree diff and one reviewer finding.
+func diagnoseFixture(t *testing.T) string {
+	t.Helper()
 	dir := t.TempDir()
 	wt := filepath.Join(dir, "worktree")
 	if err := os.MkdirAll(wt, 0755); err != nil {
@@ -85,9 +119,13 @@ func TestDiagnoserReceivesEvidenceAndModel(t *testing.T) {
 	}
 	w.Append(blog.NewEntry("reviewer", blog.TypeStatus, "FAIL: missing assertion"))
 	w.Close()
+	return dir
+}
+
+func TestDiagnoserReceivesEvidenceAndModel(t *testing.T) {
 	runner := &evidenceRunner{}
 	d := ModelDiagnoser{Runner: runner, Model: "provider/model"}
-	result, err := d.Diagnose(context.Background(), &client.ClaimResponse{Description: "fix handler"}, "gate failed", dir)
+	result, err := d.Diagnose(context.Background(), &client.ClaimResponse{Description: "fix handler"}, "gate failed", diagnoseFixture(t))
 	if err != nil || result.Route != "retry" || runner.model != "provider/model" {
 		t.Fatalf("diagnosis: %+v %v", result, err)
 	}

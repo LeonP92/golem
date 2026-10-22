@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -77,11 +76,20 @@ func (d ModelDiagnoser) Diagnose(ctx context.Context, claim *client.ClaimRespons
 		}
 	}
 	entries = append(entries, blog.NewEntry("ticket", blog.TypeStatus, claim.Description))
-	result, err := d.Runner.RunAgent(ctx, "diagnoser", agentrunner.Context{RolePrompt: diagnoseContract, LogSlice: entries, Diff: string(diff)}, d.Model)
-	if err != nil {
-		return Diagnosis{}, err
+	// One more session when the output is not a valid diagnosis: an empty or
+	// malformed answer is usually a one-off, and parking costs a human.
+	var parseErr error
+	for range 2 {
+		result, err := d.Runner.RunAgent(ctx, "diagnoser", agentrunner.Context{RolePrompt: diagnoseContract, LogSlice: entries, Diff: string(diff)}, d.Model)
+		if err != nil {
+			return Diagnosis{}, err
+		}
+		var diag Diagnosis
+		if diag, parseErr = parseDiagnosis(result.Output); parseErr == nil {
+			return diag, nil
+		}
 	}
-	return parseDiagnosis(result.Output)
+	return Diagnosis{}, parseErr
 }
 
 const diagnoseContract = `You diagnose a failed development phase. You cannot use tools or change files.
@@ -93,16 +101,22 @@ Choose human for usage/quota/billing limits, auth or missing permissions, missin
 A reviewer/validator failing to run is not a passing verdict. Never bypass gates, weaken checks, change acceptance criteria, switch models/backends, or request credentials.
 If a tester is inconclusive, retry only when its evidence identifies a concrete in-scope repair. Do not invent a fix.`
 
+// parseDiagnosis takes the one JSON object in output. Prose or a markdown
+// fence around it is tolerated (models add them despite the contract); a
+// second object is not, since it would make the route ambiguous.
 func parseDiagnosis(output string) (Diagnosis, error) {
 	var d Diagnosis
-	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(output)))
+	start := strings.Index(output, "{")
+	if start < 0 {
+		return d, fmt.Errorf("diagnosis output has no JSON object")
+	}
+	dec := json.NewDecoder(strings.NewReader(output[start:]))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&d); err != nil {
-		return d, err
+		return Diagnosis{}, fmt.Errorf("diagnosis is not a valid JSON object: %w", err)
 	}
-	var extra any
-	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
-		return Diagnosis{}, fmt.Errorf("diagnosis contains trailing content")
+	if strings.Contains(output[start+int(dec.InputOffset()):], "{") {
+		return Diagnosis{}, fmt.Errorf("diagnosis contains more than one JSON object")
 	}
 	if (d.Route != "retry" && d.Route != "human") || strings.TrimSpace(d.Reason) == "" || (d.Route == "retry" && strings.TrimSpace(d.Feedback) == "") {
 		return Diagnosis{}, fmt.Errorf("diagnosis requires route, reason and concrete retry feedback")
@@ -119,7 +133,7 @@ func humanOnlyFailure(reason string) bool {
 		reason, _, _ = strings.Cut(reason, "\n")
 	}
 	lower := strings.ToLower(reason)
-	for _, stop := range []string{"usage limit", "usage_limit", "rate limit", "rate_limit", "quota", "hit your limit", "overloaded", "529", "503", "connection reset", "timeout", "timed out", "temporarily unavailable", "billing", "insufficient credit", "not logged in", "please run /login", "authentication failed", "unauthorized", "permission denied", "access denied", "executable file not found", "command not found", "no local path for repo", "no shem is assigned", "no code progress after automatic repair"} {
+	for _, stop := range []string{"usage limit", "usage_limit", "session limit", "rate limit", "rate_limit", "quota", "hit your limit", "overloaded", "529", "503", "connection reset", "timeout", "timed out", "temporarily unavailable", "billing", "insufficient credit", "not logged in", "please run /login", "authentication failed", "unauthorized", "permission denied", "access denied", "executable file not found", "command not found", "no local path for repo", "no shem is assigned", "no code progress after automatic repair"} {
 		if strings.Contains(lower, stop) {
 			return true
 		}
