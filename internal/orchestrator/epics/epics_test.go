@@ -262,3 +262,35 @@ func TestApproveOnlyCurrentRevisionBeforeStart(t *testing.T) {
 		t.Fatal("re-approved a running epic")
 	}
 }
+
+// An epic's AskDecisions and guidance are snapshotted into each child at
+// Start; a later epic edit never reaches them.
+func TestDecisionsSnapshotIntoChildren(t *testing.T) {
+	gdb, _ := db.Open(":memory:")
+	e, err := Create(gdb, CreateParams{
+		RepoRemote: "example.com/x/y", Title: "t", SpecMarkdown: "s",
+		AskDecisions: true, DecisionGuidance: "prefer the cheapest option",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev, _ := AddRevision(gdb, e.ID, validPlan(), "")
+	Approve(gdb, e.ID, rev.Revision, rev.PlanHash, "leon")
+	if _, err := Start(gdb, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	gdb.Model(&db.Epic{}).Where("id = ?", e.ID).Updates(map[string]any{"ask_decisions": false, "decision_guidance": "changed"})
+	if _, err := Start(gdb, e.ID); err != nil { // idempotent restart
+		t.Fatal(err)
+	}
+	var children []db.Ticket
+	gdb.Where("epic_id = ?", e.ID).Find(&children)
+	if len(children) == 0 {
+		t.Fatal("no children")
+	}
+	for _, c := range children {
+		if !c.AskDecisions || c.DecisionGuidance != "prefer the cheapest option" {
+			t.Fatalf("child %s: %v / %q", c.ID, c.AskDecisions, c.DecisionGuidance)
+		}
+	}
+}

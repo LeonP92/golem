@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/leonp92/golem/internal/promptfence"
+	"github.com/leonp92/golem/internal/shem/client"
 )
 
 // Prompt construction for the four agent phases, and the fence that keeps an
@@ -152,10 +153,43 @@ var descriptionFenceMarkers = []promptfence.Marker{
 	},
 }
 
+// defaultDecisionGuidance applies when a ticket or epic gives none.
+const defaultDecisionGuidance = `Prefer the option the spec states as its default. Where two binding texts
+conflict, the later amendment wins. Otherwise choose the option that supports
+the most use cases without weakening any stated invariant or security
+property. Keep scope to the ticket.`
+
+// decisionBlock is the autonomous-mode text for the design prompts; "" for a
+// ticket with AskDecisions, which leaves those prompts exactly as they were.
+// document is the file the decisions are listed in.
+func decisionBlock(claim *client.ClaimResponse, document string) string {
+	if claim.AskDecisions {
+		return ""
+	}
+	guidance := defaultDecisionGuidance
+	if claim.DecisionGuidance != "" {
+		guidance = claim.DecisionGuidance
+	}
+	return fmt.Sprintf(`
+DECISIONS (autonomous mode): decide open questions yourself instead of leaving them for a human.
+Decision guidance:
+%s
+Record each decision:
+   golem log emit --ticket %s --role developer --type DECISION "<question> -> <choice>: <reason> (basis: <spec section or rule>)"
+and list every decision under a "Decisions" heading in %s.
+Never decide these; they still go to a human as open questions:
+- weakening a stated invariant, security property or gate;
+- editing files the repo marks protected (a binding spec or reference docs);
+- effects involving real money or real external providers;
+- contradicting an explicit owner instruction that is buildable.
+
+`, guidance, claim.TicketID, document)
+}
+
 // buildBrainstormPrompt returns the prompt for the brainstorm session.
 // The agent writes a spec and stops — it does NOT advance the phase.
 // If feedback is non-empty the spec must address that feedback.
-func buildBrainstormPrompt(ticketID, description, feedback string) string {
+func buildBrainstormPrompt(ticketID, description, feedback, decisions string) string {
 	feedbackSection := ""
 	if feedback != "" {
 		feedbackSection = fmt.Sprintf(`
@@ -164,6 +198,7 @@ REPAIR FEEDBACK ON PREVIOUS SPEC (human or automated, scoped to this ticket):
 
 `, feedback)
 	}
+	feedbackSection += decisions
 	return fmt.Sprintf(`You are a Golem developer running autonomously.
 The ticket has been created. Complete the BRAINSTORM phase only.
 
@@ -190,7 +225,7 @@ A human will review your spec in the orchestrator UI and approve before planning
 // buildPlanPrompt returns the prompt for the plan session.
 // The agent writes an implementation plan and stops — it does NOT advance the phase.
 // If feedback is non-empty the plan must address that feedback.
-func buildPlanPrompt(ticketID, description, feedback string) string {
+func buildPlanPrompt(ticketID, description, feedback, decisions string) string {
 	feedbackSection := ""
 	if feedback != "" {
 		feedbackSection = fmt.Sprintf(`
@@ -199,6 +234,7 @@ REPAIR FEEDBACK ON PREVIOUS PLAN (human or automated, scoped to this ticket):
 
 `, feedback)
 	}
+	feedbackSection += decisions
 	return fmt.Sprintf(`You are a Golem developer running autonomously.
 The brainstorm spec has been approved. Complete the PLAN phase only.
 

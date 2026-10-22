@@ -43,6 +43,8 @@ type epicForm struct {
 	AutoMergeChildren      bool
 	AutoApprovePhases      bool
 	AutoStartGeneratedPlan bool
+	AskDecisions           bool
+	DecisionGuidance       string
 }
 
 func (h *Handlers) renderEpicNew(w http.ResponseWriter, r *http.Request, form epicForm, errMsg string) {
@@ -72,6 +74,8 @@ func (h *Handlers) epicNewSubmit(w http.ResponseWriter, r *http.Request) {
 		AutoMergeChildren:      r.FormValue("auto_merge_children") == "on",
 		AutoApprovePhases:      r.FormValue("auto_approve_phases") == "on",
 		AutoStartGeneratedPlan: r.FormValue("auto_start_generated_plan") == "on",
+		AskDecisions:           r.FormValue("ask_decisions") == "on",
+		DecisionGuidance:       r.FormValue("decision_guidance"),
 	}
 	user := auth.SessionUser(r)
 	params := epics.CreateParams{
@@ -84,6 +88,8 @@ func (h *Handlers) epicNewSubmit(w http.ResponseWriter, r *http.Request) {
 		AutoMergeChildren:      form.AutoMergeChildren,
 		AutoApprovePhases:      form.AutoApprovePhases,
 		AutoStartGeneratedPlan: form.AutoStartGeneratedPlan,
+		AskDecisions:           form.AskDecisions,
+		DecisionGuidance:       form.DecisionGuidance,
 	}
 	if user != nil {
 		params.CreatedByUserID = &user.ID

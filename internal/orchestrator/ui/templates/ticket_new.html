@@ -124,6 +124,22 @@
 
       <div class="form-control">
         <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="ask_decisions" value="1" class="checkbox checkbox-sm"
+                 {{if .Form.AskDecisions}}checked{{end}}>
+          <span>
+            <span class="label-text font-medium">Ask me about open questions</span>
+            <span class="label-text-alt block text-base-content/50">
+              Off: agents decide product and design choices and record each one as a DECISION entry in the activity log, for you to review.
+              On: those choices wait for you.
+            </span>
+          </span>
+        </label>
+        <textarea name="decision_guidance" rows="2" class="textarea textarea-bordered mt-2"
+                  placeholder="Optional guidance for decisions. Empty uses the built-in default.">{{.Form.DecisionGuidance}}</textarea>
+      </div>
+
+      <div class="form-control">
+        <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" name="verify_disabled" value="1" class="checkbox checkbox-sm"
                  {{if .Form.VerifyDisabled}}checked{{end}}>
           <span>

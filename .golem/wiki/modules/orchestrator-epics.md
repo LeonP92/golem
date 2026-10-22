@@ -15,6 +15,8 @@ States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
   target (`feature-branch` | `base-branch`; trunk-flags needs base-branch).
   Epic-branch runs integrate into `epic/<id>` (`TargetRef`). Any auto-merge
   forces `TesterRequired`.
+  `AskDecisions` (false = agents decide, the default) and `DecisionGuidance`
+  are stored on the epic.
 - `AddRevision` stores an immutable revision and clears any approval; only
   before start. A node's empty `branch_target` becomes `TargetRef`; any
   other value is rejected.
@@ -25,7 +27,8 @@ States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
 ## Running (start.go)
 - `Start` materializes the approved revision into tickets once (ID
   `epic-<id8>-<key>`, `BaseBranch` = `TargetRef`, description from the plan,
-  `ManualApproval = !AutoApprovePhases` snapshotted).
+  `ManualApproval = !AutoApprovePhases`, `TesterRequired`, `AskDecisions` and
+  `DecisionGuidance` snapshotted).
 - `RecordIntegration` writes a child's receipt (`EpicIntegratedSHA`),
   recomputes every child's `EpicReady`, and on the last receipt moves the
   run to `awaiting-final-review` (`completed` under trunk-flags). See the

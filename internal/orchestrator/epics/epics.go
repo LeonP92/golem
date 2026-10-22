@@ -60,6 +60,8 @@ type CreateParams struct {
 	AutoMergeChildren      bool
 	AutoApprovePhases      bool
 	AutoStartGeneratedPlan bool
+	AskDecisions           bool
+	DecisionGuidance       string
 	CreatedByUserID        *uint
 }
 
@@ -102,6 +104,8 @@ func Create(gdb *gorm.DB, p CreateParams) (*db.Epic, error) {
 		TesterRequired:         p.AutoMergeChildren,
 		AutoApprovePhases:      p.AutoApprovePhases,
 		AutoStartGeneratedPlan: p.AutoStartGeneratedPlan,
+		AskDecisions:           p.AskDecisions,
+		DecisionGuidance:       p.DecisionGuidance,
 		State:                  StateDraft,
 		CreatedByUserID:        p.CreatedByUserID,
 	}

@@ -59,6 +59,12 @@
           <input type="checkbox" name="auto_start_generated_plan" class="checkbox" {{if .Form.AutoStartGeneratedPlan}}checked{{end}}>
           <span class="label-text">Auto-start a generated plan (a valid generated draft is saved, approved and started without clicks; the approval is recorded as the automation's, not yours)</span>
         </label>
+        <label class="label cursor-pointer justify-start gap-3">
+          <input type="checkbox" name="ask_decisions" class="checkbox" {{if .Form.AskDecisions}}checked{{end}}>
+          <span class="label-text">Ask me about open questions (off: agents decide product and design choices for every child and record each as a DECISION entry in the activity log)</span>
+        </label>
+        <textarea name="decision_guidance" rows="2" class="textarea textarea-bordered ml-10"
+                  placeholder="Optional guidance for decisions. Empty uses the built-in default.">{{.Form.DecisionGuidance}}</textarea>
         <p class="label-text-alt pl-10">Auto-integrating children makes the tester verdict required; no child merges without it. The final merge to base is always yours. Phase auto-approval is inherited when a child is created — later policy changes never alter an existing child.</p>
       </div>
       <div class="card-actions justify-end">

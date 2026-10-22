@@ -540,6 +540,10 @@ type ticketForm struct {
 	TesterRequired bool
 	// VerifyDisabled is the "skip the worker's self-verification" box.
 	VerifyDisabled bool
+	// AskDecisions is the "ask me about open questions" box; DecisionGuidance
+	// is optional text.
+	AskDecisions     bool
+	DecisionGuidance string
 }
 
 // shemsRepos returns the deduplicated union of repos registered by all shems.
@@ -593,9 +597,11 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 		Models:      rawModels,
 		Backend:     backend,
 		// A checkbox is absent from the body when unticked.
-		ManualApproval: r.FormValue("manual_approval") != "",
-		TesterRequired: r.FormValue("tester_required") != "",
-		VerifyDisabled: r.FormValue("verify_disabled") != "",
+		ManualApproval:   r.FormValue("manual_approval") != "",
+		TesterRequired:   r.FormValue("tester_required") != "",
+		VerifyDisabled:   r.FormValue("verify_disabled") != "",
+		AskDecisions:     r.FormValue("ask_decisions") != "",
+		DecisionGuidance: r.FormValue("decision_guidance"),
 	}
 	if form.RepoRemote == "" || form.BaseBranch == "" || form.Title == "" || form.Description == "" {
 		h.renderTicketNew(w, r, form, "All fields are required.")
@@ -604,16 +610,18 @@ func (h *Handlers) ticketNewSubmit(w http.ResponseWriter, r *http.Request) {
 	user := auth.SessionUser(r)
 	id := uuid.NewString()
 	ticket := db.Ticket{
-		ID:             id,
-		RepoRemote:     urlnorm.Normalize(form.RepoRemote),
-		BaseBranch:     form.BaseBranch,
-		Title:          form.Title,
-		Branch:         slug.Branch(form.Title, id),
-		Description:    form.Description,
-		Phase:          "unassigned",
-		ManualApproval: form.ManualApproval,
-		TesterRequired: form.TesterRequired,
-		VerifyDisabled: form.VerifyDisabled,
+		ID:               id,
+		RepoRemote:       urlnorm.Normalize(form.RepoRemote),
+		BaseBranch:       form.BaseBranch,
+		Title:            form.Title,
+		Branch:           slug.Branch(form.Title, id),
+		Description:      form.Description,
+		Phase:            "unassigned",
+		ManualApproval:   form.ManualApproval,
+		TesterRequired:   form.TesterRequired,
+		VerifyDisabled:   form.VerifyDisabled,
+		AskDecisions:     form.AskDecisions,
+		DecisionGuidance: form.DecisionGuidance,
 	}
 	if user != nil {
 		ticket.CreatedByUserID = &user.ID

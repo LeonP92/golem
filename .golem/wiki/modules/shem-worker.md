@@ -108,6 +108,12 @@ implementation over the configured backend's role runner. The host-owned
 per-repo policy defaults on with a three-dispatch lifetime budget. Known
 operational errors bypass inference. Structured retry/human output is checked
 before the worker asks the server to resume a failed phase with feedback.
+For an autonomous ticket the contract adds a `decide` route carrying a
+`{question, choice, reason, basis}` decision: the worker posts it as a
+`DECISION` log entry and retries like `retry` (same attempt budget); for an
+ask ticket `decide` parks as `human`. Failure text naming a hard limit
+(weakening a gate, a protected file, real money or providers) bypasses
+inference like the operational errors.
 The existing running map enforces worker slots. Dirty branch state is kept;
 unchanged failed code repairs stop, while spec/plan repair can progress without
 a commit. Worker output tails preserve usage/auth messages in the failure.
@@ -126,3 +132,13 @@ draft gets one repair session seeded with the errors. A heartbeat posts a
 bounded, mutex-guarded `tailWriter` of the session log every minute to keep
 the lease fresh. Every exit posts a result, and an agent error posts its error
 text plus the log tail so it never reads as success.
+
+## Autonomous decisions (prompts.go)
+`decisionBlock` adds the autonomous-mode text to the brainstorm and plan
+prompts from the claim's `AskDecisions`/`DecisionGuidance` (empty guidance
+= `defaultDecisionGuidance`): decide open questions, record each with
+`golem log emit --type DECISION`, list them under a "Decisions" heading, and
+leave the hard limits to a human. With `AskDecisions` it returns "" and the
+prompts are unchanged. The reviewer role accepts a deviation a
+recorded DECISION entry backs; the implement and revise prompts carry no
+block.

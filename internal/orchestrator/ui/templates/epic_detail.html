@@ -8,6 +8,7 @@
     {{.Epic.RepoRemote}} · base {{.Epic.BaseBranch}} · {{.Epic.BranchStrategy}}
     {{if .Epic.IntegrationRef}}· integrates into <code>{{.Epic.IntegrationRef}}</code>{{end}}
     · delivers to {{.Epic.DeliveryTarget}}
+    · open questions: {{if .Epic.AskDecisions}}ask a human{{else}}agents decide{{end}}
   </p>
 </div>
 
