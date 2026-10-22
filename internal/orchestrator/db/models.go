@@ -98,6 +98,12 @@ type Ticket struct {
 	// default for every ticket; a pre-existing ticket migrates forward
 	// with it on.
 	VerifyDisabled bool `gorm:"not null;default:false" json:"verify_disabled"`
+	// AskDecisions sends open product and design questions to a human. Off
+	// (the default, so every pre-existing ticket too), agents decide them
+	// from DecisionGuidance, record each as a DECISION entry and carry on.
+	// Empty DecisionGuidance means the built-in default.
+	AskDecisions     bool   `gorm:"not null;default:false" json:"ask_decisions"`
+	DecisionGuidance string `gorm:"not null;default:''" json:"decision_guidance"`
 	// ApprovedBodyHash is the hex-encoded SHA-256 hash of Description at the
 	// moment actionStart set IntakeApproved, binding the approval to the
 	// exact text a human reviewed (spec Amendment 1 fix round 4). Without
@@ -446,6 +452,9 @@ type Epic struct {
 	FinalPRURL    string `gorm:"not null;default:''" json:"final_pr_url"`
 	// AutoApprovePhases is snapshotted into each child's ManualApproval at Start.
 	AutoApprovePhases bool `gorm:"not null;default:false" json:"auto_approve_phases"`
+	// AskDecisions and DecisionGuidance are snapshotted into each child at Start.
+	AskDecisions     bool   `gorm:"not null;default:false" json:"ask_decisions"`
+	DecisionGuidance string `gorm:"not null;default:''" json:"decision_guidance"`
 	// AutoStartGeneratedPlan is opt-in: a successfully generated and
 	// validated plan draft is saved as a revision, approved and started
 	// without human clicks. Approval is recorded under the automation's

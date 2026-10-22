@@ -18,6 +18,7 @@ var emittableTypes = map[string]blog.EntryType{
 	"FINDING":  blog.TypeFinding,
 	"BLOCKER":  blog.TypeBlocker,
 	"RESOLVED": blog.TypeResolved,
+	"DECISION": blog.TypeDecision,
 }
 
 func LogEmit(args []string, stdout, stderr io.Writer) int {
@@ -26,7 +27,7 @@ func LogEmit(args []string, stdout, stderr io.Writer) int {
 	repo := fs.String("repo", ".", "target repo root")
 	id := fs.String("ticket", "", "ticket id (required)")
 	role := fs.String("role", "", "role emitting this entry (required)")
-	typ := fs.String("type", "", "STATUS|FINDING|BLOCKER|RESOLVED (required)")
+	typ := fs.String("type", "", "STATUS|FINDING|BLOCKER|RESOLVED|DECISION (required)")
 	target := fs.String("target", "", "role this entry addresses, if any")
 	inReplyTo := fs.String("in-reply-to", "", "id of the entry this resolves, if any")
 	commitSHA := fs.String("commit-sha", "", "commit this entry concerns, if any")
@@ -40,7 +41,7 @@ func LogEmit(args []string, stdout, stderr io.Writer) int {
 	}
 	entryType, ok := emittableTypes[*typ]
 	if !ok {
-		fmt.Fprintf(stderr, "unsupported type %q; QUESTION/ANSWER go through `golem ask`/`golem answer`, valid types here: STATUS, FINDING, BLOCKER, RESOLVED\n", *typ)
+		fmt.Fprintf(stderr, "unsupported type %q; QUESTION/ANSWER go through `golem ask`/`golem answer`, valid types here: STATUS, FINDING, BLOCKER, RESOLVED, DECISION\n", *typ)
 		return 1
 	}
 

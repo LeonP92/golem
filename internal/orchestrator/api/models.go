@@ -69,21 +69,23 @@ func (h *Handlers) claimResponse(t db.Ticket, shem db.Shem) *ClaimResponse {
 	}
 	backend, resolved := h.resolveForShem(t, shem)
 	resp := &ClaimResponse{
-		TicketID:        t.ID,
-		Branch:          t.Branch,
-		BaseBranch:      t.BaseBranch,
-		Title:           t.Title,
-		RepoRemote:      t.RepoRemote,
-		Description:     t.Description,
-		CheckpointPhase: t.CheckpointPhase,
-		CheckpointSHA:   t.CheckpointSHA,
-		RetryPhase:      t.RetryPhase,
-		LogEntries:      entries,
-		Backend:         backend,
-		Models:          resolved,
-		ManualApproval:  t.ManualApproval,
-		TesterRequired:  t.TesterRequired,
-		VerifyDisabled:  t.VerifyDisabled,
+		TicketID:         t.ID,
+		Branch:           t.Branch,
+		BaseBranch:       t.BaseBranch,
+		Title:            t.Title,
+		RepoRemote:       t.RepoRemote,
+		Description:      t.Description,
+		CheckpointPhase:  t.CheckpointPhase,
+		CheckpointSHA:    t.CheckpointSHA,
+		RetryPhase:       t.RetryPhase,
+		LogEntries:       entries,
+		Backend:          backend,
+		Models:           resolved,
+		ManualApproval:   t.ManualApproval,
+		TesterRequired:   t.TesterRequired,
+		VerifyDisabled:   t.VerifyDisabled,
+		AskDecisions:     t.AskDecisions,
+		DecisionGuidance: t.DecisionGuidance,
 	}
 	if t.EpicID != nil {
 		resp.Epic = &EpicClaim{EpicID: *t.EpicID, NodeKey: t.EpicNodeKey}

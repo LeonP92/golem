@@ -75,6 +75,11 @@ type ClaimResponse struct {
 	// VerifyDisabled: skip the worker's self-verification before the
 	// review gate (opt-out; verification is the default).
 	VerifyDisabled bool `json:"verify_disabled"`
+	// AskDecisions and DecisionGuidance: how agents treat open questions;
+	// AskDecisions false (also from an orchestrator that predates it) is
+	// autonomous.
+	AskDecisions     bool   `json:"ask_decisions"`
+	DecisionGuidance string `json:"decision_guidance"`
 	// Epic is set only for an epic child (api.EpicClaim).
 	Epic *EpicClaim `json:"epic,omitempty"`
 }

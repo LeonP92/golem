@@ -120,6 +120,8 @@ type createEpicRequest struct {
 	DeliveryTarget    string `json:"delivery_target"`
 	AutoMergeChildren bool   `json:"auto_merge_children"`
 	AutoApprovePhases bool   `json:"auto_approve_phases"`
+	AskDecisions      bool   `json:"ask_decisions"`
+	DecisionGuidance  string `json:"decision_guidance"`
 }
 
 func (h *Handlers) createEpic(w http.ResponseWriter, r *http.Request) {
@@ -137,6 +139,8 @@ func (h *Handlers) createEpic(w http.ResponseWriter, r *http.Request) {
 		DeliveryTarget:    body.DeliveryTarget,
 		AutoMergeChildren: body.AutoMergeChildren,
 		AutoApprovePhases: body.AutoApprovePhases,
+		AskDecisions:      body.AskDecisions,
+		DecisionGuidance:  body.DecisionGuidance,
 	}
 	if u := auth.SessionUser(r); u != nil {
 		p.CreatedByUserID = &u.ID

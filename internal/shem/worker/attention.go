@@ -36,6 +36,16 @@ type Diagnosis struct {
 	Route    string `json:"route"`
 	Reason   string `json:"reason"`
 	Feedback string `json:"feedback"`
+	// Decision is set only on route "decide".
+	Decision *Decision `json:"decision,omitempty"`
+}
+
+// Decision is what the diagnoser decided instead of asking a human.
+type Decision struct {
+	Question string `json:"question"`
+	Choice   string `json:"choice"`
+	Reason   string `json:"reason"`
+	Basis    string `json:"basis"`
 }
 
 // ModelDiagnoser uses the configured backend's one-shot role runner.
@@ -77,7 +87,7 @@ func (d ModelDiagnoser) Diagnose(ctx context.Context, claim *client.ClaimRespons
 		}
 	}
 	entries = append(entries, blog.NewEntry("ticket", blog.TypeStatus, claim.Description))
-	result, err := d.Runner.RunAgent(ctx, "diagnoser", agentrunner.Context{RolePrompt: diagnoseContract, LogSlice: entries, Diff: string(diff)}, d.Model)
+	result, err := d.Runner.RunAgent(ctx, "diagnoser", agentrunner.Context{RolePrompt: diagnoseContract + decideContract(claim), LogSlice: entries, Diff: string(diff)}, d.Model)
 	if err != nil {
 		return Diagnosis{}, err
 	}
@@ -93,6 +103,24 @@ Choose human for usage/quota/billing limits, auth or missing permissions, missin
 A reviewer/validator failing to run is not a passing verdict. Never bypass gates, weaken checks, change acceptance criteria, switch models/backends, or request credentials.
 If a tester is inconclusive, retry only when its evidence identifies a concrete in-scope repair. Do not invent a fix.`
 
+// decideContract adds the decide route unless the ticket has AskDecisions,
+// which gets the contract above unchanged.
+func decideContract(claim *client.ClaimResponse) string {
+	if claim.AskDecisions {
+		return ""
+	}
+	guidance := defaultDecisionGuidance
+	if claim.DecisionGuidance != "" {
+		guidance = claim.DecisionGuidance
+	}
+	return `
+This ticket is in autonomous decision mode. A third route is allowed: {"route":"decide","reason":"...","feedback":"...","decision":{"question":"...","choice":"...","reason":"...","basis":"spec section, guidance line or rule"}}.
+Choose decide instead of human when the failure is an open product, design or scope choice that the guidance below settles or that a plain rule settles. Put the decision in the feedback too, so the repair follows it.
+Decision guidance:
+` + guidance + `
+Never decide, always choose human: weakening a stated invariant, security property or gate; editing files the repo marks protected (a binding spec or reference docs); effects involving real money or real external providers; contradicting an explicit owner instruction that is buildable.`
+}
+
 func parseDiagnosis(output string) (Diagnosis, error) {
 	var d Diagnosis
 	dec := json.NewDecoder(strings.NewReader(strings.TrimSpace(output)))
@@ -104,8 +132,11 @@ func parseDiagnosis(output string) (Diagnosis, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return Diagnosis{}, fmt.Errorf("diagnosis contains trailing content")
 	}
-	if (d.Route != "retry" && d.Route != "human") || strings.TrimSpace(d.Reason) == "" || (d.Route == "retry" && strings.TrimSpace(d.Feedback) == "") {
+	if (d.Route != "retry" && d.Route != "human" && d.Route != "decide") || strings.TrimSpace(d.Reason) == "" || (d.Route != "human" && strings.TrimSpace(d.Feedback) == "") {
 		return Diagnosis{}, fmt.Errorf("diagnosis requires route, reason and concrete retry feedback")
+	}
+	if dc := d.Decision; d.Route == "decide" && (dc == nil || strings.TrimSpace(dc.Question) == "" || strings.TrimSpace(dc.Choice) == "" || strings.TrimSpace(dc.Reason) == "" || strings.TrimSpace(dc.Basis) == "") {
+		return Diagnosis{}, fmt.Errorf("decide requires a decision with question, choice, reason and basis")
 	}
 	return d, nil
 }
@@ -172,6 +203,7 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		return
 	}
 	result := client.AttentionResult{Token: leased.Token, Reason: "Human attention required: " + leased.Reason}
+	var decision *Decision
 	if !humanOnlyFailure(leased.Reason) {
 		// Diagnosis has a shorter deadline than its server-side dispatch lease.
 		diagnoseCtx, done := context.WithTimeout(ctx, 8*time.Minute)
@@ -184,7 +216,13 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		if err != nil {
 			result.Reason = "Diagnoser could not produce a safe route; human attention required: " + err.Error()
 		} else {
-			result.Retry = d.Route == "retry"
+			if d.Route == "decide" && leased.Claim.AskDecisions {
+				d.Route = "human"
+			}
+			if d.Route == "decide" {
+				decision = d.Decision
+			}
+			result.Retry = d.Route != "human"
 			result.Reason, result.Feedback = d.Reason, d.Feedback
 		}
 	}
@@ -195,6 +233,12 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 	if err != nil {
 		log.Printf("worker: attention result %s: %v", id, err)
 		return
+	}
+	if decision != nil {
+		msg := fmt.Sprintf("%s -> %s: %s (basis: %s)", decision.Question, decision.Choice, decision.Reason, decision.Basis)
+		if _, err := w.client.PostLog(id, client.LogPayload{EntryType: "DECISION", FromRole: "diagnoser", Message: msg}); err != nil {
+			log.Printf("worker: record decision %s: %v", id, err)
+		}
 	}
 	if next != nil && w.executor != nil {
 		worktree := filepath.Join(repoLocalPath(w.cfg, remote), ".golem", "tickets", id, "worktree")

@@ -19,12 +19,13 @@ import (
 )
 
 func TestDiagnosisContractFailsClosed(t *testing.T) {
-	for _, s := range []string{`{"route":"retry","reason":"code broken","feedback":"fix assertion"}`, `{"route":"human","reason":"need product choice"}`} {
+	for _, s := range []string{`{"route":"retry","reason":"code broken","feedback":"fix assertion"}`, `{"route":"human","reason":"need product choice"}`,
+		`{"route":"decide","reason":"spec conflict","feedback":"use B","decision":{"question":"q","choice":"B","reason":"r","basis":"spec 3"}}`} {
 		if _, err := parseDiagnosis(s); err != nil {
 			t.Fatalf("valid: %v", err)
 		}
 	}
-	for _, s := range []string{"", `{"route":"retry","reason":"unknown"}`, `{"route":"pass","reason":"good"}`, `{"route":"human","reason":"x","shell":"run"}`, `{"route":"human","reason":"x"} {}`, "```json\n{}\n```"} {
+	for _, s := range []string{"", `{"route":"retry","reason":"unknown"}`, `{"route":"decide","reason":"x","feedback":"f"}`, `{"route":"decide","reason":"x","feedback":"f","decision":{"question":"q","choice":"c","reason":"r"}}`, `{"route":"pass","reason":"good"}`, `{"route":"human","reason":"x","shell":"run"}`, `{"route":"human","reason":"x"} {}`, "```json\n{}\n```"} {
 		if _, err := parseDiagnosis(s); err == nil {
 			t.Fatalf("unsafe diagnosis accepted: %s", s)
 		}
@@ -36,7 +37,8 @@ func TestKnownOperationalStops(t *testing.T) {
 			t.Errorf("not human: %s", s)
 		}
 	}
-	for _, s := range []string{"gate command returned exit 2", "reviewer FAIL: assertion missing", "plan validation: unresolved step", "agent left local ticket at implement"} {
+	// Agents' own prose ("I did not weaken any test") must not park a ticket.
+	for _, s := range []string{"gate command returned exit 2", "agent exited: I did not weaken any test", "reviewer FAIL: assertion missing", "plan validation: unresolved step", "agent left local ticket at implement"} {
 		if humanOnlyFailure(s) {
 			t.Errorf("did not reach model: %s", s)
 		}
@@ -123,12 +125,16 @@ func TestPhaseErrorsCarryOperationalEvidence(t *testing.T) {
 func TestAttentionWorkerEndToEnd(t *testing.T) {
 	for _, tc := range []struct {
 		name, reason, route string
+		ask                 bool
 		wantRuns            int
+		wantDecision        bool
 	}{
-		{"review repair", "reviewer failed: missing assertion", "retry", 1},
-		{"usage stop", "Usage limit reached", "retry", 0},
-		{"model human", "ambiguous missing behavior", "human", 0},
-		{"bad model answer", "unreadable evidence", "invalid", 0},
+		{"review repair", "reviewer failed: missing assertion", "retry", false, 1, false},
+		{"usage stop", "Usage limit reached", "retry", false, 0, false},
+		{"model human", "ambiguous missing behavior", "human", false, 0, false},
+		{"bad model answer", "unreadable evidence", "invalid", false, 0, false},
+		{"autonomous decide", "reviewer failed: spec conflict", "decide", false, 1, true},
+		{"ask decide parks", "reviewer failed: spec conflict", "decide", true, 0, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			remote := "local://attention"
@@ -152,7 +158,7 @@ func TestAttentionWorkerEndToEnd(t *testing.T) {
 			var shem db.Shem
 			stack.gdb.First(&shem)
 			owner = shem.ID
-			tk := db.Ticket{ID: "attention-123", RepoRemote: remote, Branch: "ticket/attention", Description: "fix handler", Phase: phase, AssignedShem: &owner, CheckpointPhase: &phase, CheckpointSHA: &head}
+			tk := db.Ticket{ID: "attention-123", RepoRemote: remote, Branch: "ticket/attention", Description: "fix handler", Phase: phase, AskDecisions: tc.ask, AssignedShem: &owner, CheckpointPhase: &phase, CheckpointSHA: &head}
 			if err := stack.gdb.Create(&tk).Error; err != nil {
 				t.Fatal(err)
 			}
@@ -170,6 +176,11 @@ func TestAttentionWorkerEndToEnd(t *testing.T) {
 			}
 			var fresh db.Ticket
 			stack.gdb.First(&fresh, "id = ?", tk.ID)
+			var decisions int64
+			stack.gdb.Model(&db.LogEntry{}).Where("ticket_id = ? AND entry_type = 'DECISION'", tk.ID).Count(&decisions)
+			if (decisions == 1) != tc.wantDecision {
+				t.Fatalf("DECISION entries: %d", decisions)
+			}
 			if tc.wantRuns == 0 && (fresh.Phase != "needs-attention" || fresh.AttentionEligible) {
 				t.Fatalf("unsafe route: %+v", fresh)
 			}
@@ -193,7 +204,8 @@ func (d scriptedDiagnoser) Diagnose(_ context.Context, _ *client.ClaimResponse, 
 	if d.route == "invalid" {
 		return Diagnosis{}, errors.New("bad verdict")
 	}
-	return Diagnosis{Route: d.route, Reason: "missing assertion", Feedback: "fix the missing assertion"}, nil
+	return Diagnosis{Route: d.route, Reason: "missing assertion", Feedback: "fix the missing assertion",
+		Decision: &Decision{Question: "q", Choice: "c", Reason: "r", Basis: "b"}}, nil
 }
 
 type attentionFixer struct {
@@ -338,4 +350,19 @@ func (a *repairAdapter) RunPhase(_ context.Context, _, prompt string, out io.Wri
 	laneGit(a.t, a.worktree, "commit", "-m", "fix assertion")
 	_, err := io.WriteString(out, "repair complete\n")
 	return err
+}
+
+func TestDecideRouteOnlyForAutonomousTickets(t *testing.T) {
+	auto := decideContract(&client.ClaimResponse{DecisionGuidance: "prefer the cheapest option"})
+	for _, want := range []string{`"route":"decide"`, "prefer the cheapest option", "weakening a stated invariant"} {
+		if !strings.Contains(auto, want) {
+			t.Errorf("autonomous contract missing %q", want)
+		}
+	}
+	if !strings.Contains(decideContract(&client.ClaimResponse{}), defaultDecisionGuidance) {
+		t.Error("empty guidance must use the built-in default")
+	}
+	if got := decideContract(&client.ClaimResponse{AskDecisions: true}); got != "" {
+		t.Errorf("ask mode changed the diagnoser contract: %q", got)
+	}
 }
