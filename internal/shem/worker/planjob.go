@@ -85,13 +85,14 @@ func (w *Worker) runPlanJob(ctx context.Context, claim *client.PlanJobClaim) {
 		w.postPlanJobError(jobID, fmt.Sprintf("this shem has no local path configured for %s", claim.RepoRemote))
 		return
 	}
-	if err := agentenv.EnsureOwnership(repoPath); err != nil {
-		log.Printf("worker: %v", err)
-	}
 	planPath := filepath.Join(repoPath, ".golem", "epic-plan", jobID, "plan.json")
 	if err := os.MkdirAll(filepath.Dir(planPath), 0o755); err != nil {
 		w.postPlanJobError(jobID, fmt.Sprintf("create plan directory: %v", err))
 		return
+	}
+	// After the mkdir, so the plan directory is the agent account's too: the agent writes plan.json there.
+	if err := agentenv.EnsureOwnership(repoPath); err != nil {
+		log.Printf("worker: %v", err)
 	}
 	// The draft is read and posted before this runs; the checkout keeps no copy.
 	defer func() { _ = os.RemoveAll(filepath.Dir(planPath)) }()
