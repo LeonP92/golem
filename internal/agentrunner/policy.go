@@ -145,7 +145,7 @@ func (s *toolSession) codex(argv []string) ([]string, error) {
 	key, _ := json.Marshal(source)
 	value, _ := json.Marshal(hash)
 	state := `hooks.state={` + string(key) + `={enabled=true,trusted_hash=` + string(value) + `}}`
-	out = append(out, "--strict-config", "-c", hook, "-c", state)
+	out = append(out, "-c", hook, "-c", state)
 	return append(out, argv[at:]...), nil
 }
 func (s *toolSession) openCodeEnv(existing string) ([]string, error) {

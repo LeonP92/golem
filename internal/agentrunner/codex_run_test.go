@@ -29,7 +29,7 @@ func TestCodexRunAgentThroughFakeCLI(t *testing.T) {
 		t.Errorf("Output = %q", res.Output)
 	}
 	argv, _ := os.ReadFile(record + ".argv")
-	if got := strings.Join(strings.Fields(string(argv)), " "); !strings.HasPrefix(got, "exec --skip-git-repo-check --sandbox workspace-write --model gpt-5.6-sol --strict-config -c hooks.PreToolUse=") || !strings.HasSuffix(got, " -") {
+	if got := strings.Join(strings.Fields(string(argv)), " "); !strings.HasPrefix(got, "exec --skip-git-repo-check --sandbox workspace-write --model gpt-5.6-sol -c hooks.PreToolUse=") || !strings.HasSuffix(got, " -") {
 		t.Errorf("argv = %q", got)
 	}
 	stdin, _ := os.ReadFile(record + ".stdin")

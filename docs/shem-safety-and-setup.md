@@ -10,7 +10,7 @@ not recognize. Use OS filesystem and network isolation when that must hold.
   startup).
 - Go 1.27+ and a C compiler to build from source.
 - A backend CLI with hook support: Claude Code needs `--settings`, `--tools` and
-  `--strict-mcp-config`; Codex needs strict config and PreToolUse hooks; OpenCode
+  `--strict-mcp-config`; Codex needs PreToolUse hooks; OpenCode
   needs local plugins (`node`) and `tool.execute.before`.
 - A POSIX shell (`sh`) for setup commands and hooks; on Windows use Git Bash or
   WSL. Keep `golem` on PATH for the hooks.
@@ -59,7 +59,7 @@ assignments and private-key blocks. It cannot recognize every secret.
 
 Limits: Claude project settings cannot switch the hook off (`disableAllHooks` is
 false in the generated settings); the Codex hook trust format was checked against codex 0.163 (PreToolUse runs and allows) and a
-mismatch fails the invocation; an unparseable
+mismatch may leave the hook unloaded silently (`--strict-config` does not catch a malformed override, and it rejects host configs with newer keys, so it is not used), so re-check a denied call after upgrading Codex; an unparseable
 `opencode.json` is logged and left alone.
 
 ## Project bootstrap
