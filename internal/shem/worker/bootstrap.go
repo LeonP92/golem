@@ -33,6 +33,10 @@ func runSetup(ctx context.Context, dir string, commands []string, timeout time.D
 }
 
 func (e *GolemExecutor) prepareWorktree(ctx context.Context, cfg *config.Config, remote, ticketDir string) error {
+	worktree := filepath.Join(ticketDir, "worktree")
+	if err := evidence.CheckCheckout(worktree); err != nil {
+		return err
+	}
 	var commands []string
 	timeout := 5 * time.Minute
 	for _, repo := range cfg.Repos {
@@ -47,7 +51,6 @@ func (e *GolemExecutor) prepareWorktree(ctx context.Context, cfg *config.Config,
 	if len(commands) == 0 {
 		return nil
 	}
-	worktree := filepath.Join(ticketDir, "worktree")
 	// A retry preserves edits; do not key on moving HEAD and re-install every
 	// time the implementer commits. Recreated worktrees lose their marker.
 	base := ""

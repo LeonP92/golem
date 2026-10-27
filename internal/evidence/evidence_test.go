@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -110,5 +111,53 @@ func TestMissingKeyEndStopsRedacting(t *testing.T) {
 	got := out.String()
 	if strings.Count(got, "[PRIVATE KEY REDACTION LIMIT REACHED]") != 1 || !strings.Contains(got, "visible after limit") {
 		t.Fatal(got)
+	}
+}
+
+func TestWriterOmitsSensitiveDiffAcrossWrites(t *testing.T) {
+	raw := "diff --git a/main.go b/main.go\n+before\ndiff --git a/.env b/.env\n+OPAQUE=synthetic-fixture\n+another-opaque-value\ndiff --git a/next.go b/next.go\n+after\n"
+	for _, size := range []int{1, 7, len(raw)} {
+		var out bytes.Buffer
+		w := NewWriter(&out)
+		for start := 0; start < len(raw); start += size {
+			end := min(start+size, len(raw))
+			if _, err := w.Write([]byte(raw[start:end])); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := w.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		if got, want := out.String(), Clean(raw); got != want {
+			t.Fatalf("chunk size %d: got %q, want %q", size, got, want)
+		}
+	}
+}
+
+func TestAssignmentRedactionPreservesJSON(t *testing.T) {
+	for _, raw := range []string{
+		`{"token":"abcdefgh123456"}`,
+		`{"route":"human","reason":"API_TOKEN=abcdefgh123456"}`,
+		`{"password":"abcdefgh123456","nested":{"api_key":"abcdefgh123456"}}`,
+		`{"authorization":"Bearer abcdefgh123456"}`,
+		`{"credentials":"abcdefgh123456"}`,
+	} {
+		got := Clean(raw)
+		if !json.Valid([]byte(got)) {
+			t.Fatalf("redaction broke JSON: %s -> %s", raw, got)
+		}
+		if strings.Contains(got, "abcdefgh123456") || !strings.Contains(got, "[REDACTED]") {
+			t.Fatalf("secret not redacted: %s", got)
+		}
+	}
+	for raw, want := range map[string]string{
+		`PASSWORD="abcdefgh123456"`:   `PASSWORD="[REDACTED]"`,
+		`password: 'abcdefgh123456'`:  `password: '[REDACTED]'`,
+		`API_TOKEN=abcdefgh123456`:    `API_TOKEN=[REDACTED]`,
+		`tokenizer = somethingUseful`: `tokenizer = somethingUseful`,
+	} {
+		if got := Clean(raw); got != want {
+			t.Fatalf("%q -> %q, want %q", raw, got, want)
+		}
 	}
 }

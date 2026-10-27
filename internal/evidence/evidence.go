@@ -14,7 +14,7 @@ import (
 
 // A credential assignment whose value looks like a secret: one unbroken token of at least 8 characters. Prose and code after the name
 // ("missing API token: CI lacks it", `token := os.Getenv(...)`, `const maxTokens = 4096`) must survive: diagnoser JSON and diffs are model input.
-var assignment = regexp.MustCompile(`(?im)((?:[a-z0-9_]*(?:secret|token|password|passwd|api_key|private_key|credential)[a-z0-9_]*|authorization)\s*["']?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?["']?[^\s"'(),;{}\[\]]{8,}["']?`)
+var assignment = regexp.MustCompile(`(?im)((?:[a-z0-9_]*(?:secret|token|password|passwd|api_key|private_key|credential)s?(?:_[a-z0-9_]+)?|authorization)\s*["']?\s*[:=]\s*["']?)(?:(?:bearer|basic)\s+)?([^\s"'(),;{}\[\]]{8,})`)
 var privateKey = regexp.MustCompile(`(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`)
 
 // SensitivePath excludes live configuration and key material, not templates.
@@ -58,21 +58,26 @@ func processSecrets() []string {
 }
 
 func clean(text string, secrets []string) string {
-	var b strings.Builder
 	omit := false
+	return cleanWithDiff(text, secrets, &omit)
+}
+
+// cleanWithDiff shares diff-section state between buffered and streaming evidence.
+func cleanWithDiff(text string, secrets []string, omit *bool) string {
+	var b strings.Builder
 	for _, line := range strings.SplitAfter(text, "\n") {
 		if strings.HasPrefix(line, "diff --git ") {
-			omit = false
+			*omit = false
 			for _, p := range strings.Fields(line)[2:] {
 				if SensitivePath(strings.Trim(p, "\"\r\n")) {
-					omit = true
+					*omit = true
 				}
 			}
-			if omit {
+			if *omit {
 				b.WriteString("[sensitive file diff omitted]\n")
 			}
 		}
-		if !omit {
+		if !*omit {
 			b.WriteString(line)
 		}
 	}
@@ -84,7 +89,8 @@ func clean(text string, secrets []string) string {
 	return redactAssignments(text)
 }
 
-// redactAssignments leaves a value that is a call (`password = os.Getenv(...)`): that is code, not a secret.
+// redactAssignments replaces only the value, preserving quotes and structured output.
+// A value followed by a call (`password = os.Getenv(...)`) is code, not a secret.
 func redactAssignments(text string) string {
 	var b strings.Builder
 	last := 0
@@ -92,9 +98,9 @@ func redactAssignments(text string) string {
 		if m[1] < len(text) && text[m[1]] == '(' {
 			continue
 		}
-		b.WriteString(text[last:m[3]])
+		b.WriteString(text[last:m[4]])
 		b.WriteString("[REDACTED]")
-		last = m[1]
+		last = m[5]
 	}
 	b.WriteString(text[last:])
 	return b.String()
@@ -111,6 +117,7 @@ type Writer struct {
 	dropping bool
 	private  bool
 	keyLines int
+	omitDiff bool
 }
 
 func NewWriter(dst io.Writer) *Writer { return &Writer{dst: dst, secrets: processSecrets()} }
@@ -162,7 +169,7 @@ func (w *Writer) Flush() error {
 			}
 			text = "[PRIVATE KEY LINE REDACTED]\n"
 		} else {
-			text += clean(line, w.secrets)
+			text += cleanWithDiff(line, w.secrets, &w.omitDiff)
 		}
 	}
 	w.pending = nil

@@ -147,8 +147,9 @@ block.
 
 `prepareWorktree` runs the repo's `worktree_setup` commands (`runSetup`, timeout
 from `setup_timeout`, parsed once into a `time.Duration` by the shem config) and
-records a marker, keyed on commands and base, in the worktree git dir. A
-failed setup or environment check carries `evidence.EnvironmentMarker`, which
+records a marker, keyed on commands and base, in the worktree git dir. The active
+worktree is secret-checked even without setup or with a cached marker, and again
+after setup. A failed setup or environment check carries `evidence.EnvironmentMarker`, which
 `humanOnlyFailure` treats as a stop for automatic repair; `finishWorkPhase` keeps
 the command output after the marker. Prompts and phase output are redacted by the
 agentrunner adapters only; the client redacts what it posts.
