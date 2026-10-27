@@ -58,9 +58,10 @@ model prompts: sensitive-file diff sections, process-secret values, credential
 assignments and private-key blocks. It cannot recognize every secret.
 
 Limits: Claude project settings cannot switch the hook off (`disableAllHooks` is
-false in the generated settings); the Codex hook trust format was checked against codex 0.163 (PreToolUse runs and allows) and a
-mismatch may leave the hook unloaded silently (`--strict-config` does not catch a malformed override, and it rejects host configs with newer keys, so it is not used), so re-check a denied call after upgrading Codex; an unparseable
-`opencode.json` is logged and left alone.
+false in the generated settings). The Codex hook trust format was checked against codex 0.163
+(PreToolUse runs and allows). A trust mismatch may leave the hook silently unloaded, and `--strict-config`
+is not used (it rejects newer host configs and does not validate the override), so re-check a denied
+call after upgrading Codex. An unparseable `opencode.json` is logged and left alone.
 
 ## Project bootstrap
 

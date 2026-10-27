@@ -151,10 +151,13 @@ func TestAssignmentRedactionPreservesJSON(t *testing.T) {
 		}
 	}
 	for raw, want := range map[string]string{
-		`PASSWORD="abcdefgh123456"`:   `PASSWORD="[REDACTED]"`,
-		`password: 'abcdefgh123456'`:  `password: '[REDACTED]'`,
-		`API_TOKEN=abcdefgh123456`:    `API_TOKEN=[REDACTED]`,
-		`tokenizer = somethingUseful`: `tokenizer = somethingUseful`,
+		`PASSWORD="abcdefgh123456"`:                   `PASSWORD="[REDACTED]"`,
+		`password: 'abcdefgh123456'`:                  `password: '[REDACTED]'`,
+		`API_TOKEN=abcdefgh123456`:                    `API_TOKEN=[REDACTED]`,
+		`tokenizer = somethingUseful`:                 `tokenizer = somethingUseful`,
+		`secretKey: "abcdefghijk"`:                    `secretKey: "[REDACTED]"`,
+		`tokenValue=abcdefghijk`:                      `tokenValue=[REDACTED]`,
+		"unexpected token:\n    some_long_identifier": "unexpected token:\n    some_long_identifier",
 	} {
 		if got := Clean(raw); got != want {
 			t.Fatalf("%q -> %q, want %q", raw, got, want)

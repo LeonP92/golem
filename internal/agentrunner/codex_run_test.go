@@ -73,10 +73,25 @@ func skipOnWindows(t *testing.T) {
 	}
 }
 
-func TestReadOnlySandbox(t *testing.T) {
-	in := []string{"codex", "exec", "--sandbox", "danger-full-access", "-"}
-	got := readOnlySandbox(in)
-	if strings.Join(got, " ") != "codex exec --sandbox read-only -" || in[3] != "danger-full-access" {
-		t.Fatalf("got %q, input %q", got, in)
+// The diagnoser runs outside the repository, read-only, behind the deny-all hook.
+func TestCodexDiagnoserIsPrivateAndReadOnly(t *testing.T) {
+	skipOnWindows(t)
+	dir := t.TempDir()
+	record := filepath.Join(dir, "recorded")
+	fake := "#!/bin/sh\npwd > " + record + ".cwd\nprintf '%s\n' \"$@\" > " + record + ".argv\ncat >/dev/null\nprintf 'ok'\n"
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GOLEM_CODEX_SANDBOX", "danger-full-access")
+	repo := t.TempDir()
+
+	if _, err := (Codex{opts: Options{RepoRoot: repo}}).RunAgent(context.Background(), "diagnoser", Context{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	cwd, _ := os.ReadFile(record + ".cwd")
+	argv, _ := os.ReadFile(record + ".argv")
+	if strings.TrimSpace(string(cwd)) == repo || !strings.Contains(string(argv), "--sandbox\nread-only\n") || !strings.Contains(string(argv), "--no-tools") {
+		t.Fatalf("cwd %q argv %q", cwd, argv)
 	}
 }

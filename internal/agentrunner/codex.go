@@ -167,10 +167,11 @@ func (c Codex) RunAgent(ctx context.Context, role string, in Context, model stri
 	if err != nil {
 		return Result{}, err
 	}
+	cwd := c.opts.RepoRoot
 	if session.noTools {
-		argv = readOnlySandbox(argv)
+		cwd, argv = session.root, readOnlySandbox(argv)
 	}
-	cmd := agentCmd(ctx, c.opts, c.opts.RepoRoot, argv...)
+	cmd := agentCmd(ctx, c.opts, cwd, argv...)
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer

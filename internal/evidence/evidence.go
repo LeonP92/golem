@@ -14,7 +14,7 @@ import (
 
 // A credential assignment whose value looks like a secret: one unbroken token of at least 8 characters. Prose and code after the name
 // ("missing API token: CI lacks it", `token := os.Getenv(...)`, `const maxTokens = 4096`) must survive: diagnoser JSON and diffs are model input.
-var assignment = regexp.MustCompile(`(?im)((?:[a-z0-9_]*(?:secret|token|password|passwd|api_key|private_key|credential)s?(?:_[a-z0-9_]+)?|authorization)\s*["']?\s*[:=]\s*["']?)(?:(?:bearer|basic)\s+)?([^\s"'(),;{}\[\]]{8,})`)
+var assignment = regexp.MustCompile(`(?im)((?:[a-z0-9_]*(?:secret|token|password|passwd|api_key|private_key|credential)s?(?:_[a-z0-9_]+|(?-i:[A-Z][a-z0-9]*))?|authorization)[ \t]*["']?[ \t]*[:=][ \t]*["']?)(?:(?:bearer|basic)\s+)?([^\s"'(),;{}\[\]]{8,})`)
 var privateKey = regexp.MustCompile(`(?s)-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----`)
 
 // SensitivePath excludes live configuration and key material, not templates.
@@ -42,7 +42,10 @@ func secretName(name string) bool {
 
 // Clean redacts known process secrets, credential assignments and private keys,
 // and omits entire sensitive-file diff sections before they reach another model.
-func Clean(text string) string { return clean(text, processSecrets()) }
+func Clean(text string) string {
+	omit := false
+	return cleanWithDiff(text, processSecrets(), &omit)
+}
 
 // processSecrets lists secret environment values, longest first so an overlapping shorter one cannot leave a tail.
 func processSecrets() []string {
@@ -55,11 +58,6 @@ func processSecrets() []string {
 	}
 	sort.Slice(secrets, func(i, j int) bool { return len(secrets[i]) > len(secrets[j]) })
 	return secrets
-}
-
-func clean(text string, secrets []string) string {
-	omit := false
-	return cleanWithDiff(text, secrets, &omit)
 }
 
 // cleanWithDiff shares diff-section state between buffered and streaming evidence.

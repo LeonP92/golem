@@ -57,7 +57,9 @@ cannot start under Docker). `GenerateArtifacts` and `WorktreeSetup` write
 `.codex/rules/golem.rules`, the claude allow/deny list as prefix rules;
 `PrepareHost` marks the repo trusted in `~/.codex/config.toml` for root and
 the agent account (`codex_trust.go`). `DefaultCatalog` is
-`codex_catalog.yaml`.
+`codex_catalog.yaml`. The diagnoser runs in the private session dir with
+`--sandbox read-only` and the deny-all hook. `--strict-config` is not used: it
+rejects newer host configs and does not validate the hook override.
 
 ## OpenCode
 
