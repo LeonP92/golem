@@ -50,16 +50,16 @@ An installation error fails the invocation.
   `$(` or `sh -c`. `git commit -m "drop sudo"`, `source` and `eval` are allowed.
 
 The diagnoser runs in a private directory with no tools: Claude disables
-built-in and MCP tools, OpenCode denies all tools, and Codex diagnosis fails
-clearly and leaves the ticket for a human.
+built-in and MCP tools, OpenCode denies all tools, and Codex runs read-only with a hook that
+denies every tool.
 
 Evidence is redacted before phase logs, blackboard logs, failure uploads and
 model prompts: sensitive-file diff sections, process-secret values, credential
 assignments and private-key blocks. It cannot recognize every secret.
 
 Limits: Claude project settings cannot switch the hook off (`disableAllHooks` is
-false in the generated settings); the Codex hook trust format is unverified
-against current releases and a mismatch fails the invocation; an unparseable
+false in the generated settings); the Codex hook trust format was checked against codex 0.163 (PreToolUse runs and allows) and a
+mismatch fails the invocation; an unparseable
 `opencode.json` is logged and left alone.
 
 ## Project bootstrap

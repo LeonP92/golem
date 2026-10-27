@@ -72,3 +72,11 @@ func skipOnWindows(t *testing.T) {
 		t.Skip("the fake binary is a POSIX shell script")
 	}
 }
+
+func TestReadOnlySandbox(t *testing.T) {
+	in := []string{"codex", "exec", "--sandbox", "danger-full-access", "-"}
+	got := readOnlySandbox(in)
+	if strings.Join(got, " ") != "codex exec --sandbox read-only -" || in[3] != "danger-full-access" {
+		t.Fatalf("got %q, input %q", got, in)
+	}
+}

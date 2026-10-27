@@ -94,9 +94,6 @@ func TestPolicyHooksLocalEndToEnd(t *testing.T) {
 	if diag.root == repo {
 		t.Fatal("diagnoser can discover repository")
 	}
-	if _, err := diag.codex([]string{"codex", "exec", "-"}); err == nil {
-		t.Fatal("unsupported no-tools silently allowed")
-	}
 	denier := exec.CommandContext(context.Background(), "sh", "-c", diag.command)
 	denier.Stdin = bytes.NewBufferString(`{"tool_name":"Read","tool_input":{"file_path":"main.go"}}`)
 	if err := denier.Run(); err == nil {

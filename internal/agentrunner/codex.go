@@ -167,6 +167,9 @@ func (c Codex) RunAgent(ctx context.Context, role string, in Context, model stri
 	if err != nil {
 		return Result{}, err
 	}
+	if session.noTools {
+		argv = readOnlySandbox(argv)
+	}
 	cmd := agentCmd(ctx, c.opts, c.opts.RepoRoot, argv...)
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
@@ -202,4 +205,15 @@ func (c Codex) RunPhase(ctx context.Context, dir, prompt string, out io.Writer, 
 		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 	}
 	return nil
+}
+
+// readOnlySandbox forces the diagnoser's sandbox read-only; its hook already denies every tool.
+func readOnlySandbox(argv []string) []string {
+	out := append([]string{}, argv...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--sandbox" {
+			out[i+1] = "read-only"
+		}
+	}
+	return out
 }

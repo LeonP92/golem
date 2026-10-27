@@ -122,9 +122,6 @@ func (s *toolSession) claude(argv []string) ([]string, error) {
 	return argv, nil
 }
 func (s *toolSession) codex(argv []string) ([]string, error) {
-	if s.noTools {
-		return nil, fmt.Errorf("codex cannot guarantee a tool-free diagnostic session; use a backend with enforced no-tools support")
-	}
 	// Trust only this generated hook by its normalized declaration hash.
 	// Never bypass trust for unrelated user/project/plugin hooks.
 	encoded, _ := json.Marshal(s.command)
