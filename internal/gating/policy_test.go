@@ -61,20 +61,10 @@ func TestEvaluateAllowsExplicitlyAllowedNetworkHost(t *testing.T) {
 	}
 }
 
-func TestEvaluateDeniesEvalAndSource(t *testing.T) {
-	cases := []struct {
-		name string
-		args []string
-	}{
-		{"eval with arg", []string{"eval", "something"}},
-		{"source with script", []string{"source", "/tmp/script.sh"}},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			d := Evaluate(basePolicy(), "/repo/worktree", "bash", tc.args)
-			if d.Allowed {
-				t.Fatalf("eval/source should be denied, got Allowed=%v, Reason=%q", d.Allowed, d.Reason)
-			}
-		})
+func TestEvaluateAllowsEvalAndSource(t *testing.T) {
+	for _, args := range [][]string{{"eval", "something"}, {"source", "/tmp/script.sh"}} {
+		if d := Evaluate(basePolicy(), "/repo/worktree", "bash", args); !d.Allowed {
+			t.Fatalf("%v should be allowed: %q", args, d.Reason)
+		}
 	}
 }

@@ -142,3 +142,13 @@ leave the hard limits to a human. With `AskDecisions` it returns "" and the
 prompts are unchanged. The reviewer role accepts a deviation a
 recorded DECISION entry backs; the implement and revise prompts carry no
 block.
+
+## Worktree setup and redaction
+
+`prepareWorktree` runs the repo's `worktree_setup` commands (`runSetup`, timeout
+from `setup_timeout`, parsed once into a `time.Duration` by the shem config) and
+records a marker, keyed on commands and base, in the worktree git dir. A
+failed setup or environment check carries `evidence.EnvironmentMarker`, which
+`humanOnlyFailure` treats as a stop for automatic repair; `finishWorkPhase` keeps
+the command output after the marker. Prompts and phase output are redacted by the
+agentrunner adapters only; the client redacts what it posts.

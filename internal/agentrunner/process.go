@@ -3,11 +3,14 @@ package agentrunner
 import (
 	"context"
 	"errors"
+	"io"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/evidence"
 )
 
 // agentCmd builds an agent process with golem's secrets stripped and
@@ -42,4 +45,17 @@ func runAgentCmd(cmd *exec.Cmd) error {
 		return nil
 	}
 	return err
+}
+
+// runCleaned runs cmd with the prompt and every output byte redacted. The
+// writer is flushed even when the run fails, so the tail of the output is kept.
+func runCleaned(cmd *exec.Cmd, prompt string, out io.Writer) error {
+	cmd.Stdin = strings.NewReader(evidence.Clean(prompt))
+	safe := evidence.NewWriter(out)
+	cmd.Stdout, cmd.Stderr = safe, safe
+	runErr := runAgentCmd(cmd)
+	if flushErr := safe.Flush(); runErr == nil {
+		return flushErr
+	}
+	return runErr
 }

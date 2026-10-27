@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/orchestrator/urlnorm"
@@ -11,9 +12,11 @@ import (
 
 // RepoConfig holds configuration for a single git repository managed by this shem.
 type RepoConfig struct {
-	Path             string `yaml:"path"`
-	Remote           string `yaml:"remote"`
-	NormalizedRemote string `yaml:"-"`
+	Path             string        `yaml:"path"`
+	WorktreeSetup    []string      `yaml:"worktree_setup"`
+	SetupTimeout     time.Duration `yaml:"setup_timeout"`
+	Remote           string        `yaml:"remote"`
+	NormalizedRemote string        `yaml:"-"`
 	// AutoRetry defaults on. This host-owned setting cannot be changed by a ticket.
 	AutoRetry *bool `yaml:"auto_retry"`
 	// AttentionFixAttempts caps diagnosis/repair dispatches for a ticket; nil means 3.
@@ -48,6 +51,9 @@ func Load(path string) (*Config, error) {
 		return nil, err
 	}
 	for i := range cfg.Repos {
+		if cfg.Repos[i].SetupTimeout < 0 {
+			return nil, fmt.Errorf("repos[%d].setup_timeout must not be negative", i)
+		}
 		if n := cfg.Repos[i].AttentionFixAttempts; n != nil && *n < 1 {
 			return nil, fmt.Errorf("repos[%d].attention_fix_attempts must be positive", i)
 		}

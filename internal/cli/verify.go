@@ -46,6 +46,9 @@ func TicketVerify(args []string, stdout, stderr io.Writer) int {
 	}
 	fmt.Fprint(stdout, res.Output)
 	if !res.Passed {
+		if res.Failure != nil && res.Failure.Kind == "environment" {
+			return 1
+		}
 		return 2
 	}
 	return 0
@@ -66,8 +69,8 @@ func runTicketGate(cfg *config.Config, s *ticket.State, ticketDir, role, label s
 		return res, fmt.Errorf("opening log: %w", err)
 	}
 	defer func() { _ = w.Close() }()
-	entry := blog.NewEntry(role, blog.TypeStatus, fmt.Sprintf("%s: passed=%t head=%s commands=%q\n%s",
-		label, res.Passed, head, g.Commands, res.Output))
+	entry := blog.NewEntry(role, blog.TypeStatus, fmt.Sprintf("%s: passed=%t head=%s environment_checks=%q commands=%q\n%s",
+		label, res.Passed, head, g.EnvironmentChecks, g.Commands, res.Output))
 	if err := w.Append(entry); err != nil {
 		return res, fmt.Errorf("recording %s: %w", label, err)
 	}

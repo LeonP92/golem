@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 )
 
@@ -76,20 +77,6 @@ var opencodeBashAllow = []string{
 	"cargo *", "rustc *", "mvn *", "gradle *", "make *",
 	"ls *", "cat *", "echo *", "mkdir *", "cp *", "mv *", "rm *",
 	"touch *", "chmod *", "find *", "grep *", "sed *", "awk *",
-}
-
-// opencodeBashDeny is the same destructive or publishing command set the
-// claude adapter denies.
-var opencodeBashDeny = []string{
-	"git push origin main",
-	"git push --force *",
-	"git reset --hard *",
-	"git rebase *",
-	"npm publish *",
-	"cargo publish *",
-	"twine upload *",
-	"python -m twine upload *",
-	"sudo *",
 }
 
 // jsonField is one key of a JSON object, kept in document order.
@@ -204,7 +191,7 @@ func mergeOpenCodePermission(existing json.RawMessage) (json.RawMessage, error) 
 			}
 		}
 	}
-	for _, g := range opencodeBashDeny {
+	for _, g := range bashDeny {
 		for i := range bash {
 			if bash[i].Key == g {
 				bash = append(bash[:i], bash[i+1:]...)
@@ -331,7 +318,21 @@ func (o OpenCode) RunAgent(ctx context.Context, role string, in Context, model s
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := agentCmd(ctx, o.opts, o.opts.RepoRoot, argv...)
+	session, err := prepareTools(toolRoot(ctx, o.opts.RepoRoot), role == "diagnoser")
+	if err != nil {
+		return Result{}, err
+	}
+	defer session.close()
+	policyEnv, err := session.openCodeEnv(openCodeContent(o.opts))
+	if err != nil {
+		return Result{}, err
+	}
+	cwd := o.opts.RepoRoot
+	if session.noTools {
+		cwd = session.root
+	}
+	cmd := agentCmd(ctx, o.opts, cwd, argv...)
+	cmd.Env = append(cmd.Env, policyEnv...)
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer
@@ -339,9 +340,9 @@ func (o OpenCode) RunAgent(ctx context.Context, role string, in Context, model s
 	cmd.Stderr = &stderr
 	if err := runAgentCmd(cmd); err != nil {
 		return Result{}, fmt.Errorf("opencode run failed for role %s: %w%s%s",
-			role, err, labelled("stderr", stderr.String()), labelled("stdout", stdout.String()))
+			role, err, labelled("stderr", evidence.Clean(stderr.String())), labelled("stdout", evidence.Clean(stdout.String())))
 	}
-	return Result{Output: stdout.String(), Model: model}, nil
+	return Result{Output: evidence.Clean(stdout.String()), Model: model}, nil
 }
 
 func (o OpenCode) RunPhase(ctx context.Context, dir, prompt string, out io.Writer, model string) error {
@@ -349,10 +350,18 @@ func (o OpenCode) RunPhase(ctx context.Context, dir, prompt string, out io.Write
 	if err != nil {
 		return err
 	}
+	session, err := prepareTools(toolRoot(ctx, dir), false)
+	if err != nil {
+		return err
+	}
+	defer session.close()
+	policyEnv, err := session.openCodeEnv(openCodeContent(o.opts))
+	if err != nil {
+		return err
+	}
 	cmd := agentCmd(ctx, o.opts, dir, argv...)
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := runAgentCmd(cmd); err != nil {
+	cmd.Env = append(cmd.Env, policyEnv...)
+	if err := runCleaned(cmd, prompt, out); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 	}
 	return nil

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/promptfence"
 )
@@ -118,5 +119,5 @@ func BuildPrompt(ctx Context) string {
 	b.WriteString(diffOpen + "\n")
 	b.WriteString(promptfence.Escape(ctx.Diff, dataMarkers...))
 	b.WriteString("\n" + diffClose + "\n")
-	return b.String()
+	return evidence.Clean(b.String())
 }

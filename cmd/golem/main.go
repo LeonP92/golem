@@ -34,6 +34,7 @@ var commandGroups = []struct {
 }
 
 func init() {
+	commandTable["policy-check"] = commandEntry{fn: cli.PolicyCheck, desc: "Check a backend tool event (internal hook)."}
 	commandTable["version"] = commandEntry{
 		fn:   func(_ []string, stdout, _ io.Writer) int { _, _ = fmt.Fprintln(stdout, version); return 0 },
 		desc: "Print the golem version.",

@@ -22,3 +22,7 @@ in needs-attention like a failing gate; a missing verdict does so only for
 tickets with acceptance commands. The verdict contract is appended to
 every reviewer invocation. Observers that find nothing log a `no findings`
 STATUS.
+
+`golem policy-check` is the hook entry point every backend calls for each agent
+tool call: it reads a vendor event on stdin, loads `--policy` (JSON) and `--root`,
+and exits 2 to block; see gating.

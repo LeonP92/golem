@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 )
@@ -441,6 +442,7 @@ func (c *Client) PostCheckpoint(ticketID string, phase, sha string) error {
 
 // PostLog logs a message to a ticket.
 func (c *Client) PostLog(ticketID string, p LogPayload) (uint, error) {
+	p.Message = evidence.Clean(p.Message)
 	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/log", ticketID), p)
 	if err != nil {
 		return 0, err
@@ -517,17 +519,17 @@ func statusError(resp *http.Response) error {
 	return fmt.Errorf("unexpected status %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
 }
 
-// PostDocumentFile streams a file to the orchestrator as a document log entry.
+// PostDocumentFile sends sanitized file content as a document log entry.
 // The file is sent as a raw body (no JSON wrapping); metadata travels in headers.
 func (c *Client) PostDocumentFile(ticketID string, entryType, fromRole, filePath string) (uint, error) {
-	f, err := os.Open(filePath)
+	data, err := os.ReadFile(filePath)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
+	body := strings.NewReader(evidence.Clean(string(data)))
 
 	url := fmt.Sprintf("%s/api/tickets/%s/log/document", c.baseURL, ticketID)
-	req, err := http.NewRequest("POST", url, f)
+	req, err := http.NewRequest("POST", url, body)
 	if err != nil {
 		return 0, err
 	}
@@ -727,6 +729,8 @@ func (c *Client) PostGraphBuildResult(repoRemote, buildErr string) error {
 // matches the head SHA before it merges, so a verdict here is evidence,
 // never an order.
 func (c *Client) PostEpicVerdict(epicID string, v EpicVerdictPayload) error {
+	v.Scenarios = evidence.Clean(v.Scenarios)
+	v.Evidence = evidence.Clean(v.Evidence)
 	resp, err := c.do("POST", fmt.Sprintf("/api/epics/%s/verdicts", epicID), v)
 	if err != nil {
 		return err
@@ -750,6 +754,8 @@ type TicketVerdictPayload struct {
 // PostTicketVerdict records the tester stage's structured verdict for a
 // standalone ticket. It is evidence on the ticket, never an order.
 func (c *Client) PostTicketVerdict(ticketID string, v TicketVerdictPayload) error {
+	v.Scenarios = evidence.Clean(v.Scenarios)
+	v.Evidence = evidence.Clean(v.Evidence)
 	resp, err := c.do("POST", fmt.Sprintf("/api/tickets/%s/tester-verdict", ticketID), v)
 	if err != nil {
 		return err
@@ -829,6 +835,7 @@ func (c *Client) ClaimPlanJob(id string) (*PlanJobClaim, error) {
 // newAttempt marks the start of a fresh agent session (the first try, or
 // the repair pass after invalid output) and consumes one attempt.
 func (c *Client) PostPlanJobProgress(id, tail string, newAttempt bool) error {
+	tail = evidence.Clean(tail)
 	resp, err := c.do("POST", "/api/epics/plan-jobs/"+id+"/progress",
 		map[string]any{"log_tail": tail, "new_attempt": newAttempt})
 	if err != nil {
@@ -844,6 +851,7 @@ func (c *Client) PostPlanJobProgress(id, tail string, newAttempt bool) error {
 // PostPlanJobResult reports the outcome: the generated draft JSON, or an
 // error. The orchestrator re-validates the draft before storing it.
 func (c *Client) PostPlanJobResult(id, draftJSON, runErr string) error {
+	runErr = evidence.Clean(runErr)
 	resp, err := c.do("POST", "/api/epics/plan-jobs/"+id+"/result",
 		map[string]any{"draft_json": draftJSON, "error": runErr})
 	if err != nil {

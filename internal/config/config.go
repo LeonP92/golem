@@ -10,6 +10,8 @@ import (
 
 type GateConfig struct {
 	Commands []string `yaml:"commands"`
+	// EnvironmentChecks run before code checks and never trigger automatic code repair.
+	EnvironmentChecks []string `yaml:"environment_checks"`
 }
 
 type PolicyConfig struct {
@@ -53,7 +55,8 @@ func Load(path string) (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	var cfg Config
+	// An absent tool_policy block keeps worktree-only writes on; an explicit false turns them off.
+	cfg := Config{ToolPolicy: PolicyConfig{AllowWorktreeOnly: true}}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}

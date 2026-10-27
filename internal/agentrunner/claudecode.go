@@ -13,6 +13,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/leonp92/golem/internal/evidence"
+	"github.com/leonp92/golem/internal/gating"
 	"github.com/leonp92/golem/internal/models"
 )
 
@@ -53,7 +55,9 @@ type ClaudeCode struct{ opts Options }
 func (c ClaudeCode) Name() string { return "claude-code" }
 
 // ReservedArgs includes -p because `claude` treats it as --print.
-func (c ClaudeCode) ReservedArgs() []string { return []string{"--print", "-p", "--model"} }
+func (c ClaudeCode) ReservedArgs() []string {
+	return []string{"--print", "-p", "--model", "--settings", "--tools", "--disallowedTools", "--dangerously-skip-permissions", "--setting-sources", "--strict-mcp-config"}
+}
 
 func (c ClaudeCode) argv(model string) ([]string, error) {
 	cmd := c.opts.Command
@@ -165,19 +169,25 @@ var claudeCodeAllowList = []string{
 	"Edit(/**)",
 }
 
-// claudeCodeDenyList blocks destructive or network-exfiltrating commands that
-// agents have no legitimate need for inside a repo worktree.
-var claudeCodeDenyList = []string{
-	"Bash(git push origin main)",
-	"Bash(git push --force *)",
-	"Bash(git reset --hard *)",
-	"Bash(git rebase *)",
-	"Bash(npm publish *)",
-	"Bash(cargo publish *)",
-	"Bash(twine upload *)",
-	"Bash(python -m twine upload *)",
-	"Bash(sudo *)",
-}
+// bashDeny blocks destructive or network-exfiltrating commands that agents
+// have no legitimate need for inside a repo worktree; each backend wraps these
+// patterns in its own rule syntax.
+var bashDeny = func() []string {
+	var rules []string
+	for _, prefix := range gating.DeniedCommands() {
+		command := strings.Join(prefix, " ")
+		rules = append(rules, command, command+" *")
+	}
+	return rules
+}()
+
+var claudeCodeDenyList = func() []string {
+	rules := make([]string, len(bashDeny))
+	for i, r := range bashDeny {
+		rules[i] = "Bash(" + r + ")"
+	}
+	return rules
+}()
 
 func union(base, additions []string) []string {
 	seen := make(map[string]bool, len(base))
@@ -303,7 +313,20 @@ func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := agentCmd(ctx, c.opts, c.opts.RepoRoot, argv...)
+	session, err := prepareTools(toolRoot(ctx, c.opts.RepoRoot), role == "diagnoser")
+	if err != nil {
+		return Result{}, err
+	}
+	defer session.close()
+	argv, err = session.claude(argv)
+	if err != nil {
+		return Result{}, err
+	}
+	cwd := c.opts.RepoRoot
+	if session.noTools {
+		cwd = session.root
+	}
+	cmd := agentCmd(ctx, c.opts, cwd, argv...)
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer
@@ -318,9 +341,9 @@ func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model
 		// prompted this, stderr held a single line about a SessionEnd hook
 		// while the reason sat unread in stdout.
 		return Result{}, fmt.Errorf("claude --print failed for role %s: %w%s%s",
-			role, err, labelled("stderr", stderr.String()), labelled("stdout", stdout.String()))
+			role, err, labelled("stderr", evidence.Clean(stderr.String())), labelled("stdout", evidence.Clean(stdout.String())))
 	}
-	return Result{Output: stdout.String(), Model: model}, nil
+	return Result{Output: evidence.Clean(stdout.String()), Model: model}, nil
 }
 
 func (c ClaudeCode) RunPhase(ctx context.Context, dir, prompt string, out io.Writer, model string) error {
@@ -328,10 +351,17 @@ func (c ClaudeCode) RunPhase(ctx context.Context, dir, prompt string, out io.Wri
 	if err != nil {
 		return err
 	}
+	session, err := prepareTools(toolRoot(ctx, dir), false)
+	if err != nil {
+		return err
+	}
+	defer session.close()
+	argv, err = session.claude(argv)
+	if err != nil {
+		return err
+	}
 	cmd := agentCmd(ctx, c.opts, dir, argv...)
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := runAgentCmd(cmd); err != nil {
+	if err := runCleaned(cmd, prompt, out); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 	}
 	return nil

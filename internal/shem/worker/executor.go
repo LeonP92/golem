@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/forge"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
@@ -78,6 +79,9 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 	// Right after the clone: every later repo command runs as the agent
 	// (asAgent) and needs to own the repo. No-op without an agent account.
+	if err := evidence.CheckCheckout(repoPath); err != nil {
+		return err
+	}
 	if err := agentenv.EnsureOwnership(repoPath); err != nil {
 		log.Printf("executor: %v", err)
 	}
@@ -170,6 +174,10 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 			}
 			log.Printf("executor: post phase error: %v", phErr)
 		}
+	}
+
+	if err := e.prepareWorktree(ctx, cfg, claim.RepoRemote, ticketDir); err != nil {
+		return err
 	}
 
 	// Start log-tail before any agent invocations so we capture all entries.

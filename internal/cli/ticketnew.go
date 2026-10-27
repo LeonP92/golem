@@ -9,6 +9,7 @@ import (
 
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/prereq"
 	"github.com/leonp92/golem/internal/ticket"
 	"github.com/leonp92/golem/internal/workspace"
 )
@@ -42,6 +43,10 @@ func TicketNew(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if err := prereq.Git(); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
 	cfg, err := config.Load(filepath.Join(*repo, ".golem", "config.yaml"))
 	if err != nil {
 		fmt.Fprintf(stderr, "loading config: %v\n", err)

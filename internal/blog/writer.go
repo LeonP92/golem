@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"os"
 	"sync"
+
+	"github.com/leonp92/golem/internal/evidence"
 )
 
 // Writer is the single writer for a ticket's blackboard log. All agent
@@ -28,6 +30,7 @@ func (w *Writer) Append(e Entry) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 
+	e.Message = evidence.Clean(e.Message)
 	line, err := json.Marshal(e)
 	if err != nil {
 		return err

@@ -104,6 +104,15 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	if gateResult.Failure != nil && gateResult.Failure.Kind == "environment" {
+		s.Phase = ticket.PhaseNeedsAttention
+		if err := s.Save(ticketDir); err != nil {
+			fmt.Fprintln(stderr, err)
+			return 1
+		}
+		fmt.Fprint(stderr, gateResult.Output)
+		return 1
+	}
 	entries, err := blog.ReadAll(logPath)
 	if err != nil {
 		fmt.Fprintf(stderr, "reading log: %v\n", err)

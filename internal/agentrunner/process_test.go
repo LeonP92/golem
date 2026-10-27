@@ -116,3 +116,23 @@ func TestAgentCmdSetsPWDToDir(t *testing.T) {
 		t.Errorf("PWD = %q, want %q", pwd, dir)
 	}
 }
+
+// The adapter is the one layer that redacts a phase's prompt and output.
+func TestRunPhaseRedactsPromptAndOutput(t *testing.T) {
+	skipWithoutShell(t)
+	dir := t.TempDir()
+	seen := filepath.Join(dir, "prompt.txt")
+	script := "#!/bin/sh\ncat > " + seen + "\necho 'api_token=sk-live-abcdefgh12345'\n"
+	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	var out strings.Builder
+	if err := (ClaudeCode{}).RunPhase(context.Background(), dir, "use password=hunter2hunter2", &out, ""); err != nil {
+		t.Fatal(err)
+	}
+	prompt, _ := os.ReadFile(seen)
+	if strings.Contains(string(prompt), "hunter2hunter2") || strings.Contains(out.String(), "sk-live-abcdefgh12345") {
+		t.Fatalf("secret leaked: prompt=%q out=%q", prompt, out.String())
+	}
+}

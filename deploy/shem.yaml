@@ -97,3 +97,6 @@ repos:
 #     brainstorm: large
 #     plan: large
 #     implement: medium
+
+# Optional on each repos entry: worktree_setup: ["npm ci"], setup_timeout: 5m.
+# Use synthetic fixtures, never copy live .env. See docs/shem-safety-and-setup.md.

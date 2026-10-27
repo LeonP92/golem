@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"errors"
+	"github.com/leonp92/golem/internal/evidence"
 	"io"
 	"os"
 	"path/filepath"
@@ -402,5 +403,12 @@ func TestDecideRouteOnlyForAutonomousTickets(t *testing.T) {
 	}
 	if got := decideContract(&client.ClaimResponse{AskDecisions: true}); got != "" {
 		t.Errorf("ask mode changed the diagnoser contract: %q", got)
+	}
+}
+func TestStructuredEnvironmentStopCannotBecomeCodeRepair(t *testing.T) {
+	for _, reason := range []string{"GOLEM_ENVIRONMENT_FAILURE: environment command=missing exit=127", evidence.EnvironmentMarker + " worktree setup failed"} {
+		if !humanOnlyFailure(reason) {
+			t.Fatal(reason)
+		}
 	}
 }

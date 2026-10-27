@@ -1,16 +1,20 @@
 package gate
 
 import (
+	"errors"
+	"fmt"
 	"os/exec"
 	"strings"
 
 	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/evidence"
 )
 
 type Result struct {
-	Passed bool
-	Output string
+	Passed  bool
+	Output  string
+	Failure *Failure
 }
 
 // Run stops at the first failing command rather than running the rest.
@@ -36,14 +40,30 @@ type Result struct {
 func Run(dir string, cfg config.GateConfig) (Result, error) {
 	var output strings.Builder
 	env := agentenv.Environ()
-	for _, command := range cfg.Commands {
+	commands := append(append([]string{}, cfg.EnvironmentChecks...), cfg.Commands...)
+	for i, command := range commands {
 		cmd := exec.Command("sh", "-c", command)
 		cmd.Dir = dir
 		cmd.Env = env
 		out, err := cmd.CombinedOutput()
-		output.Write(out)
+		output.WriteString(evidence.Clean(string(out)))
 		if err != nil {
-			return Result{Passed: false, Output: output.String()}, nil
+			exit := -1
+			var status *exec.ExitError
+			if errors.As(err, &status) {
+				exit = status.ExitCode()
+			}
+			// shortcut: 127 also covers a project script that is itself missing or that runs a missing tool; sh gives no way to tell them apart, upgrade if repair loops on missing project scripts.
+			kind := "code"
+			if i < len(cfg.EnvironmentChecks) || exit == 126 || exit == 127 || status == nil {
+				kind = "environment"
+			}
+			failure := &Failure{Kind: kind, Command: command, ExitCode: exit}
+			text := output.String()
+			if kind == "environment" {
+				text = fmt.Sprintf("%s %s\n%s", evidence.EnvironmentMarker, failure, text)
+			}
+			return Result{Passed: false, Output: text, Failure: failure}, nil
 		}
 	}
 	return Result{Passed: true, Output: output.String()}, nil
