@@ -259,11 +259,22 @@ Browser ──► Orchestrator (dashboard, approval gates)
 ./run.sh
 ```
 
-On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` (8+ characters) and one Claude Code auth option (or another backend's — see [Backends](#backends)), then run it again. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` are the ones to reach for. `CLAUDE_HOME`, which mounts your own `~/.claude`, does not carry your login on macOS — Claude Code keeps OAuth credentials in the system keychain rather than in that directory — and it also brings your hooks and MCP commands in with host absolute paths that do not resolve inside the container. See the comments in `.env.example`. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
+On first run the script creates `.env` from the example and exits — fill in `GOLEM_ADMIN_PASSWORD` (8+ characters) and one Claude Code auth option (or another backend's — see [Backends](#backends)), then run it again. `GOLEM_BACKEND` is required and ships as `claude-code`; change it to run another backend. `CLAUDE_CODE_OAUTH_TOKEN` (from `claude setup-token`) or `ANTHROPIC_API_KEY` are the ones to reach for. `CLAUDE_HOME`, which mounts your own `~/.claude`, does not carry your login on macOS — Claude Code keeps OAuth credentials in the system keychain rather than in that directory — and it also brings your hooks and MCP commands in with host absolute paths that do not resolve inside the container. See the comments in `.env.example`. It auto-generates a shem API key and starts the stack. Open `http://localhost:8080` when it's done.
 
 `GOLEM_GITHUB_TOKEN` in the same file is optional and turns on the GitHub Issues integration — see [GitHub Issues](#github-issues-1) below for what else it needs.
 
 Create a ticket from the UI. The shem will pick it up within seconds and run brainstorm. With manual approval on, it pauses for your approval before plan and again before implementation; otherwise it advances after automatic validation.
+
+### Prebuilt Images
+
+Each release publishes two images to GHCR, tagged with the release version (plus `latest` on the newest stable release):
+
+- `ghcr.io/leonp92/golem-orchestrator`
+- `ghcr.io/leonp92/golem-shem` — every supported agent CLI installed; `GOLEM_BACKEND` picks one when the container starts. Headless Chromium via Playwright (pinned) is baked in, so a ticket can test UI in a browser without any setup: `npx playwright test` when the repo pins `@playwright/test`, the global `playwright` CLI or `require("playwright")` otherwise.
+
+The images are configured entirely through the environment. A shem container without a valid `GOLEM_BACKEND` and a credential for that backend exits with an error at startup instead of failing its first ticket. `docker compose pull` fetches the prebuilt images; `docker compose up` still builds from source when they are absent.
+
+The packages publish private. Anonymous pulls work once the maintainer makes a package public (a one-time, irreversible package setting); until then pull with a PAT that has `read:packages`.
 
 ### How It Works
 
@@ -587,12 +598,14 @@ Golem's core never calls a backend directly — all execution goes through the `
 
 To run codex or opencode in the compose stack:
 
-1. In `.env`, set `GOLEM_BACKENDS` (build arg: which CLIs the image installs,
-   e.g. `"claude-code codex opencode"`) and `GOLEM_BACKEND` (which one the
-   entrypoint authenticates), plus that backend's auth. Rebuild after changing
-   `GOLEM_BACKENDS`.
-2. Add a `backend:` block with that `adapter:` to `deploy/shem.yaml`, and
-   models if you are not using the adapter's default catalog.
+1. In `.env`, set `GOLEM_BACKEND` (required — which backend the entrypoint
+   authenticates and the shem runs) plus that backend's auth. The images
+   install all three CLIs by default, local builds included, so nothing is
+   rebuilt to switch. `GOLEM_BACKENDS` exists to slim a custom local build.
+2. Optionally add a `backend:` block to `deploy/shem.yaml` to override models
+   or settings. An explicit `adapter:` there that disagrees with
+   `GOLEM_BACKEND` stops the shem at startup; with no block (or no `adapter:`
+   key) the environment selects.
 3. Check it: `docker compose exec shem golem models probe --config /etc/golem/shem.yaml`.
 
 Notes:

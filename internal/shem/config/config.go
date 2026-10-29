@@ -59,6 +59,23 @@ func Load(path string) (*Config, error) {
 		}
 		cfg.Repos[i].NormalizedRemote = urlnorm.Normalize(cfg.Repos[i].Remote)
 	}
+	// GOLEM_BACKEND names the backend a container's entrypoint prepared:
+	// auth files, project trust. It selects the adapter when the config
+	// does not declare one, which is what makes a container's backend a
+	// pure runtime choice. An explicit adapter that disagrees is a real
+	// conflict — the shem would start prepared for one backend and run
+	// another, failing every phase — so it refuses to start. Unset env
+	// means a native run and keeps the config's own resolution.
+	if env := os.Getenv("GOLEM_BACKEND"); env != "" {
+		if cfg.Backend == nil {
+			cfg.Backend = &agentrunner.BackendConfig{Adapter: env}
+		} else if cfg.Backend.Adapter == "" {
+			cfg.Backend.Adapter = env
+		} else if cfg.Backend.Adapter != env {
+			return nil, fmt.Errorf("backend: GOLEM_BACKEND=%q conflicts with configured adapter %q: "+
+				"align them, or drop the block's adapter and let the environment select", env, cfg.Backend.Adapter)
+		}
+	}
 	b := agentrunner.ResolveBackend(cfg.Backend)
 	if err := b.Validate(); err != nil {
 		return nil, fmt.Errorf("backend: %w", err)

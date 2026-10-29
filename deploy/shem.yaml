@@ -65,7 +65,10 @@ repos:
 # keys stop the shem at startup.
 #
 # Other adapters (codex, opencode) need their CLI in the image and their auth
-# in .env; see README "Backends". For example:
+# in .env, and are selected by GOLEM_BACKEND there — no block is needed here
+# unless you override models or settings; an explicit adapter: that disagrees
+# with GOLEM_BACKEND stops the shem at startup. See README "Backends". For
+# example:
 #
 # backend:
 #   adapter: codex             # default catalog: gpt-5.6-terra/sol/luna

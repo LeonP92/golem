@@ -83,3 +83,105 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+
+  # Container images publish alongside the binaries: one orchestrator image
+  # and one shem image with every supported agent CLI installed — the runtime
+  # backend is GOLEM_BACKEND at container start, never baked in, so one image
+  # serves any configuration. Both land in GHCR under the repository owner,
+  # tagged with the release version.
+  #
+  # The packages publish PRIVATE (GitHub's default for a first push, whatever
+  # the repository's visibility) and each inherits the repository's access
+  # permissions via the OCI source label below. Making a package public is a
+  # one-time, irreversible per-package choice for the maintainer in its
+  # settings; until then pulls need a PAT with read:packages.
+  docker:
+    name: Publish images
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read # checkout, and ls-remote for the latest check below
+      packages: write # push to GHCR
+    steps:
+      - uses: actions/checkout@v4
+
+      # docker/metadata-action already keeps prereleases off `latest`, but it
+      # would still move `latest` for a hotfix tag on an OLDER release line
+      # (docker/metadata-action#80). So `latest` moves only when the pushed
+      # tag is the highest stable semver tag on the remote — which this push
+      # just updated. sort -V, not lexicographic: v0.0.10 sorts above v0.0.9.
+      - name: Check whether this tag is the latest stable release
+        id: latest
+        run: |
+          set -eu
+          highest="$(git ls-remote --tags origin 'v*' | grep -v '\^{}' | cut -d/ -f3 | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1)"
+          echo "highest stable tag: ${highest:-none}; this release: ${{ github.ref_name }}"
+          if [ "${{ github.ref_name }}" = "$highest" ]; then
+            echo "is_latest=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "is_latest=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # GHCR namespaces are lowercase; the owner login is not.
+      - name: Lowercase the repository owner for the GHCR namespace
+        id: ghcr
+        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Beyond tags, the metadata action emits the standard OCI labels —
+      # org.opencontainers.image.source among them — which links each package
+      # to this repository on first push, so the images show on the repo page
+      # and inherit its access permissions.
+      - name: Image tags (orchestrator)
+        id: meta-orchestrator
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.ghcr.outputs.owner }}/golem-orchestrator
+          tags: type=semver,pattern=v{{version}}
+          flavor: latest=${{ steps.latest.outputs.is_latest }}
+
+      - name: Image tags (shem)
+        id: meta-shem
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ steps.ghcr.outputs.owner }}/golem-shem
+          tags: type=semver,pattern=v{{version}}
+          flavor: latest=${{ steps.latest.outputs.is_latest }}
+
+      - name: Build and push the orchestrator image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: orchestrator
+          platforms: linux/amd64
+          push: true
+          build-args: VERSION=${{ github.ref_name }}
+          tags: ${{ steps.meta-orchestrator.outputs.tags }}
+          labels: ${{ steps.meta-orchestrator.outputs.labels }}
+          cache-from: type=gha,scope=orchestrator
+          cache-to: type=gha,mode=max,scope=orchestrator
+
+      # VERSION keeps `golem version` inside the image in step with the
+      # release's binaries. GOLEM_BACKENDS is overridden to every supported
+      # CLI: a pulled image cannot take build args, and the runtime picks its
+      # backend through GOLEM_BACKEND.
+      - name: Build and push the shem image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          target: shem
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            GOLEM_BACKENDS=claude-code codex opencode
+          tags: ${{ steps.meta-shem.outputs.tags }}
+          labels: ${{ steps.meta-shem.outputs.labels }}
+          cache-from: type=gha,scope=shem
+          cache-to: type=gha,mode=max,scope=shem
