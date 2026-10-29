@@ -1,13 +1,15 @@
 # syntax=docker/dockerfile:1
+# Base images are pinned by digest (Dependabot proposes updates, see .github/dependabot.yml); the tag is
+# kept for readability.
 # Multi-stage build producing three binaries: golem, golem-orchestrator, golem-shem.
 # golem and golem-shem use tree-sitter CGO bindings; all three are built statically
 # with musl-gcc. golem-orchestrator is pure-Go (glebarez/sqlite) and needs no CGO.
 
 # The shem image carries the official Go toolchain, copied from here: Debian bookworm's own golang-go is Go 1.19, which is
 # out of support and cannot build this module (go 1.27) or switch toolchains.
-FROM golang:1.27-bookworm AS go-toolchain
+FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS go-toolchain
 
-FROM golang:1.27-alpine AS builder
+FROM golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 # build-base provides musl-gcc (C toolchain) required for tree-sitter CGO bindings.
 # libstdc++ is needed by the TypeScript grammar (C++ runtime).
 RUN apk add --no-cache \
@@ -40,7 +42,7 @@ RUN CGO_ENABLED=1 \
       ./cmd/shem
 
 # ── orchestrator runtime ───────────────────────────────────────────────────────
-FROM alpine:3.21 AS orchestrator
+FROM alpine:3.21@sha256:ee16d92f96db08d9d2d07da48555a27f3a69d8f0759021dbc601195ed0d2b5bd AS orchestrator
 RUN apk add --no-cache ca-certificates
 COPY --from=builder /out/golem-orchestrator /usr/local/bin/golem-orchestrator
 EXPOSE 8080
@@ -66,10 +68,15 @@ CMD ["/etc/golem/orchestrator.yaml"]
 # unsupported (https://playwright.dev/docs/docker), and the baked-in Chromium
 # below is what lets the agent test UI headlessly. node:22-bookworm-slim
 # keeps the same Node toolchain the Alpine image carried.
-FROM node:22-bookworm-slim AS shem
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS shem
 # All three CLIs by default: the image is one runtime-configured image,
 # not one build per backend. GOLEM_BACKEND picks among them at startup.
 ARG GOLEM_BACKENDS="claude-code codex opencode"
+# Agent CLI versions are pinned so a build is reproducible and a compromised or broken new release of one cannot
+# enter an image unreviewed. Bump them deliberately (and test a ticket) when you want a newer CLI.
+ARG CLAUDE_CODE_VERSION=2.1.312
+ARG CODEX_VERSION=0.165.0
+ARG OPENCODE_VERSION=1.19.5
 # Common runtimes and build tools for polyglot ticket support.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git openssh-client \
@@ -94,9 +101,9 @@ ENV GOLEM_AGENT_USER=golem-agent
 # build rather than producing an image that misses a CLI it claims to have.
 RUN for backend in $GOLEM_BACKENDS; do \
       case "$backend" in \
-        claude-code) npm install -g @anthropic-ai/claude-code ;; \
-        codex)       npm install -g @openai/codex ;; \
-        opencode)    npm install -g opencode-ai ;; \
+        claude-code) npm install -g @anthropic-ai/claude-code@$CLAUDE_CODE_VERSION ;; \
+        codex)       npm install -g @openai/codex@$CODEX_VERSION ;; \
+        opencode)    npm install -g opencode-ai@$OPENCODE_VERSION ;; \
         *) echo "unknown GOLEM_BACKENDS entry: $backend" >&2; exit 1 ;; \
       esac; \
     done
