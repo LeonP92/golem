@@ -57,7 +57,9 @@ cannot start under Docker). `GenerateArtifacts` and `WorktreeSetup` write
 `.codex/rules/golem.rules`, the claude allow/deny list as prefix rules;
 `PrepareHost` marks the repo trusted in `~/.codex/config.toml` for root and
 the agent account (`codex_trust.go`). `DefaultCatalog` is
-`codex_catalog.yaml`.
+`codex_catalog.yaml`. The diagnoser runs in the private session dir with
+`--sandbox read-only` and the deny-all hook. `--strict-config` is not used: it
+rejects newer host configs and does not validate the hook override.
 
 ## OpenCode
 
@@ -69,3 +71,13 @@ Runs `opencode run [--model provider/model]`, the prompt on stdin.
 `encoding/json` cannot read (JSONC) is left alone. `GenerateArtifacts` also
 projects roles into `.opencode/agents/`. `PrepareHost` is a no-op.
 `DefaultCatalog` is `opencode_catalog.yaml`.
+
+## Tool policy hook
+
+`prepareTools` snapshots the effective `tool_policy` into a temp dir and builds
+the hook command `golem policy-check` that Claude (`--settings`, with
+`disableAllHooks:false` so project settings cannot switch it off), Codex and the
+OpenCode plugin (`file://` URL via `fileURL`) all run before a tool call.
+`golemBinary` prefers the running binary when it is golem, else PATH, and errors
+when neither exists. An unparseable repo `opencode.json` is logged and left
+alone; the plugin still enforces the policy.

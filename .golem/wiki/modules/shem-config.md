@@ -13,3 +13,7 @@ default adapter with its default catalog.
 Per-repo `auto_retry` (absent = true) and `attention_fix_attempts` (absent = 3,
 positive integer) configure automatic failure diagnosis. `AttentionPolicy`
 resolves the host policy; a repository not managed by the shem is disabled.
+
+Per-repo `worktree_setup` (a list of shell commands) and `setup_timeout` (a
+duration, absent = the worker default, negative rejected) configure project
+bootstrap in each new worktree; see shem-worker.

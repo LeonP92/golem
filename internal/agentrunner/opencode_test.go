@@ -53,7 +53,7 @@ func TestOpenCodePermissionOrder(t *testing.T) {
 	text := string(raw)
 	catchAll := strings.Index(text, `"*"`)
 	allowGit := strings.Index(text, `"git *":"allow"`)
-	denyPush := strings.Index(text, `"git push --force *":"deny"`)
+	denyPush := strings.Index(text, `"git push *":"deny"`)
 	if catchAll < 0 || allowGit < 0 || denyPush < 0 {
 		t.Fatalf("missing rules: %s", text)
 	}
@@ -63,8 +63,8 @@ func TestOpenCodePermissionOrder(t *testing.T) {
 	if perm.Bash["*"] != "deny" {
 		t.Errorf(`bash["*"] = %q, want "deny"`, perm.Bash["*"])
 	}
-	if perm.Bash["git push --force *"] != "deny" {
-		t.Errorf("deny rule wrong: %q", perm.Bash["git push --force *"])
+	if perm.Bash["git push *"] != "deny" {
+		t.Errorf("deny rule wrong: %q", perm.Bash["git push *"])
 	}
 	if perm.Edit != "allow" {
 		t.Errorf("edit = %q, want allow", perm.Edit)

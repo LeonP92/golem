@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+
+	"github.com/leonp92/golem/internal/evidence"
 )
 
 type AttentionTicket struct {
@@ -86,6 +88,7 @@ func (c *Client) ResolveAttention(id string, result AttentionResult) (*ClaimResp
 // PostFailure opts only worker-originated failures into bounded diagnosis.
 // Legacy PostPhase("needs-attention") and human parks remain untouched.
 func (c *Client) PostFailure(id, reason string) error {
+	reason = evidence.Clean(reason)
 	resp, err := c.do(http.MethodPatch, fmt.Sprintf("/api/tickets/%s/phase", id), map[string]string{"phase": "needs-attention", "attention_reason": reason})
 	if err != nil {
 		return err

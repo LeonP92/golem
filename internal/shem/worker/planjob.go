@@ -12,6 +12,7 @@ import (
 
 	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/epic"
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 )
@@ -91,6 +92,10 @@ func (w *Worker) runPlanJob(ctx context.Context, claim *client.PlanJobClaim) {
 		return
 	}
 	// After the mkdir, so the plan directory is the agent account's too: the agent writes plan.json there.
+	if err := evidence.CheckCheckout(repoPath); err != nil {
+		w.postPlanJobError(jobID, err.Error())
+		return
+	}
 	if err := agentenv.EnsureOwnership(repoPath); err != nil {
 		log.Printf("worker: %v", err)
 	}

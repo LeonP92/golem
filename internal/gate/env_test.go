@@ -69,7 +69,7 @@ func TestRunDoesNotLeakGolemEnvironmentToGateCommands(t *testing.T) {
 				"MY_BUILD_SECRET": "needed-by-the-build",
 			},
 			command: `printf 'SAW[%s]' "$MY_BUILD_SECRET"`,
-			want:    "SAW[needed-by-the-build]",
+			want:    "SAW[[REDACTED]]",
 		},
 	}
 

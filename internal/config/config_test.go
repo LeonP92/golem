@@ -105,3 +105,16 @@ ask_and_wait_timeout:
 		t.Fatal("expected error for unconfigured backend timeout, got nil")
 	}
 }
+
+func TestWorktreeOnlyDefaultsOnUnlessDisabled(t *testing.T) {
+	for body, want := range map[string]bool{
+		"backend: claude-code\n": true,
+		"backend: claude-code\ntool_policy:\n  allow_network: [a.test]\n":    true,
+		"backend: claude-code\ntool_policy:\n  allow_worktree_only: false\n": false,
+	} {
+		cfg, err := Load(writeTempConfig(t, body))
+		if err != nil || cfg.ToolPolicy.AllowWorktreeOnly != want {
+			t.Fatalf("%q: got %v, %v; want %v", body, cfg, err, want)
+		}
+	}
+}

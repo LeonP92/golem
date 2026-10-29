@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 )
@@ -150,5 +152,45 @@ func TestPromptsDoNotAskTheAgentToRunTheReviewGate(t *testing.T) {
 				t.Error("the close instruction was lost")
 			}
 		})
+	}
+}
+
+// An environment stop must keep the command output after the marker: it names
+// the missing tool.
+func TestFinishWorkPhaseKeepsEnvironmentEvidence(t *testing.T) {
+	cfg := &config.Config{NoPush: true}
+	claim := &client.ClaimResponse{TicketID: "t-1", Branch: "ticket/t-1"}
+	dir := t.TempDir()
+	writeState(t, dir, "needs-attention", "")
+	w, err := blog.NewWriter(filepath.Join(dir, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Append(blog.NewEntry("gate", blog.TypeStatus, evidence.EnvironmentMarker+" environment command=\"npm test\" exit=127\nnode: not found"))
+	w.Close()
+	err = testExecutor(t).finishWorkPhase(context.Background(), cfg, nil, claim, dir, dir, "Implementation", claim.Branch)
+	if err == nil || !strings.HasPrefix(err.Error(), evidence.EnvironmentMarker) || !strings.Contains(err.Error(), "node: not found") {
+		t.Fatalf("environment evidence lost: %v", err)
+	}
+	if !humanOnlyFailure(err.Error()) {
+		t.Fatal("environment stop must stop automatic repair")
+	}
+}
+
+// Test output can quote the marker; only a marker that starts a line stops repair.
+func TestFinishWorkPhaseIgnoresMarkerQuotedMidLine(t *testing.T) {
+	cfg := &config.Config{NoPush: true}
+	claim := &client.ClaimResponse{TicketID: "t-1", Branch: "ticket/t-1"}
+	dir := t.TempDir()
+	writeState(t, dir, "needs-attention", "")
+	w, err := blog.NewWriter(filepath.Join(dir, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Append(blog.NewEntry("gate", blog.TypeStatus, "FAIL: want \""+evidence.EnvironmentMarker+"\" in output"))
+	w.Close()
+	err = testExecutor(t).finishWorkPhase(context.Background(), cfg, nil, claim, dir, dir, "Implementation", claim.Branch)
+	if err == nil || strings.HasPrefix(err.Error(), evidence.EnvironmentMarker) {
+		t.Fatalf("a quoted marker stopped repair: %v", err)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/forge"
+	"github.com/leonp92/golem/internal/prereq"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/shem/config"
 	"github.com/leonp92/golem/internal/shem/worker"
@@ -19,6 +20,9 @@ func main() {
 	configPath := flag.String("config", "shem.yaml", "path to shem.yaml configuration file")
 	flag.Parse()
 
+	if err := prereq.Git(); err != nil {
+		log.Fatal(err)
+	}
 	cfg, err := config.Load(*configPath)
 	if err != nil {
 		log.Fatalf("failed to load config: %v", err)

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
@@ -630,6 +631,10 @@ func (w *Worker) runGraphBuild(remote string) {
 	w.graphBuildMu.Lock()
 	defer w.graphBuildMu.Unlock()
 
+	if err := evidence.CheckCheckout(repoPath); err != nil {
+		w.reportGraphBuild(remote, err.Error())
+		return
+	}
 	if err := agentenv.EnsureOwnership(repoPath); err != nil {
 		log.Printf("worker: %v", err)
 	}

@@ -12,15 +12,6 @@ type Decision struct {
 	Reason  string
 }
 
-var deniedCommandPrefixes = [][]string{
-	{"git", "push"},
-	{"gh", "pr", "create"},
-	{"gh", "pr", "comment"},
-	{"chmod", "777"},
-	{"eval"},
-	{"source"},
-}
-
 // This is substring matching, not a parser — a cheap heuristic, not a
 // real security boundary. "curl x |  sh" (two spaces) or an equivalent
 // respacing bypasses it. It raises the bar against casual/accidental
@@ -34,16 +25,16 @@ var obfuscationSubstrings = []string{
 
 // Evaluate decides whether a role may execute a tool call. This is the
 // enforcement point every backend adapter's PreToolUse-equivalent hook
-// calls before letting a tool call through (spec: Tool-Call Gating).
+// calls before letting a tool call through. Shell checks are guardrails, not isolation.
 func Evaluate(policy config.PolicyConfig, worktreePath, tool string, args []string) Decision {
 	joined := strings.Join(args, " ")
 
-	// Prepend tool to args for prefix matching
-	fullArgs := append([]string{tool}, args...)
-
-	for _, prefix := range deniedCommandPrefixes {
-		if matchesPrefix(fullArgs, prefix) {
-			return Decision{Allowed: false, Reason: "denied command: " + strings.Join(prefix, " ")}
+	segments := commandSegments(tool, args)
+	for _, segment := range segments {
+		for _, prefix := range deniedCommands {
+			if matchesPrefix(segment, prefix) {
+				return Decision{Allowed: false, Reason: "denied command: " + strings.Join(prefix, " ")}
+			}
 		}
 	}
 
@@ -54,8 +45,12 @@ func Evaluate(policy config.PolicyConfig, worktreePath, tool string, args []stri
 	}
 
 	if strings.Contains(joined, "curl") || strings.Contains(joined, "wget") {
-		if host := extractHost(joined); host != "" && !hostAllowed(policy.AllowNetwork, host) {
-			return Decision{Allowed: false, Reason: "denied network call to non-allow-listed host: " + host}
+		for _, segment := range segments {
+			for _, token := range segment {
+				if host := extractHost(token); host != "" && !hostAllowed(policy.AllowNetwork, host) {
+					return Decision{Allowed: false, Reason: "denied network call to non-allow-listed host: " + host}
+				}
+			}
 		}
 	}
 
@@ -73,28 +68,20 @@ func matchesPrefix(args, prefix []string) bool {
 	if len(args) < len(prefix) {
 		return false
 	}
-	// Check if prefix matches anywhere in the args sequence
-	for start := 0; start <= len(args)-len(prefix); start++ {
-		matches := true
-		for i, p := range prefix {
-			if args[start+i] != p {
-				matches = false
-				break
-			}
-		}
-		if matches {
-			return true
+	for i, p := range prefix {
+		if args[i] != p {
+			return false
 		}
 	}
-	return false
+	return true
 }
 
 func withinWorktree(worktreePath, target string) bool {
-	rel, err := filepath.Rel(worktreePath, target)
+	rel, err := filepath.Rel(resolveExisting(worktreePath), resolveExisting(target))
 	if err != nil {
 		return false
 	}
-	return !strings.HasPrefix(rel, "..")
+	return rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func extractHost(command string) string {
@@ -117,4 +104,22 @@ func hostAllowed(allowed []string, host string) bool {
 		}
 	}
 	return false
+}
+
+// resolveExisting follows symlinks on the deepest part of the path that exists, so a link inside the worktree that points outside cannot
+// carry a write out and a worktree reached through a link (macOS /var) still matches itself. A path that does not exist yet keeps its tail.
+func resolveExisting(path string) string {
+	path = filepath.Clean(path)
+	tail := ""
+	for {
+		if real, err := filepath.EvalSymlinks(path); err == nil {
+			return filepath.Join(real, tail)
+		}
+		parent := filepath.Dir(path)
+		if parent == path {
+			return filepath.Join(path, tail)
+		}
+		tail = filepath.Join(filepath.Base(path), tail)
+		path = parent
+	}
 }

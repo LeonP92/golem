@@ -29,7 +29,7 @@ func TestCodexRunAgentThroughFakeCLI(t *testing.T) {
 		t.Errorf("Output = %q", res.Output)
 	}
 	argv, _ := os.ReadFile(record + ".argv")
-	if got := strings.Join(strings.Fields(string(argv)), " "); got != "exec --skip-git-repo-check --sandbox workspace-write --model gpt-5.6-sol -" {
+	if got := strings.Join(strings.Fields(string(argv)), " "); !strings.HasPrefix(got, "exec --skip-git-repo-check --sandbox workspace-write --model gpt-5.6-sol -c hooks.PreToolUse=") || !strings.HasSuffix(got, " -") {
 		t.Errorf("argv = %q", got)
 	}
 	stdin, _ := os.ReadFile(record + ".stdin")
@@ -70,5 +70,28 @@ func skipOnWindows(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
 		t.Skip("the fake binary is a POSIX shell script")
+	}
+}
+
+// The diagnoser runs outside the repository, read-only, behind the deny-all hook.
+func TestCodexDiagnoserIsPrivateAndReadOnly(t *testing.T) {
+	skipOnWindows(t)
+	dir := t.TempDir()
+	record := filepath.Join(dir, "recorded")
+	fake := "#!/bin/sh\npwd > " + record + ".cwd\nprintf '%s\n' \"$@\" > " + record + ".argv\ncat >/dev/null\nprintf 'ok'\n"
+	if err := os.WriteFile(filepath.Join(dir, "codex"), []byte(fake), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GOLEM_CODEX_SANDBOX", "danger-full-access")
+	repo := t.TempDir()
+
+	if _, err := (Codex{opts: Options{RepoRoot: repo}}).RunAgent(context.Background(), "diagnoser", Context{}, ""); err != nil {
+		t.Fatal(err)
+	}
+	cwd, _ := os.ReadFile(record + ".cwd")
+	argv, _ := os.ReadFile(record + ".argv")
+	if strings.TrimSpace(string(cwd)) == repo || !strings.Contains(string(argv), "--sandbox\nread-only\n") || !strings.Contains(string(argv), "--no-tools") {
+		t.Fatalf("cwd %q argv %q", cwd, argv)
 	}
 }

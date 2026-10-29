@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/leonp92/golem/internal/evidence"
+	"github.com/leonp92/golem/internal/gating"
 	"github.com/leonp92/golem/internal/models"
 )
 
@@ -37,7 +39,7 @@ func (c Codex) Name() string { return "codex" }
 // ReservedArgs are the tokens this adapter sets itself. --json is reserved
 // because golem parses stdout as the agent's plain-text answer.
 func (c Codex) ReservedArgs() []string {
-	return []string{"exec", "--skip-git-repo-check", "--sandbox", "-s", "--model", "-m", "--json", "--config", "-c"}
+	return []string{"exec", "--skip-git-repo-check", "--sandbox", "-s", "--model", "-m", "--json", "--config", "-c", "--dangerously-bypass-hook-trust"}
 }
 
 // argv builds `codex exec --skip-git-repo-check --sandbox <mode> [--model m] [extra] -`.
@@ -94,17 +96,7 @@ var codexAllowPrefixes = [][]string{
 // publishing commands the claude adapter denies. Codex applies the
 // strictest matching decision (forbidden > prompt > allow), so a deny here
 // beats the broader allow prefixes above.
-var codexDenyPrefixes = [][]string{
-	{"git", "push", "origin", "main"},
-	{"git", "push", "--force"},
-	{"git", "reset", "--hard"},
-	{"git", "rebase"},
-	{"npm", "publish"},
-	{"cargo", "publish"},
-	{"twine", "upload"},
-	{"python", "-m", "twine", "upload"},
-	{"sudo"},
-}
+var codexDenyPrefixes = gating.DeniedCommands()
 
 // codexRules renders the allow and deny prefix lists as a Starlark .rules
 // file for .codex/rules/. Project rules load only when the project is
@@ -166,7 +158,20 @@ func (c Codex) RunAgent(ctx context.Context, role string, in Context, model stri
 	if err != nil {
 		return Result{}, err
 	}
-	cmd := agentCmd(ctx, c.opts, c.opts.RepoRoot, argv...)
+	session, err := prepareTools(toolRoot(ctx, c.opts.RepoRoot), role == "diagnoser")
+	if err != nil {
+		return Result{}, err
+	}
+	defer session.close()
+	argv, err = session.codex(argv)
+	if err != nil {
+		return Result{}, err
+	}
+	cwd := c.opts.RepoRoot
+	if session.noTools {
+		cwd, argv = session.root, readOnlySandbox(argv)
+	}
+	cmd := agentCmd(ctx, c.opts, cwd, argv...)
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer
@@ -177,9 +182,9 @@ func (c Codex) RunAgent(ctx context.Context, role string, in Context, model stri
 		// stderr and prints the final message to stdout, so a failure's
 		// reason can be on either.
 		return Result{}, fmt.Errorf("codex exec failed for role %s: %w%s%s",
-			role, err, labelled("stderr", stderr.String()), labelled("stdout", stdout.String()))
+			role, err, labelled("stderr", evidence.Clean(stderr.String())), labelled("stdout", evidence.Clean(stdout.String())))
 	}
-	return Result{Output: stdout.String(), Model: model}, nil
+	return Result{Output: evidence.Clean(stdout.String()), Model: model}, nil
 }
 
 func (c Codex) RunPhase(ctx context.Context, dir, prompt string, out io.Writer, model string) error {
@@ -187,11 +192,29 @@ func (c Codex) RunPhase(ctx context.Context, dir, prompt string, out io.Writer, 
 	if err != nil {
 		return err
 	}
+	session, err := prepareTools(toolRoot(ctx, dir), false)
+	if err != nil {
+		return err
+	}
+	defer session.close()
+	argv, err = session.codex(argv)
+	if err != nil {
+		return err
+	}
 	cmd := agentCmd(ctx, c.opts, dir, argv...)
-	cmd.Stdin = strings.NewReader(prompt)
-	cmd.Stdout, cmd.Stderr = out, out
-	if err := runAgentCmd(cmd); err != nil {
+	if err := runCleaned(cmd, prompt, out); err != nil {
 		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
 	}
 	return nil
+}
+
+// readOnlySandbox forces the diagnoser's sandbox read-only; its hook already denies every tool.
+func readOnlySandbox(argv []string) []string {
+	out := append([]string{}, argv...)
+	for i := 0; i+1 < len(out); i++ {
+		if out[i] == "--sandbox" {
+			out[i+1] = "read-only"
+		}
+	}
+	return out
 }

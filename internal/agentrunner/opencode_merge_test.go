@@ -30,7 +30,7 @@ func TestOpenCodeConfigLeavesUnparseableFileAlone(t *testing.T) {
 // last so they win under opencode's last-match rule.
 func TestOpenCodeConfigMergesOperatorPermissions(t *testing.T) {
 	dir := t.TempDir()
-	seed := `{"model":"m","permission":{"bash":{"terraform *":"allow","git push --force *":"allow"},"edit":"ask","skill":"deny"}}`
+	seed := `{"model":"m","permission":{"bash":{"terraform *":"allow","git push *":"allow"},"edit":"ask","skill":"deny"}}`
 	path := filepath.Join(dir, "opencode.json")
 	if err := os.WriteFile(path, []byte(seed), 0o644); err != nil {
 		t.Fatal(err)
@@ -54,7 +54,7 @@ func TestOpenCodeConfigMergesOperatorPermissions(t *testing.T) {
 	if cfg.Model != "m" || p.Edit != "ask" || p.Skill != "deny" || p.Bash["terraform *"] != "allow" {
 		t.Errorf("operator settings lost:\n%s", data)
 	}
-	if p.Bash["git push --force *"] != "deny" || p.Bash["git *"] != "allow" {
+	if p.Bash["git push *"] != "deny" || p.Bash["git *"] != "allow" {
 		t.Errorf("golem rules missing or overridden:\n%s", data)
 	}
 	text := string(data)

@@ -16,6 +16,7 @@ import (
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/gate"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
 	"github.com/leonp92/golem/internal/ticket"
@@ -160,6 +161,9 @@ func parseDiagnosis(output string) (Diagnosis, error) {
 func humanOnlyFailure(reason string) bool {
 	// A failed review gate appends reviewer and gate output after its first
 	// line; that is test output, not an operational stop.
+	if gate.EnvironmentOutput(reason) {
+		return true
+	}
 	if strings.Contains(reason, "review gate did not pass") {
 		reason, _, _ = strings.Cut(reason, "\n")
 	}

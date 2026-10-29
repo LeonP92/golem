@@ -46,7 +46,7 @@ func TestCodexRejectsInvalidModel(t *testing.T) {
 func TestCodexRules(t *testing.T) {
 	rules := codexRules()
 	for _, want := range []string{
-		`prefix_rule(pattern = ["git", "push", "--force"], decision = "forbidden")`,
+		`prefix_rule(pattern = ["git", "push"], decision = "forbidden")`,
 		`prefix_rule(pattern = ["sudo"], decision = "forbidden")`,
 		`prefix_rule(pattern = ["git"], decision = "allow")`,
 		`prefix_rule(pattern = ["golem"], decision = "allow")`,

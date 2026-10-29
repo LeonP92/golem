@@ -30,6 +30,12 @@ The **code graph** (`golem graph build`) indexes every module so agents find the
 
 ## CLI Mode
 
+### Prerequisites
+
+Git 2.40+ is required (`git check-attr --source`). Source builds need Go 1.27+
+and a C compiler. Shems need a dedicated secret-free checkout and a backend CLI with
+hook support: see [shem safety and project setup](docs/shem-safety-and-setup.md).
+
 ### Install
 
 ```sh

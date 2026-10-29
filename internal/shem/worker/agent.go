@@ -76,6 +76,11 @@ func (a *Agent) subcommandArgs(args []string, model string) []string {
 
 // runPhase runs one agent phase, teeing its output to the phase log.
 func (e *GolemExecutor) runPhase(ctx context.Context, repoPath, prompt, ticketDir, phase, model string) error {
+	root := filepath.Join(ticketDir, "worktree")
+	if phase == "brainstorm" || phase == "plan" {
+		root = ticketDir
+	}
+	ctx = agentrunner.WithToolRoot(ctx, root)
 	logPath := filepath.Join(ticketDir, "agent-"+phase+".log")
 	f, err := os.Create(logPath) //nolint:gosec
 	if err != nil {
