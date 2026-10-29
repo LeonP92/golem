@@ -5,9 +5,9 @@
 # golem and golem-shem use tree-sitter CGO bindings; all three are built statically
 # with musl-gcc. golem-orchestrator is pure-Go (glebarez/sqlite) and needs no CGO.
 
-# The shem image carries the official Go toolchain, copied from here: Debian bookworm's own golang-go is Go 1.19, which is
+# The shem image carries the official Go toolchain, copied from here: Debian's own golang-go lags (Go 1.19 on bookworm), which is
 # out of support and cannot build this module (go 1.27) or switch toolchains.
-FROM golang:1.27-bookworm@sha256:d9b6a1beb9474adc2a1ce842573639b44b2a0dd49b6669f51d3821baf9ec37c9 AS go-toolchain
+FROM golang:1.27-trixie@sha256:c65ecfe613b539ac74c62a4c3b2c27e8f8a6076384c8f27e8a3c0f3be17cc385 AS go-toolchain
 
 FROM golang:1.27-alpine@sha256:d200d2dd76b03a99b52651fd1325aff7dcd35422c35c01bac56571b0507f3deb AS builder
 # build-base provides musl-gcc (C toolchain) required for tree-sitter CGO bindings.
@@ -66,9 +66,9 @@ CMD ["/etc/golem/orchestrator.yaml"]
 # session. See .env.example for codex and opencode.
 # Debian, not Alpine: Playwright's browser builds need glibc and musl is
 # unsupported (https://playwright.dev/docs/docker), and the baked-in Chromium
-# below is what lets the agent test UI headlessly. node:22-bookworm-slim
+# below is what lets the agent test UI headlessly. node:22-trixie-slim
 # keeps the same Node toolchain the Alpine image carried.
-FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da AS shem
+FROM node:22-trixie-slim@sha256:2117f713a417f3aff682ac8f5bc2ebbdf1beed51f36e67ab1e0fd3866b6d2d8f AS shem
 # All three CLIs by default: the image is one runtime-configured image,
 # not one build per backend. GOLEM_BACKEND picks among them at startup.
 ARG GOLEM_BACKENDS="claude-code codex opencode"
@@ -78,11 +78,18 @@ ARG CLAUDE_CODE_VERSION=2.1.312
 ARG CODEX_VERSION=0.165.0
 ARG OPENCODE_VERSION=1.19.5
 # Common runtimes and build tools for polyglot ticket support.
+# The base is Debian trixie, not bookworm: golem requires git 2.40 or newer
+# (check-attr --source, internal/prereq) and bookworm ships 2.39, which stops the
+# shem at startup. The build fails if git is older, rather than shipping a shem
+# that cannot start.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git openssh-client \
     bash python3 python3-pip \
     make curl jq \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && v="$(git version | sed 's/^git version //')" \
+    && [ "$(printf '2.40\n%s\n' "$v" | sort -V | head -1)" = "2.40" ] \
+    || { echo "git is older than 2.40" >&2; exit 1; }
 ENV SHELL=/bin/bash
 COPY --from=go-toolchain /usr/local/go /usr/local/go
 ENV PATH=/usr/local/go/bin:$PATH
