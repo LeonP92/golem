@@ -228,3 +228,17 @@ func TestEntrypointOpencodeCopiesMountedAuth(t *testing.T) {
 		t.Errorf("OPENCODE_CONFIG_CONTENT not accepted:\n%s", out)
 	}
 }
+
+// A backend that authenticates by a route the check does not know (cloud
+// credentials, a gateway token) opts out explicitly and is told it did.
+func TestEntrypointCredentialCheckOptOut(t *testing.T) {
+	out, code, _ := runEntrypointForBackend(t, "claude-code", map[string]string{
+		"GOLEM_SKIP_CREDENTIAL_CHECK": "1",
+	}, allBackendCLIs)
+	if code != 0 {
+		t.Errorf("the opt-out did not start the container:\n%s", out)
+	}
+	if !strings.Contains(out, "GOLEM_SKIP_CREDENTIAL_CHECK=1") {
+		t.Errorf("the opt-out was not announced:\n%s", out)
+	}
+}

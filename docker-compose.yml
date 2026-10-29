@@ -169,6 +169,9 @@ services:
       # in a ticket's first phase. Must match a CLI installed via the
       # GOLEM_BACKENDS build arg and the adapter in deploy/shem.yaml.
       - GOLEM_BACKEND=${GOLEM_BACKEND:?set GOLEM_BACKEND in .env (claude-code, codex or opencode)}
+      # Opt out of the startup credential check for a backend that authenticates by a
+      # route it does not know (cloud credentials, a gateway token). See .env.example.
+      - GOLEM_SKIP_CREDENTIAL_CHECK=${GOLEM_SKIP_CREDENTIAL_CHECK:-}
       # ── Auth mode: codex API key (backend: codex) ───────────────────────────
       # `codex exec` reads CODEX_API_KEY directly — the headless path.
       - CODEX_API_KEY=${CODEX_API_KEY:-}

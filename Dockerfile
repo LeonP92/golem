@@ -3,6 +3,10 @@
 # golem and golem-shem use tree-sitter CGO bindings; all three are built statically
 # with musl-gcc. golem-orchestrator is pure-Go (glebarez/sqlite) and needs no CGO.
 
+# The shem image carries the official Go toolchain, copied from here: Debian bookworm's own golang-go is Go 1.19, which is
+# out of support and cannot build this module (go 1.27) or switch toolchains.
+FROM golang:1.27-bookworm AS go-toolchain
+
 FROM golang:1.27-alpine AS builder
 # build-base provides musl-gcc (C toolchain) required for tree-sitter CGO bindings.
 # libstdc++ is needed by the TypeScript grammar (C++ runtime).
@@ -70,10 +74,11 @@ ARG GOLEM_BACKENDS="claude-code codex opencode"
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates git openssh-client \
     bash python3 python3-pip \
-    golang-go \
     make curl jq \
     && rm -rf /var/lib/apt/lists/*
 ENV SHELL=/bin/bash
+COPY --from=go-toolchain /usr/local/go /usr/local/go
+ENV PATH=/usr/local/go/bin:$PATH
 # The agent runs as this account, not as root.
 #
 # golem-shem itself stays root: it holds GOLEM_GITHUB_TOKEN, which the push

@@ -140,6 +140,12 @@ fi
 # --- Credentials: required, checked at startup --------------------------------
 # The agent cannot answer a login prompt, so a missing credential is not a
 # degraded mode to start in — every phase would fail on it. Stop here instead.
+# The check knows the common credential routes only. A backend that authenticates
+# some other way (Bedrock or Vertex cloud credentials, a gateway token, a custom
+# model provider with its own key variable) opts out with GOLEM_SKIP_CREDENTIAL_CHECK=1.
+if [ "${GOLEM_SKIP_CREDENTIAL_CHECK:-}" = "1" ]; then
+  echo "shem: WARNING GOLEM_SKIP_CREDENTIAL_CHECK=1 — not checking $GOLEM_BACKEND credentials." >&2
+else
 case "$GOLEM_BACKEND" in
 claude-code)
   if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] &&
@@ -168,6 +174,7 @@ opencode)
   fi
   ;;
 esac
+fi
 
 # --- Agent account home -------------------------------------------------------
 # The agent runs as GOLEM_AGENT_USER (see Dockerfile) so it cannot read
