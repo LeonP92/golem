@@ -28,6 +28,7 @@ func TestClassifyFailure(t *testing.T) {
 		"limit after a dump":   {stderrDump + "ERROR: you hit your usage limit", kindUsageLimit},
 		"five-hour limit":      {"Claude 5-hour limit reached, try again later", kindUsageLimit},
 		"econnreset":           {"read tcp: ECONNRESET", kindTransient},
+		"anthropic rate error": {`{"type":"rate_limit_error"}`, kindTransient},
 		"rate limiter in code": {"added a rate limiter; FAIL TestRateLimiter", ""},
 		"status 500 in a test": {"got status 500, want 200", ""},
 		"overloaded":           {"API Error: 503 overloaded", kindTransient},
@@ -473,6 +474,10 @@ func TestMigrateWaitingCapturesPushesAndMoves(t *testing.T) {
 				t.Errorf("something was pushed: %q", heads)
 			}
 		}},
+		{"clean and the remote already holds the checkpoint: moved without a push", func(t *testing.T, e *env) {
+			git(t, e.wt, "push", e.remote, "HEAD:refs/heads/ticket/supervisor")
+			e.w.afterCapture = func() { t.Error("pushed although the remote already had the checkpoint") }
+		}, true, false, nil},
 		{"ticket stopped between capture and push is not pushed", func(t *testing.T, e *env) {
 			os.WriteFile(filepath.Join(e.wt, "code"), []byte("late\n"), 0644)
 			e.w.afterCapture = func() {

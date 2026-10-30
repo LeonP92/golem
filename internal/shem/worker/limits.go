@@ -33,7 +33,7 @@ var (
 	limitRE = regexp.MustCompile(`(?i)\b(?:usage|session|weekly|daily|monthly|hourly|plan)[ _]limit\b|\bhit your limit\b|\b\d+[- ]?(?:hours?|hrs?|days?|weeks?)[- ]limit\b`)
 	// Faults that pass by themselves. A bare "timeout" or number is not enough
 	// (TestTimeout, file.go:429): a status code must read as one.
-	transientRE = regexp.MustCompile(`(?i)\brate[ _]limit(?:ed|ing|s)?\b|too many requests|overloaded|bad gateway|service unavailable|internal server error|gateway time-?out|temporarily unavailable|connection (?:reset|refused)|econnreset|socket hang up|network error|(?:connection|request|read|dial|tls|i/o) time(?:d )?-?out|\b(?:http|status|error|code)\b[ :=]*(?:429|502|503|504|529)\b`)
+	transientRE = regexp.MustCompile(`(?i)\brate[ _]limit(?:ed|ing|s|_error)?\b|too many requests|overloaded|bad gateway|service unavailable|gateway time-?out|temporarily unavailable|connection (?:reset|refused)|econnreset|socket hang up|network error|(?:connection|request|read|dial|tls|i/o) time(?:d )?-?out|\b(?:http|status|error|code)\b[ :=]*(?:429|502|503|504|529)\b`)
 )
 
 // classifyFailure returns "usage_limit", "transient" or "" (diagnose as usual).

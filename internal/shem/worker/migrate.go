@@ -50,7 +50,17 @@ func (w *Worker) migrateWaiting() {
 		if repoPath == "" || !w.migrateDue(t.TicketID) {
 			continue
 		}
+		if !w.held() {
+			return // the hold ended mid-pass; resumes may already be starting
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		go func() { // a stopping worker abandons the pass
+			select {
+			case <-w.stop:
+				cancel()
+			case <-ctx.Done():
+			}
+		}()
 		captured, err := w.preserve(ctx, repoPath, t)
 		cancel()
 		if err != nil {
@@ -66,6 +76,13 @@ func (w *Worker) migrateWaiting() {
 		}
 		log.Printf("worker: ticket %s moved to the pool while backend %q is limited", t.TicketID, w.backend())
 	}
+}
+
+func (w *Worker) agentRunning(id string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_, busy := w.running[id]
+	return busy
 }
 
 func (w *Worker) migrateDue(id string) bool {
@@ -85,10 +102,7 @@ func (w *Worker) migrateDue(id string) bool {
 // sure the remote has it.
 func (w *Worker) preserve(ctx context.Context, repoPath string, t client.MigratableTicket) (string, error) {
 	worktree := filepath.Join(repoPath, ".golem", "tickets", t.TicketID, "worktree")
-	w.mu.Lock()
-	_, busy := w.running[t.TicketID]
-	w.mu.Unlock()
-	if busy {
+	if w.agentRunning(t.TicketID) {
 		return "", fmt.Errorf("an agent is running in the worktree")
 	}
 	head, err := worktreeHead(ctx, worktree)
@@ -106,11 +120,19 @@ func (w *Worker) preserve(ctx context.Context, repoPath string, t client.Migrata
 	}
 	// Scan from the ticket's pinned base, not the checkpoint: commits before the
 	// checkpoint may be local-only, and this push is what publishes them.
+	// shortcut: a base merged into the ticket after the pin shows its own new
+	// files in this range, so a sensitive one there refuses the move (it only
+	// stays and waits); use the live base's merge-base if that becomes common.
 	scanBase := t.CheckpointSHA
 	if b, err := loadDiagnosisBase(filepath.Dir(worktree)); err == nil && b != "" {
 		scanBase = b
+	} else {
+		log.Printf("worker: ticket %s: no pinned base (%v); scanning from the checkpoint only", t.TicketID, err)
 	}
 	dirty := len(strings.TrimSpace(string(out))) != 0
+	if w.agentRunning(t.TicketID) {
+		return "", fmt.Errorf("an agent started in the worktree")
+	}
 	if dirty {
 		if head, err = w.capture(ctx, worktree, scanBase); err != nil {
 			return "", err
