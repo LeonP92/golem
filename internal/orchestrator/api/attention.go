@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/leonp92/golem/internal/failure"
 	"github.com/leonp92/golem/internal/orchestrator/auth"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/orchestrator/ws"
@@ -45,6 +46,10 @@ type WaitPolicy struct {
 	// its last step repeats until LimitBackoffMax is spent.
 	LimitBackoff    []time.Duration
 	LimitBackoffMax time.Duration
+	// Failover maps a backend to the one its limit-waiting tickets move to; empty
+	// means they wait. FailoverAfter is the shortest wait worth moving for.
+	Failover      map[string]string
+	FailoverAfter time.Duration
 }
 
 func (p WaitPolicy) withDefaults() WaitPolicy {
@@ -56,6 +61,9 @@ func (p WaitPolicy) withDefaults() WaitPolicy {
 	}
 	if p.LimitBackoffMax <= 0 {
 		p.LimitBackoffMax = 6 * time.Hour
+	}
+	if p.FailoverAfter <= 0 {
+		p.FailoverAfter = 30 * time.Minute
 	}
 	return p
 }
@@ -198,7 +206,9 @@ func (h *Handlers) claimAttention(w http.ResponseWriter, r *http.Request) {
 		// A wait-incident claim continues the incident; only a fresh failure
 		// spends the diagnosis/repair budget.
 		waitIncident := t.WaitIncidentOpen()
-		if !waitIncident && t.AttentionAttempts >= body.MaxAttempts {
+		// A limit or transient fault is not a failed repair, so it never exhausts the budget.
+		waitClass := failure.Classify(t.AttentionReason) != ""
+		if !waitIncident && !waitClass && t.AttentionAttempts >= body.MaxAttempts {
 			exhausted = true
 			reason := fmt.Sprintf("Stopping after %d automatic recovery attempt(s). Human attention required.\n\n%s", t.AttentionAttempts, t.AttentionReason)
 			if err := tx.Model(&t).Updates(map[string]any{"attention_eligible": false, "attention_reason": reason}).Error; err != nil {
@@ -206,15 +216,10 @@ func (h *Handlers) claimAttention(w http.ResponseWriter, r *http.Request) {
 			}
 			return appendLogTx(tx, id, "BLOCKER", "orchestrator", "", reason)
 		}
-		if t.CheckpointSHA == nil || strings.TrimSpace(*t.CheckpointSHA) == "" {
-			exhausted = true
-			reason := "Automatic recovery needs a saved phase and commit checkpoint; use manual requeue."
-			if err := tx.Model(&t).Updates(map[string]any{"attention_eligible": false, "attention_reason": reason}).Error; err != nil {
-				return err
-			}
-			return appendLogTx(tx, id, "BLOCKER", "orchestrator", "", reason)
-		}
 		phase := retryPhaseForTicket(t)
+		if t.CheckpointSHA == nil || strings.TrimSpace(*t.CheckpointSHA) == "" {
+			phase = "brainstorm" // nothing saved: the shem starts the ticket again from the top
+		}
 		t.RetryPhase = phase
 		updates := map[string]any{"attention_token": token, "attention_lease_until": until, "retry_phase": phase}
 		if !waitIncident {
@@ -289,6 +294,7 @@ func (h *Handlers) resolveAttention(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	shem := auth.ShemFromRequest(r)
 	var fresh db.Ticket
+	var failedOver string // the repo of a ticket that moved to another backend, to announce after commit
 	err := h.DB.Transaction(func(tx *gorm.DB) error {
 		var t db.Ticket
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where(attentionGuard, shem.ID).
@@ -297,6 +303,16 @@ func (h *Handlers) resolveAttention(w http.ResponseWriter, r *http.Request) {
 				return errNotRetryable
 			}
 			return err
+		}
+		if body.Wait == waitUsageLimit {
+			moved, err := h.failover(tx, &t, body.Reason, body.ResetAt)
+			if err != nil {
+				return err
+			}
+			if moved {
+				failedOver = t.RepoRemote
+				return nil
+			}
 		}
 		if body.Wait != "" {
 			return h.resolveWait(tx, &t, body.Reason, body.Wait, body.ResetAt)
@@ -346,6 +362,9 @@ func (h *Handlers) resolveAttention(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
+	}
+	if failedOver != "" {
+		h.Hub.Broadcast(failedOver, ws.WSMessage{Type: "ticket_available", TicketID: strPtr(id), Repo: failedOver})
 	}
 	if body.Wait != "" || !body.Retry {
 		w.WriteHeader(http.StatusNoContent)

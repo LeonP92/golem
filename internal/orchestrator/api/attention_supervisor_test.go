@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/orchestrator/db"
 	"github.com/leonp92/golem/internal/shem/client"
 )
@@ -574,5 +575,123 @@ func TestParsedLimitThatNeverLiftsEscalates(t *testing.T) {
 	}
 	if waits != limitChecks {
 		t.Fatalf("waited %d times, want exactly %d before asking a human", waits, limitChecks)
+	}
+}
+
+func TestSpentAttemptsDoNotBlockALimitOrTransientWait(t *testing.T) {
+	for name, c := range map[string]struct {
+		reason string
+		want   int
+	}{
+		"transient":       {"API Error: 503 overloaded", 200},
+		"usage limit":     {"You've hit your usage limit. try again in 3 hours.", 200},
+		"a real failure":  {"assertion failed: want 200 got 404", 409},
+		"not a wait kind": {"permission denied", 409},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRecoveryHarness(t)
+			f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Update("attention_attempts", 3)
+			f.fail(t, c.reason)
+			if got := f.claimCode(t, 3); got != c.want {
+				t.Fatalf("claim with spent attempts = %d, want %d", got, c.want)
+			}
+		})
+	}
+}
+
+func TestAttentionRecoveryWithNothingCheckpointedRestartsFromTheTop(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Updates(map[string]any{"checkpoint_sha": nil, "checkpoint_phase": nil})
+	f.fail(t, "API Error: 503 overloaded")
+	c := f.claim(t, 3)
+	if c.Claim == nil || c.Claim.RetryPhase != "brainstorm" {
+		t.Fatalf("claim retry phase: %+v", c.Claim)
+	}
+	out := f.resolveResult(t, c, &client.AttentionResult{Retry: true, Reason: "transient", Feedback: "start again"})
+	if out.Code != 200 {
+		t.Fatalf("resolve: %d %s", out.Code, out.Body.String())
+	}
+	if got := f.fresh(t); got.Phase != "brainstorm" {
+		t.Fatalf("phase %q, want brainstorm", got.Phase)
+	}
+}
+
+func (f recoveryHarness) failoverSetup(t *testing.T, repoOfTarget string, targetOnline bool) {
+	t.Helper()
+	f.h.Wait.Failover = map[string]string{"codex": "claude-code"}
+	src := models.Catalog{SupportsSelection: true, Tiers: []models.Tier{"small", "large"},
+		Models: []models.Model{{ID: "gpt-small", Tier: "small"}, {ID: "gpt-large", Tier: "large"}}}
+	srcJSON, _ := json.Marshal(src)
+	f.h.DB.Model(&db.Shem{}).Where("id = ?", f.shem.ID).Updates(map[string]any{"backend": "codex", "catalog": string(srcJSON)})
+	sel, _ := json.Marshal(models.Selections{"plan": "gpt-large", "review": "gpt-small"})
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Updates(map[string]any{"model_backend": "codex", "models": string(sel)})
+	dst := seedShem(t, f.h, "claude", "claude-key")
+	status := "offline"
+	if targetOnline {
+		status = "online"
+	}
+	f.h.DB.Model(&db.Shem{}).Where("id = ?", dst.ID).Updates(map[string]any{"backend": "claude-code", "status": status, "repos": `["` + repoOfTarget + `"]`})
+}
+
+func (f recoveryHarness) limitWaitAt(t *testing.T, msg string, in time.Duration) {
+	t.Helper()
+	f.fail(t, msg)
+	reset := time.Now().Add(in)
+	if code := f.limitWait(t, msg, &reset); code != 204 {
+		t.Fatalf("limit wait: %d", code)
+	}
+}
+
+func TestLongLimitMovesTheTicketToTheFailoverBackend(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.failoverSetup(t, "local://repo", true)
+	f.limitWaitAt(t, "You've hit your usage limit. try again in 5 hours.", 5*time.Hour)
+	got := f.fresh(t)
+	if got.Phase != "unassigned" || got.AssignedShem != nil || got.ModelBackend != "claude-code" || got.AttentionAttempts != 0 {
+		t.Fatalf("not moved: %+v", got)
+	}
+	sel := got.ModelSelections()
+	if sel["plan"] != "tier:large" || sel["review"] != "tier:small" {
+		t.Fatalf("model choices did not carry over by tier: %v", sel)
+	}
+	if got.RetryPhase != "implement" || got.CheckpointSHA == nil {
+		t.Fatalf("lost its resume point: %+v", got)
+	}
+}
+
+func TestLimitDoesNotFailOverWhenItShouldNot(t *testing.T) {
+	for name, c := range map[string]struct {
+		in      time.Duration
+		repo    string
+		online  bool
+		noRoute bool
+	}{
+		"short wait":             {10 * time.Minute, "local://repo", true, false},
+		"target offline":         {5 * time.Hour, "local://repo", false, false},
+		"target serves no repo":  {5 * time.Hour, "local://other", true, false},
+		"no failover configured": {5 * time.Hour, "local://repo", true, true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newRecoveryHarness(t)
+			f.failoverSetup(t, c.repo, c.online)
+			if c.noRoute {
+				f.h.Wait.Failover = nil
+			}
+			f.limitWaitAt(t, "You've hit your usage limit. try again soon.", c.in)
+			got := f.fresh(t)
+			if got.Phase != "needs-attention" || got.AttentionWaitKind != "usage_limit" || got.ModelBackend != "codex" {
+				t.Fatalf("moved when it must wait: %+v", got)
+			}
+		})
+	}
+}
+
+func TestRemoteRepositoryWaitsInsteadOfFailingOver(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.failoverSetup(t, "https://github.com/org/repo", true)
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Update("repo_remote", "https://github.com/org/repo")
+	f.limitWaitAt(t, "You've hit your usage limit. try again in 5 hours.", 5*time.Hour)
+	if got := f.fresh(t); got.Phase != "needs-attention" || got.ModelBackend != "codex" {
+		t.Fatalf("a remote repo failed over: %+v", got)
 	}
 }

@@ -53,3 +53,6 @@ csp:
 #   usage_limit_max_wait: 8h        # longest single wait for a parsed reset
 #   limit_backoff: [15m, 30m, 1h, 2h]  # used when no reset time can be parsed
 #   limit_backoff_max: 6h           # total backoff before a human is asked
+#   failover:                       # move a limit-waiting ticket to another backend (local:// repos)
+#     codex: claude-code            # model choices carry over by tier
+#   failover_after: 30m             # shortest wait worth moving for

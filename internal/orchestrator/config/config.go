@@ -256,6 +256,12 @@ type SupervisorConfig struct {
 	LimitBackoff []string `yaml:"limit_backoff"`
 	// LimitBackoffMax is the total wait before a human is asked (default 6h).
 	LimitBackoffMax string `yaml:"limit_backoff_max"`
+	// Failover maps a backend to the one its limit-waiting tickets move to
+	// (for example codex: claude-code). Empty means they wait the limit out.
+	// It applies to local:// repositories, where the shems share one checkout.
+	Failover map[string]string `yaml:"failover"`
+	// FailoverAfter is the shortest wait worth moving a ticket for (default 30m).
+	FailoverAfter string `yaml:"failover_after"`
 }
 
 // Durations resolves the three caps: max wait, backoff steps and total backoff
@@ -271,6 +277,12 @@ func (c SupervisorConfig) Durations() (maxWait time.Duration, backoff []time.Dur
 		backoff = append(backoff, d)
 	}
 	return maxWait, backoff, total
+}
+
+// FailoverAfterDuration is the shortest limit wait that moves a ticket to the
+// failover backend; zero means the default.
+func (c SupervisorConfig) FailoverAfterDuration() time.Duration {
+	return parseDurationOr("supervisor.failover_after", c.FailoverAfter, 0)
 }
 
 // defaultPortEnv is read by ListenPort. Not a secret, so it is read
