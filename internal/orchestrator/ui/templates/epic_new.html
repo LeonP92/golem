@@ -53,7 +53,7 @@
         </label>
         <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" name="auto_approve_phases" class="checkbox" {{if .Form.AutoApprovePhases}}checked{{end}}>
-          <span class="label-text">Auto-approve child phases (children skip the human spec/plan approval; each child can still be overridden)</span>
+          <span class="label-text">Auto-approve child phases (children skip the human spec/plan approval and get supervisor recovery when blocked; each child can still be overridden)</span>
         </label>
         <label class="label cursor-pointer justify-start gap-3">
           <input type="checkbox" name="auto_start_generated_plan" class="checkbox" {{if .Form.AutoStartGeneratedPlan}}checked{{end}}>

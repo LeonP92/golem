@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"github.com/leonp92/golem/internal/orchestrator/api"
 	"log"
 	"net/http"
 	"os"
@@ -337,6 +338,8 @@ func main() {
 	srv.ManualSyncCooldown = cfg.GitHub.ManualSyncCooldownDuration()
 	srv.CSPMode = cfg.CSP.Mode
 	srv.GitHubTokenEnv = cfg.GitHub.TokenEnv
+	maxWait, backoff, total := cfg.Supervisor.Durations()
+	srv.Wait = api.WaitPolicy{UsageLimitMax: maxWait, LimitBackoff: backoff, LimitBackoffMax: total}
 	srv.GitHubDefaultLabel = cfg.GitHub.TriggerLabel()
 	// Only assign Sync when the worker was actually started. ghWorker is a
 	// *ghsync.Worker; assigning a nil *ghsync.Worker to the api.SyncTrigger

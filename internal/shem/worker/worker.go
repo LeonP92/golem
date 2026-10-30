@@ -27,15 +27,19 @@ type Executor interface {
 
 // Worker polls for available tickets, claims them, and runs them via Executor.
 type Worker struct {
-	cfg       *config.Config
-	client    *client.Client
-	executor  Executor
-	diagnoser Diagnoser
-	agent     *Agent
-	wsc       *client.WSClient
-	stop      chan struct{}
-	mu        sync.Mutex
-	running   map[string]context.CancelFunc // ticketID → cancel for each active ticket
+	cfg          *config.Config
+	client       *client.Client
+	executor     Executor
+	diagnoser    Diagnoser
+	agent        *Agent
+	wsc          *client.WSClient
+	stop         chan struct{}
+	mu           sync.Mutex
+	running      map[string]context.CancelFunc // ticketID → cancel for each active ticket
+	breaker      *limitBreaker                 // backends held until their usage limit resets
+	migrateTried map[string]time.Time
+	afterCapture func() // test seam: runs between the capture and the push
+	remoteHas    func(ctx context.Context, repoPath, remote, branch, sha string) bool
 
 	// graphBuildMu serialises `golem graph build` runs on this shem. Two of
 	// them over one checkout would fight over the graph index, and the
@@ -47,12 +51,37 @@ type Worker struct {
 // New creates a new Worker. exec may be nil for testing (skips actual execution).
 func New(cfg *config.Config, c *client.Client, exec Executor, agent *Agent) *Worker {
 	return &Worker{
-		cfg:      cfg,
-		client:   c,
-		executor: exec,
-		agent:    agent,
-		stop:     make(chan struct{}),
-		running:  make(map[string]context.CancelFunc),
+		cfg:       cfg,
+		client:    c,
+		executor:  exec,
+		agent:     agent,
+		stop:      make(chan struct{}),
+		running:   make(map[string]context.CancelFunc),
+		breaker:   newLimitBreaker(),
+		remoteHas: remoteHasCheckpoint,
+	}
+}
+
+// backend names the adapter this shem runs; the breaker is keyed by it.
+func (w *Worker) backend() string {
+	if w.agent == nil || w.agent.Adapter == nil {
+		return ""
+	}
+	return w.agent.Adapter.Name()
+}
+
+// held reports whether this shem's backend is limited right now. A held shem
+// claims, resumes and revises nothing: every such run would fail instantly and
+// spend a ticket's attempts.
+func (w *Worker) held() bool { return w.breaker.limited(w.backend()) }
+
+// syncLimit learns this shem's limit from the server, which stores it on the
+// shem row. That keeps the breaker correct across a restart.
+func (w *Worker) syncLimit() {
+	if until, err := w.client.BackendLimit(); err != nil {
+		log.Printf("worker: backend limit: %v", err)
+	} else if !until.IsZero() {
+		w.breaker.trip(w.backend(), until)
 	}
 }
 
@@ -135,6 +164,7 @@ func (w *Worker) Start() {
 	// the receipt. The lane is idempotent at every step, so re-running it
 	// for a child whose receipt already landed costs one gate check.
 	w.integrateAssigned(assigned)
+	w.syncLimit()
 	w.pollAttention()
 
 	log.Printf("worker: poll loop started")
@@ -157,6 +187,9 @@ func (w *Worker) reviseAssigned(assigned []client.AssignedTicket) {
 // died. Unlike tryClaimAndRun it skips the claim step — the ticket is already
 // owned by this shem.
 func (w *Worker) tryResumeTicket(claim *client.ClaimResponse) {
+	if w.held() {
+		return // the poll loop offers it again once the backend is usable
+	}
 	w.mu.Lock()
 	if _, ok := w.running[claim.TicketID]; ok {
 		w.mu.Unlock()
@@ -234,6 +267,18 @@ func resumeWorkerPhase(claim *client.ClaimResponse) string {
 // problem, and it is what the phase badge is claiming.
 func (w *Worker) failTicket(ticketID string, cause error) {
 	log.Printf("worker: ticket %s error: %v", ticketID, cause)
+	if classifyFailure(cause.Error()) == kindUsageLimit {
+		// Hold the backend now and record it on the server, so a restart
+		// holds too even when no ticket wait follows.
+		until := w.breaker.now().Add(2 * time.Minute)
+		if at, ok := parseLimitReset(cause.Error(), w.breaker.now()); ok {
+			until = at
+		}
+		w.breaker.trip(w.backend(), until)
+		if err := w.client.ReportBackendLimit(until); err != nil {
+			log.Printf("worker: could not record the usage limit on the server: %v", err)
+		}
+	}
 	if _, logErr := w.client.PostLog(ticketID, client.LogPayload{
 		EntryType: "BLOCKER",
 		FromRole:  "shem",
@@ -382,6 +427,9 @@ func (w *Worker) cleanupTicket(repoRemote, ticketID string) {
 // tryClaimAndRun attempts to claim the ticket and run it.
 // On 409 (ErrNotAvailable) it returns silently.
 func (w *Worker) tryClaimAndRun(ticketID string) {
+	if w.held() {
+		return
+	}
 	w.mu.Lock()
 	// Deduplicate: skip if this ticket is already running.
 	if _, ok := w.running[ticketID]; ok {
@@ -409,6 +457,17 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 	}
 
 	log.Printf("worker: claimed ticket %s (%s)", ticketID, claim.RepoRemote)
+	if w.held() {
+		// The backend became limited between the claim and the run. Nothing
+		// has started, so give the ticket back without spending anything.
+		if err := w.client.ReleaseTicket(ticketID); err != nil {
+			log.Printf("worker: release ticket %s: %v", ticketID, err)
+		}
+		w.mu.Lock()
+		delete(w.running, ticketID)
+		w.mu.Unlock()
+		return
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	w.mu.Lock()
@@ -440,6 +499,9 @@ func (w *Worker) tryClaimAndRun(ticketID string) {
 // On 409 (ErrNotAvailable — e.g. requeued before this shem reconnected)
 // it returns silently, same as tryClaimAndRun.
 func (w *Worker) tryReviseAndRun(ticketID string) {
+	if w.held() {
+		return
+	}
 	w.mu.Lock()
 	if _, ok := w.running[ticketID]; ok {
 		w.mu.Unlock()
@@ -504,6 +566,10 @@ func (w *Worker) pollLoop() {
 			// had one, is picked up here rather than waiting for a restart
 			// or a person.
 			w.reclaimReaped()
+			w.syncLimit()
+			if w.held() {
+				w.migrateWaiting()
+			}
 			w.pollAttention()
 			if assigned, err := w.client.GetAssigned(); err == nil {
 				w.reviseAssigned(assigned)
@@ -524,6 +590,9 @@ func (w *Worker) pollLoop() {
 				case <-w.stop:
 					return
 				default:
+				}
+				if w.held() {
+					continue
 				}
 				id, err := w.client.GetAvailable(r.NormalizedRemote)
 				if err != nil {

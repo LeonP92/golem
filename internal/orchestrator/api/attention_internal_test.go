@@ -13,3 +13,11 @@ func TestAttentionFingerprintIgnoresOnlyVolatileEvidence(t *testing.T) {
 		t.Fatal("different assertion treated as same")
 	}
 }
+
+func TestAttentionFingerprintIgnoresCountdowns(t *testing.T) {
+	a := attentionFingerprint("You've hit your usage limit. Try again in 3 hours 20 minutes.")
+	b := attentionFingerprint("You've hit your usage limit. Try again in 2 hours 5 minutes.")
+	if a != b {
+		t.Fatal("a shrinking countdown counted as a new failure")
+	}
+}

@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -287,3 +288,17 @@ func TestRolePromotionTakesEffectImmediately(t *testing.T) {
 		t.Errorf("after promotion: got %d, want 200", w.Code)
 	}
 }
+
+func TestShemsPageShowsUsageLimitNotOffline(t *testing.T) {
+	_, mux, gdb := newUIMux(t)
+	_, cookie := seedUISession(t, gdb, "dev1", rbac.RoleDeveloper)
+	until := time.Now().Add(time.Hour)
+	gdb.Create(&db.Shem{Name: "limited", APIKeyHash: "x", Repos: "[]", Status: "offline", LimitedUntil: &until})
+	gdb.Create(&db.Shem{Name: "expired", APIKeyHash: "y", Repos: "[]", Status: "online", LimitedUntil: ptrTime(time.Now().Add(-time.Hour))})
+	body := do(mux, "GET", "/shems", cookie, "").Body.String()
+	if strings.Count(body, "usage limit until") != 1 {
+		t.Errorf("want exactly one usage-limit badge:\n%s", body)
+	}
+}
+
+func ptrTime(t time.Time) *time.Time { return &t }

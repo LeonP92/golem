@@ -38,6 +38,9 @@ type Server struct {
 	// variable this deployment actually uses.
 	GitHubTokenEnv string
 
+	// Wait holds the supervisor's usage-limit wait caps.
+	Wait api.WaitPolicy
+
 	// GitHubDefaultLabel is the trigger label a newly registered repository
 	// starts with (config.GitHubConfig.TriggerLabel).
 	GitHubDefaultLabel string
@@ -66,6 +69,7 @@ func (s *Server) Routes() http.Handler {
 	h.Sync = s.Sync
 	h.ManualSyncCooldown = s.ManualSyncCooldown
 	h.GitHubTokenEnv = s.GitHubTokenEnv
+	h.Wait = s.Wait
 	h.LogEntryHTML = ui.MakeLogEntryRenderer(tmpls)
 	h.RegisterShemRoutes(mux)
 	h.RegisterTicketRoutes(mux)

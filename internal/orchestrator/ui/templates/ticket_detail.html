@@ -15,7 +15,7 @@
       <div class="min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
           <h1 class="text-xl font-bold font-mono">{{slice .Ticket.ID 0 8}}</h1>
-          <span class="badge badge-md phase-{{.Ticket.Phase}} rounded-md font-medium">{{template "phase_label" .Ticket.Phase}}</span>
+          <span class="badge badge-md phase-{{.Ticket.DisplayPhase}} rounded-md font-medium">{{template "phase_label" .Ticket.DisplayPhase}}</span>
           {{if eq .Ticket.Phase "ready-for-review"}}
           <a href="{{.Ticket.RepoRemote}}/tree/{{.Ticket.Branch}}" target="_blank"
              class="btn btn-xs btn-ghost gap-1 text-base-content/60">
@@ -135,6 +135,18 @@
       </form>
       {{end}}
     </div>
+
+    {{if .RecoveryStatus}}
+    <div class="card bg-base-100 shadow-sm border border-base-300 mt-3">
+      <div class="card-body p-4">
+        <h2 class="font-semibold text-sm text-base-content/70 mb-1 flex items-center gap-1.5">
+          <span class="iconify" data-icon="heroicons:arrow-path"></span>
+          Recovering
+        </h2>
+        <p class="text-xs text-base-content/60">{{.RecoveryStatus}}</p>
+      </div>
+    </div>
+    {{end}}
 
     {{if .CanRetryCurrentStep}}
     <div class="card bg-base-100 shadow-sm border border-base-300 mt-3">
@@ -280,7 +292,7 @@
         <div id="ticket-approval-mode" class="mb-4 text-sm">
           <span class="text-base-content/50">Approval mode</span>
           <span class="badge badge-sm ml-2 {{if .Ticket.ManualApproval}}badge-warning{{else}}badge-ghost{{end}}">
-            {{if .Ticket.ManualApproval}}manual: approve spec and plan{{else}}automatic: validation only{{end}}
+            {{if .Ticket.ManualApproval}}manual: approve spec and plan; blocked steps wait for you{{else}}automatic: validation plus supervisor recovery{{end}}
           </span>
           {{if and (not .Ticket.AssignedShem) (ne .Ticket.Phase "closed")}}
           <button type="button" class="btn btn-xs ml-2"
