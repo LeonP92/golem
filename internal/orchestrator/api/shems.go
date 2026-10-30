@@ -39,6 +39,8 @@ type Handlers struct {
 	// documented default, so a handler built without wiring still gives an
 	// answer that is right for almost every deployment.
 	GitHubTokenEnv string
+	// Wait holds the supervisor's configurable usage-limit wait caps.
+	Wait WaitPolicy
 }
 
 // NewHandlers creates a Handlers with the given dependencies.
@@ -52,6 +54,7 @@ var upgrader = websocket.Upgrader{
 
 // RegisterShemRoutes adds shem-facing routes to mux.
 func (h *Handlers) RegisterShemRoutes(mux *http.ServeMux) {
+	mux.Handle("GET /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.getShem)))
 	mux.Handle("PUT /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.register)))
 	mux.Handle("DELETE /api/shems/me", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.deregister)))
 	mux.Handle("GET /api/shems",
@@ -102,9 +105,32 @@ func (h *Handlers) deregister(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// withLimit attaches the typed usage-limit status the clock says is live.
+func withLimit(s db.Shem) db.Shem {
+	if until := s.UsageLimit(); until != nil {
+		s.Limit = &db.ShemLimit{Kind: "usage_limit", Backend: s.Backend, Until: *until}
+	}
+	return s
+}
+
+// getShem returns the calling shem's own row, including its live usage-limit
+// status. The API key hash never serializes (json:"-").
+func (h *Handlers) getShem(w http.ResponseWriter, r *http.Request) {
+	shem, err := h.shemRow(auth.ShemFromRequest(r).ID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(withLimit(shem)) //nolint:errcheck
+}
+
 func (h *Handlers) listShems(w http.ResponseWriter, r *http.Request) {
 	var shems []db.Shem
 	h.DB.Find(&shems)
+	for i, s := range shems {
+		shems[i] = withLimit(s)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(shems) //nolint:errcheck
 }

@@ -83,6 +83,7 @@ func newLaneStack(t *testing.T, remote string) *laneStack {
 	h := api.NewHandlers(gdb, ws.NewHub(), sse.NewBroker())
 	mux := http.NewServeMux()
 	h.RegisterHumanRoutes(mux)
+	h.RegisterShemRoutes(mux)
 	h.RegisterTicketRoutes(mux)
 	h.RegisterLogRoutes(mux)
 	h.RegisterEpicRoutes(mux)

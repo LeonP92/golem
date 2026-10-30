@@ -2,7 +2,12 @@
 <tr>
   <td class="font-medium">{{.Shem.Name}}</td>
   <td>
-    {{if eq .Shem.Status "online"}}
+    {{if .Shem.UsageLimit}}
+      <span class="badge badge-warning badge-sm gap-1">
+        <span class="iconify text-xs" data-icon="heroicons:clock"></span>
+        usage limit until {{.Shem.UsageLimit.UTC.Format "15:04 Jan 2"}} UTC
+      </span>
+    {{else if eq .Shem.Status "online"}}
       <span class="badge badge-success badge-sm gap-1">
         <span class="iconify text-xs" data-icon="heroicons:signal"></span>
         online

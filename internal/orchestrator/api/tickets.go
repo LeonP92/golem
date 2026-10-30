@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/leonp92/golem/internal/models"
@@ -135,6 +136,11 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 	if err != nil {
 		return nil, err
 	}
+	// Enforced here, not only in the worker: a stale or restarted client must
+	// not take work for a shem that is limited.
+	if until := shem.UsageLimit(); until != nil {
+		return nil, fmt.Errorf("shem %s is held by a usage limit until %s", shem.Name, until.UTC().Format(time.RFC3339))
+	}
 	var ticket db.Ticket
 	if err := h.DB.First(&ticket, "id = ?", ticketID).Error; err != nil {
 		return nil, fmt.Errorf("ticket not available")
@@ -149,7 +155,7 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 		Where("id = ? AND phase = 'unassigned' AND "+
 			"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 			epicGatePool+" AND "+
-			"(model_backend = '' OR model_backend = ?) AND models = ?", ticketID, shem.Backend, ticket.Models).
+			"(model_backend = '' OR model_backend = ?) AND (migrated_backend = '' OR migrated_backend = ?) AND models = ?", ticketID, shem.Backend, shem.Backend, ticket.Models).
 		// The phase change also ends any reaped record (Ticket.BeforeUpdate),
 		// so the shem it was reaped from cannot take it from the new owner.
 		Updates(map[string]any{"phase": "claimed", "assigned_shem": shemID})
@@ -168,8 +174,18 @@ func (h *Handlers) ClaimTicket(ticketID string, shemID uint) (*ClaimResponse, er
 func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/tickets",
 		auth.RequireSession(h.DB)(auth.RequireCSRF(rbac.Require(rbac.PermTicketCreate)(http.HandlerFunc(h.createTicket)))))
-	mux.Handle("GET /api/tickets",
-		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.listTickets))))
+	// One list endpoint for both readers: a browser session gets the full
+	// list; a shem (X-Shem-Name header) gets the same resource narrowed by a
+	// filter (listTickets rejects a shem's unfiltered call).
+	sessionList := auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.listTickets)))
+	shemList := auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.listTickets))
+	mux.Handle("GET /api/tickets", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Shem-Name") != "" {
+			shemList.ServeHTTP(w, r)
+			return
+		}
+		sessionList.ServeHTTP(w, r)
+	}))
 	mux.Handle("GET /api/tickets/available", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.availableTickets)))
 	mux.Handle("GET /api/tickets/resumable", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resumableTickets)))
 	mux.Handle("GET /api/tickets/assigned", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.assignedTickets)))
@@ -177,9 +193,14 @@ func (h *Handlers) RegisterTicketRoutes(mux *http.ServeMux) {
 	mux.Handle("GET /api/tickets/{id}",
 		auth.RequireSession(h.DB)(rbac.Require(rbac.PermTicketView)(http.HandlerFunc(h.getTicket))))
 	mux.Handle("POST /api/tickets/{id}/claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimTicket)))
+	// Deprecated alias for GET /api/tickets?attention=true, kept for shems
+	// built before the filter moved onto the list endpoint.
 	mux.Handle("GET /api/tickets/attention", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.attentionTickets)))
 	mux.Handle("POST /api/tickets/{id}/attention-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.claimAttention)))
 	mux.Handle("POST /api/tickets/{id}/attention-result", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.resolveAttention)))
+	mux.Handle("POST /api/backend-limit", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reportBackendLimit)))
+	mux.Handle("POST /api/tickets/{id}/migrate", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.migrateTicket)))
+	mux.Handle("POST /api/tickets/{id}/release", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.releaseTicket)))
 	mux.Handle("POST /api/tickets/{id}/revise-claim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reviseClaim)))
 	mux.Handle("POST /api/tickets/{id}/reclaim", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.reclaimTicket)))
 	mux.Handle("POST /api/tickets/{id}/tester-verdict", auth.RequireAPIKey(h.DB)(http.HandlerFunc(h.postTicketVerdict)))
@@ -342,9 +363,42 @@ func (h *Handlers) createTicket(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(toTicketResponse(ticket, names)) //nolint:errcheck
 }
 
+// listTickets is the one ticket read: a session gets every ticket; a shem
+// must narrow it with ?attention=true (its recoverable needs-attention
+// tickets due now) or ?migratable=true (the limit-waiting subset it may move
+// to the pool). Both filters keep the ownership and eligibility checks on
+// the server, and both return the same ticket shape as the full list.
 func (h *Handlers) listTickets(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	attention, migratable := q.Get("attention") == "true", q.Get("migratable") == "true"
+	if attention || migratable {
+		shem := auth.ShemFromRequest(r)
+		if shem == nil {
+			http.Error(w, "attention and migratable filters require shem credentials", http.StatusBadRequest)
+			return
+		}
+		if attention && migratable {
+			http.Error(w, "attention and migratable are mutually exclusive", http.StatusBadRequest)
+			return
+		}
+		filtered, err := h.supervisedTickets(shem.ID, migratable)
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		h.writeTicketList(w, filtered)
+		return
+	}
+	if auth.ShemFromRequest(r) != nil {
+		http.Error(w, "shem callers must pass a filter: ?attention=true or ?migratable=true", http.StatusBadRequest)
+		return
+	}
 	var tickets []db.Ticket
 	h.DB.Order("created_at desc").Find(&tickets)
+	h.writeTicketList(w, tickets)
+}
+
+func (h *Handlers) writeTicketList(w http.ResponseWriter, tickets []db.Ticket) {
 	names := db.CreatorNames(h.DB, tickets)
 	resp := make([]ticketResponse, len(tickets))
 	for i, t := range tickets {
@@ -386,11 +440,16 @@ func (h *Handlers) availableTickets(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	if shem.UsageLimit() != nil {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte("[]")) //nolint:errcheck // a held shem is offered nothing
+		return
+	}
 	repo := r.URL.Query().Get("repo")
 	query := h.DB.Where(epicWorkerGate, shem.ID).Where("phase = 'unassigned' AND "+
 		"(issue_number IS NULL OR (intake_approved AND approved_body_hash <> '' AND approved_body_hash = body_hash)) AND "+
 		epicGatePool+" AND "+
-		"(model_backend = '' OR model_backend = ?)", shem.Backend)
+		"(model_backend = '' OR model_backend = ?) AND (migrated_backend = '' OR migrated_backend = ?)", shem.Backend, shem.Backend)
 	if repo != "" {
 		query = query.Where("repo_remote = ?", urlnorm.Normalize(repo))
 	}

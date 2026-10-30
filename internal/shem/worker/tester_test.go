@@ -62,6 +62,42 @@ func TestTesterReceivesPinnedSourceAndAcceptanceEvidence(t *testing.T) {
 	}
 }
 
+// Siblings merged since the pin must not show up as the candidate's own work.
+func TestTesterDiffStartsAtLiveBaseMergeBase(t *testing.T) {
+	repo, _, _, _ := pushFixture(t)
+	base := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))
+	git(t, repo, "branch", "epic")
+	git(t, repo, "checkout", "-q", "-b", "cand")
+	git(t, repo, "checkout", "-q", "epic")
+	for _, f := range []string{"sib1.txt", "sib2.txt"} {
+		os.WriteFile(filepath.Join(repo, f), []byte(f+"\n"), 0600)
+		git(t, repo, "add", f)
+		git(t, repo, "commit", "-m", f)
+	}
+	git(t, repo, "checkout", "-q", "cand")
+	git(t, repo, "merge", "-q", "--no-edit", "epic")
+	os.WriteFile(filepath.Join(repo, "own.txt"), []byte("own\n"), 0600)
+	git(t, repo, "add", "own.txt")
+	git(t, repo, "commit", "-m", "own")
+	head := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))
+	ticketDir := t.TempDir()
+	st := ticket.State{ID: "c", BranchBaseSHA: base}
+	if err := st.Save(ticketDir); err != nil {
+		t.Fatal(err)
+	}
+	claim := &client.ClaimResponse{BaseBranch: "epic", Epic: &client.EpicClaim{}}
+	prompt, err := buildTesterPrompt(context.Background(), "r", claim, repo, ticketDir, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(prompt, "+own") || strings.Contains(prompt, "sib1.txt") {
+		t.Errorf("tester diff is not the candidate's own change:\n%s", prompt)
+	}
+	if !strings.Contains(prompt, "Base SHA: "+base) {
+		t.Error("verdict base SHA must stay the pinned one")
+	}
+}
+
 func TestRecoveryKeepsEpicGateState(t *testing.T) {
 	repo, _, _, _ := pushFixture(t)
 	base := strings.TrimSpace(git(t, repo, "rev-parse", "HEAD"))

@@ -128,7 +128,7 @@ func TestAttentionCapPersistsAcrossChangingFailures(t *testing.T) {
 func TestAttentionNeverTakesHumanOrLegacyParks(t *testing.T) {
 	f := newRecoveryHarness(t)
 	f.h.DB.Model(&f.ticket).Updates(db.PhaseUpdates("needs-attention"))
-	out := f.request(t, "GET", "/api/tickets/attention", nil)
+	out := f.request(t, "GET", "/api/tickets?attention=true", nil)
 	if out.Code != 200 || strings.TrimSpace(out.Body.String()) != "[]" {
 		t.Fatalf("legacy park listed: %s", out.Body.String())
 	}
@@ -284,4 +284,85 @@ func TestAttentionDatabaseErrorsAreNotConflicts(t *testing.T) {
 			})
 		}
 	}
+}
+
+// The deprecated alias keeps answering shems built before the read moved onto
+// the list endpoint, in its original compact shape.
+func TestAttentionAliasStillAnswers(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.fail(t, "API Error: 503 overloaded")
+	out := f.request(t, "GET", "/api/tickets/attention", nil)
+	if out.Code != 200 || !strings.Contains(out.Body.String(), `"ticket_id"`) {
+		t.Fatalf("alias: %d %s", out.Code, out.Body.String())
+	}
+}
+
+// The list endpoint keeps its two readers apart: a shem must narrow its read
+// with a filter, the filters are mutually exclusive, and a browser session is
+// unaffected by them.
+func TestListFiltersGuardShemReads(t *testing.T) {
+	f := newRecoveryHarness(t)
+	if out := f.request(t, "GET", "/api/tickets", nil); out.Code != 400 {
+		t.Fatalf("unfiltered shem list: %d", out.Code)
+	}
+	if out := f.request(t, "GET", "/api/tickets?attention=true&migratable=true", nil); out.Code != 400 {
+		t.Fatalf("both filters: %d", out.Code)
+	}
+	req := httptest.NewRequest("GET", "/api/tickets?attention=true", http.NoBody)
+	out := httptest.NewRecorder()
+	f.mux.ServeHTTP(out, req)
+	if out.Code != http.StatusFound {
+		t.Fatalf("no credentials: %d", out.Code)
+	}
+}
+
+// X-Shem-Name only selects the auth path; identity still comes from the
+// verified key. A crafted header cannot read another shem's filters or row.
+func TestListFiltersAuthenticateTheNamedShem(t *testing.T) {
+	f := newRecoveryHarness(t)
+	seedShem(t, f.h, "other-shem", "other-key")
+
+	// The recover shem's key with another shem's name: no ticket, no row.
+	req := httptest.NewRequest("GET", "/api/tickets?attention=true", http.NoBody)
+	req.Header.Set("Authorization", "Bearer recover-key")
+	req.Header.Set("X-Shem-Name", "other-shem")
+	out := httptest.NewRecorder()
+	f.mux.ServeHTTP(out, req)
+	if out.Code != http.StatusUnauthorized {
+		t.Fatalf("wrong-key header accepted: %d", out.Code)
+	}
+
+	// A shem header with no key at all is the API-key path and fails closed;
+	// it never falls through to the session list.
+	req = httptest.NewRequest("GET", "/api/tickets?attention=true", http.NoBody)
+	req.Header.Set("X-Shem-Name", "other-shem")
+	out = httptest.NewRecorder()
+	f.mux.ServeHTTP(out, req)
+	if out.Code != http.StatusUnauthorized {
+		t.Fatalf("keyless header accepted: %d", out.Code)
+	}
+
+	// Each shem's filters see only its own tickets.
+	f.fail(t, "API Error: 503 overloaded")
+	asOther := func(path string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", path, http.NoBody)
+		req.Header.Set("Authorization", "Bearer other-key")
+		req.Header.Set("X-Shem-Name", "other-shem")
+		rec := httptest.NewRecorder()
+		f.mux.ServeHTTP(rec, req)
+		return rec
+	}
+	if out := asOther("/api/tickets?attention=true"); strings.Contains(out.Body.String(), f.ticket.ID) {
+		t.Fatalf("attention filter leaked another shem's ticket: %s", out.Body.String())
+	}
+	if out := asOther("/api/tickets?migratable=true"); strings.Contains(out.Body.String(), f.ticket.ID) {
+		t.Fatalf("migratable filter leaked another shem's ticket: %s", out.Body.String())
+	}
+	if out := asOther("/api/shems/me"); out.Code != 200 || strings.Contains(out.Body.String(), `"recover"`) {
+		t.Fatalf("me returned the wrong row: %d %s", out.Code, out.Body.String())
+	}
+	if got := f.attentionList(t); len(got) != 1 || got[0].TicketID != f.ticket.ID {
+		t.Fatalf("owner's filter: %+v", got)
+	}
+
 }

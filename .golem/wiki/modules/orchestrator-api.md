@@ -9,13 +9,16 @@ Every "(session auth)" route below is additionally wrapped in `rbac.Require(...)
 - `Handlers` struct holds `*gorm.DB`, `*ws.Hub`, and `*sse.Broker`.
 - `NewHandlers(gdb, hub, broker)` constructs a Handlers.
 - `RegisterShemRoutes(mux)` wires:
+  - `GET /api/shems/me` (API-key auth) — the calling shem's own row, including the computed `limit` status
+  - `POST /api/backend-limit` (API-key auth) — the shem reports a usage limit it saw; later-only, capped at `usage_limit_max`
   - `PUT /api/shems/me` (API-key auth) — idempotent self-update: sets shem status to online, normalizes repos, returns `{shem_id}`. PUT because a shem restart safely resends the same body.
   - `DELETE /api/shems/me` (API-key auth) — marks shem offline and unregisters from WS hub
   - `GET /api/shems` (session auth) — lists all shems
   - `GET /api/ws` (API-key auth) — WebSocket upgrade, registers conn in hub
 - `RegisterTicketRoutes(mux)` wires:
   - `POST /api/tickets` (session auth) — creates a ticket
-  - `GET /api/tickets` (session auth) — lists tickets
+  - `GET /api/tickets` — lists tickets. Session auth: the full list. API-key auth (dispatched on the `X-Shem-Name` header): must pass `?attention=true` (the caller's recoverable needs-attention tickets due now) or `?migratable=true` (the limit-waiting subset it may move), which keep ownership and eligibility checks on the server; an unfiltered shem call is rejected. `GET /api/tickets/attention` is a deprecated alias of the attention filter, kept for older shems.
+  - `POST /api/tickets/{id}/migrate` and `POST /api/tickets/{id}/release` (API-key auth) — hand a limit-waiting ticket to the pool, or give back a claimed unstarted one (see orchestrator-attention)
   - `GET /api/tickets/{id}` (session auth) — ticket detail + log entries
   - `GET /api/tickets/available?repo=` (API-key auth) — lists unassigned tickets
   - `POST /api/tickets/{id}/claim` (API-key auth) — atomic claim via `ClaimTicket`

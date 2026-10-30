@@ -749,6 +749,14 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	data["Ticket"] = ticket
 	data["CanRetryCurrentStep"] = ticket.Phase == "needs-attention" && ticket.CheckpointPhase != nil &&
 		strings.TrimSpace(*ticket.CheckpointPhase) != "" && ticket.CheckpointSHA != nil && strings.TrimSpace(*ticket.CheckpointSHA) != ""
+	if ticket.DisplayPhase() == "recovering" {
+		what := "a transient fault"
+		if ticket.AttentionWaitKind == "usage_limit" {
+			what = "a usage limit"
+		}
+		data["RecoveryStatus"] = fmt.Sprintf("The supervisor is waiting out %s - resumes %s. It escalates to you only if the fault outlives the wait.",
+			what, ticket.AttentionWaitUntil.Local().Format("15:04"))
+	}
 	data["ResolvedModels"] = inStageOrder(ticketModels(fleet, ticket, assigned))
 	data["Selections"] = ticket.ModelSelections()
 	picker := modelPicker(fleet, pickerBackend, ticket.ModelSelections())

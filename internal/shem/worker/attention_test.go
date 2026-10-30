@@ -220,7 +220,9 @@ func TestAttentionWorkerEndToEnd(t *testing.T) {
 			if (decisions == 1) != tc.wantDecision {
 				t.Fatalf("DECISION entries: %d", decisions)
 			}
-			if tc.wantRuns == 0 && (fresh.Phase != "needs-attention" || fresh.AttentionEligible) {
+			// A usage limit is no longer parked to a human: it waits for the reset.
+			waiting := tc.name == "usage stop" && fresh.AttentionWaitKind == "usage_limit" && fresh.AttentionWaitUntil != nil
+			if tc.wantRuns == 0 && !waiting && (fresh.Phase != "needs-attention" || fresh.AttentionEligible) {
 				t.Fatalf("unsafe route: %+v", fresh)
 			}
 			if tc.wantRuns > 0 {

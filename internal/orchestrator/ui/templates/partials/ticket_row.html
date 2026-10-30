@@ -29,7 +29,7 @@
     <div class="text-xs text-base-content/40 font-mono truncate mt-0.5" title="{{.Ticket.RepoRemote}}">{{.Ticket.RepoRemote}}</div>
   </td>
   <td>
-    <span class="badge badge-sm phase-{{.Ticket.Phase}} rounded font-medium">{{template "phase_label" .Ticket.Phase}}</span>
+    <span class="badge badge-sm phase-{{.Ticket.DisplayPhase}} rounded font-medium">{{template "phase_label" .Ticket.DisplayPhase}}</span>
     {{if .WaitingFor}}
     <span class="badge badge-sm badge-warning rounded font-medium mt-0.5" title="{{.WaitingFor}}">waiting</span>
     {{end}}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -12,6 +13,19 @@ import (
 	"github.com/leonp92/golem/internal/askwait"
 	"github.com/leonp92/golem/internal/blog"
 )
+
+// ticketLogPath is the ticket's log in the primary checkout. Run inside a
+// ticket worktree, a relative path would write a private copy the reviewer
+// never reads, so a linked worktree resolves to the repository it belongs to.
+func ticketLogPath(repo, id string) string {
+	out, err := exec.Command("git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir").Output()
+	if err == nil {
+		if lines := strings.Split(strings.TrimSpace(string(out)), "\n"); len(lines) == 2 && lines[0] != lines[1] { // not Fields: a path may hold spaces
+			repo = filepath.Dir(lines[0])
+		}
+	}
+	return filepath.Join(repo, ".golem", "tickets", id, "log.jsonl")
+}
 
 var emittableTypes = map[string]blog.EntryType{
 	"STATUS":   blog.TypeStatus,
@@ -45,7 +59,7 @@ func LogEmit(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	logPath := filepath.Join(*repo, ".golem", "tickets", *id, "log.jsonl")
+	logPath := ticketLogPath(*repo, *id)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		fmt.Fprintf(stderr, "creating ticket dir: %v\n", err)
 		return 1
@@ -90,7 +104,7 @@ func Ask(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	logPath := filepath.Join(*repo, ".golem", "tickets", *id, "log.jsonl")
+	logPath := ticketLogPath(*repo, *id)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		fmt.Fprintf(stderr, "creating ticket dir: %v\n", err)
 		return 1
@@ -161,7 +175,7 @@ func Answer(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	logPath := filepath.Join(*repo, ".golem", "tickets", *id, "log.jsonl")
+	logPath := ticketLogPath(*repo, *id)
 	if err := os.MkdirAll(filepath.Dir(logPath), 0o755); err != nil {
 		fmt.Fprintf(stderr, "creating ticket dir: %v\n", err)
 		return 1

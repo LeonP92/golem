@@ -126,7 +126,7 @@ func buildTesterPrompt(ctx context.Context, role string, claim *client.ClaimResp
 	if state.BranchBaseSHA == "" {
 		return "", fmt.Errorf("candidate has no pinned base SHA")
 	}
-	cmd := asAgent(exec.CommandContext(ctx, "git", "diff", state.BranchBaseSHA+"..."+head))
+	cmd := asAgent(exec.CommandContext(ctx, "git", "diff", testerDiffBase(ctx, worktree, claim.BaseBranch, head, state.BranchBaseSHA)+"..."+head))
 	cmd.Dir = worktree
 	diff, err := cmd.Output()
 	if err != nil {
@@ -197,4 +197,21 @@ func acceptanceEvidence(ctx context.Context, worktree string, cmds []string) str
 		fmt.Fprintf(&b, "$ %s\nexit=%d network_isolated=%t\n%s\n\n", c, exit, isolated, out)
 	}
 	return b.String()
+}
+
+// testerDiffBase is where the candidate diff starts: the merge-base with the
+// live base branch, so siblings merged since the pin do not appear as this
+// candidate's work. The pinned SHA stays the verdict's base and the fallback.
+func testerDiffBase(ctx context.Context, worktree, baseBranch, head, pinned string) string {
+	if baseBranch == "" {
+		return pinned
+	}
+	for _, ref := range []string{"origin/" + baseBranch, baseBranch} {
+		cmd := asAgent(exec.CommandContext(ctx, "git", "merge-base", ref, head))
+		cmd.Dir = worktree
+		if out, err := cmd.Output(); err == nil && strings.TrimSpace(string(out)) != "" {
+			return strings.TrimSpace(string(out))
+		}
+	}
+	return pinned
 }

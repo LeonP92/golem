@@ -44,3 +44,12 @@ github:
 # logs violations without blocking so you can check safely first.
 csp:
   mode: enforce
+
+# Supervisor waits. On a ticket with automatic movement ("Require my approval"
+# off), a usage limit pauses the ticket (and its backend's shems) until the
+# reset time the backend reported, instead of burning the ticket's attempts.
+# All values are optional; these are the defaults.
+# supervisor:
+#   usage_limit_max_wait: 8h        # longest single wait for a parsed reset
+#   limit_backoff: [15m, 30m, 1h, 2h]  # used when no reset time can be parsed
+#   limit_backoff_max: 6h           # total backoff before a human is asked

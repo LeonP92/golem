@@ -655,3 +655,28 @@ func TestPendingApproval_NoneReturnsEmpty(t *testing.T) {
 		t.Errorf("expected empty array, got %d results", len(results))
 	}
 }
+
+func TestHumanRetryAndRequeueResetAttentionBudget(t *testing.T) {
+	for _, action := range []string{"retry-current-step", "requeue"} {
+		h, mux, cookie := setupActionTest(t)
+		shemID := uint(99)
+		phase, sha := "needs-attention", "abc123"
+		wait := time.Now().Add(time.Hour)
+		ticket := db.Ticket{RepoRemote: "r", Branch: "b", Description: "d", Phase: "needs-attention",
+			AssignedShem: &shemID, RetryPhase: "implement", CheckpointPhase: &phase, CheckpointSHA: &sha,
+			AttentionAttempts: 3, AttentionRepeats: 2, AttentionFingerprint: "f", AttentionWaitUntil: &wait,
+			AttentionWaitFingerprint: "f", AttentionWaitKind: "usage_limit"}
+		if err := h.DB.Create(&ticket).Error; err != nil {
+			t.Fatal(err)
+		}
+		if w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": action}); w.Code != http.StatusNoContent {
+			t.Fatalf("%s: %d %s", action, w.Code, w.Body.String())
+		}
+		var got db.Ticket
+		h.DB.First(&got, "id = ?", ticket.ID)
+		if got.AttentionAttempts != 0 || got.AttentionRepeats != 0 || got.AttentionFingerprint != "" ||
+			got.AttentionWaitUntil != nil || got.AttentionWaitKind != "" {
+			t.Errorf("%s did not reset the automatic budget: %+v", action, got)
+		}
+	}
+}

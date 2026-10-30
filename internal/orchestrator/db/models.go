@@ -46,6 +46,29 @@ type Shem struct {
 	Backend string `gorm:"not null;default:''" json:"backend"`
 	// Catalog is the model catalog this shem reported, as JSON.
 	Catalog string `gorm:"not null;default:'{}'" json:"catalog"`
+	// LimitedUntil is when a usage limit this shem hit lifts. It is the
+	// shem's own, not its backend's: nothing identifies which account a shem
+	// signs in with, so a sibling shem on the same backend is not assumed to
+	// share the limit.
+	LimitedUntil *time.Time `json:"limited_until,omitempty"`
+	// Limit is LimitedUntil as a typed status, computed per request so an
+	// expired limit disappears with the clock. Not stored.
+	Limit *ShemLimit `gorm:"-" json:"limit,omitempty"`
+}
+
+// ShemLimit says why a shem takes no new work. Only usage limits exist.
+type ShemLimit struct {
+	Kind    string    `json:"kind"`
+	Backend string    `json:"backend"`
+	Until   time.Time `json:"until"`
+}
+
+// UsageLimit is when the current usage limit lifts, or nil when there is none.
+func (s Shem) UsageLimit() *time.Time {
+	if s.LimitedUntil != nil && s.LimitedUntil.After(time.Now()) {
+		return s.LimitedUntil
+	}
+	return nil
 }
 
 // Ticket represents a work ticket assigned to a Shem.
@@ -73,8 +96,26 @@ type Ticket struct {
 	AttentionRepeats     int        `gorm:"not null;default:0" json:"-"`
 	AttentionToken       string     `gorm:"not null;default:''" json:"-"`
 	AttentionLeaseUntil  *time.Time `json:"-"`
-	IssueNumber          *int       `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
-	IssueURL             string     `json:"issue_url"`
+	// Supervisor wait state. A transient fault (rate limit, timeout, 503)
+	// parks the ticket in a wait instead of the human queue: WaitUntil hides
+	// it until the next check is due, WaitFingerprint binds the incident to
+	// one normalized failure, WaitChecks and WaitDeadline bound the incident
+	// (transient: 5 checks within 30 minutes; usage limit: until the reset). Waits do not spend AttentionAttempts.
+	AttentionWaitUntil       *time.Time `json:"-"`
+	AttentionWaitChecks      int        `gorm:"not null;default:0" json:"-"`
+	AttentionWaitDeadline    *time.Time `json:"-"`
+	AttentionWaitFingerprint string     `gorm:"not null;default:''" json:"-"`
+	// AttentionWaitKind is "transient" or "usage_limit"; a usage_limit wait's
+	// end is also when its backend is usable again.
+	AttentionWaitKind string `gorm:"not null;default:''" json:"-"`
+	// MigratedBackend is the backend of the shem that moved this ticket off
+	// itself during a usage limit; only a shem of that backend may claim it,
+	// so a migration never changes provider. Migrations bounds automatic
+	// moves to one until a human retry or requeue.
+	MigratedBackend string `gorm:"not null;default:''" json:"-"`
+	Migrations      int    `gorm:"not null;default:0" json:"-"`
+	IssueNumber     *int   `gorm:"uniqueIndex:idx_repo_issue" json:"issue_number"`
+	IssueURL        string `json:"issue_url"`
 	// IntakeApproved records that a human released this externally-sourced
 	// ticket from pending-approval via actionStart — the ONLY writer of this
 	// column. It is provenance, not phase: no sequence of phase transitions
@@ -227,6 +268,23 @@ func PhaseUpdates(phase string) map[string]any {
 		updates["retry_phase"] = ""
 	}
 	return updates
+}
+
+// DisplayPhase is the phase the UI badges. A needs-attention ticket whose
+// supervisor wait has not elapsed yet is recovering, not waiting on a human,
+// and reads that way everywhere a badge renders.
+func (t Ticket) DisplayPhase() string {
+	if t.Phase == "needs-attention" && t.AttentionWaitUntil != nil && t.AttentionWaitUntil.After(time.Now()) {
+		return "recovering"
+	}
+	return t.Phase
+}
+
+// WaitIncidentOpen reports whether the supervisor wait incident bound to the
+// current failure fingerprint is still inside its deadline.
+func (t Ticket) WaitIncidentOpen() bool {
+	return t.AttentionWaitFingerprint != "" && t.AttentionWaitDeadline != nil &&
+		t.AttentionWaitDeadline.After(time.Now()) && t.AttentionWaitFingerprint == t.AttentionFingerprint
 }
 
 func (s Shem) RepoList() []string {

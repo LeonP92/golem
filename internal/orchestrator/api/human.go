@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"strconv"
 	"strings"
@@ -284,6 +285,7 @@ func (h *Handlers) actionRequeue(w http.ResponseWriter, r *http.Request, id stri
 			"checkpoint_sha":   nil,
 			"retry_phase":      "",
 		}
+		maps.Copy(updates, resetAttention())
 		for k, v := range cols {
 			updates[k] = v
 		}
@@ -360,6 +362,7 @@ func (h *Handlers) actionRetryCurrentStep(w http.ResponseWriter, r *http.Request
 	var assigned *uint
 	if err := h.DB.Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{"phase": "unassigned", "assigned_shem": nil, "retry_phase": phase}
+		maps.Copy(updates, resetAttention())
 		for k, v := range cols {
 			updates[k] = v
 		}

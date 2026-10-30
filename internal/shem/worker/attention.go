@@ -188,9 +188,15 @@ func (w *Worker) pollAttention() {
 }
 
 func (w *Worker) recoverAttention(tickets []client.AttentionTicket) {
+	held := w.held()
 	for _, t := range tickets {
 		enabled, max := w.cfg.AttentionPolicy(t.RepoRemote)
 		if !enabled {
+			continue
+		}
+		// A held backend cannot run a diagnosis. Limit and transient waits need
+		// no model call, so those still proceed.
+		if held && classifyFailure(t.Reason) == "" {
 			continue
 		}
 		go w.tryAttention(t.TicketID, t.RepoRemote, max)
@@ -221,8 +227,22 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		return
 	}
 	result := client.AttentionResult{Token: leased.Token, Reason: "Human attention required: " + leased.Reason}
-	var decision *Decision
-	if !humanOnlyFailure(leased.Reason) {
+	kind := classifyFailure(leased.Reason)
+	switch {
+	case leased.WaitResume:
+		// The wait elapsed; the failure evidence is stale by design. Resume
+		// the failed step without spending a diagnosis on it.
+		result.Retry = true
+		result.Reason = "Resuming after the supervisor's wait."
+		result.Feedback = "The earlier stop was a recognized transient or usage-limit fault and its wait elapsed; retry the failed step as saved."
+	case kind != "":
+		result.Wait, result.Reason = kind, leased.Reason
+		if kind == kindUsageLimit {
+			if at, ok := parseLimitReset(leased.Reason, w.breaker.now()); ok {
+				result.ResetAt = &at
+			}
+		}
+	case !humanOnlyFailure(leased.Reason):
 		// Diagnosis has a shorter deadline than its server-side dispatch lease.
 		diagnoseCtx, done := context.WithTimeout(ctx, 8*time.Minute)
 		d, err := w.diagnoserFor(leased.Claim).Diagnose(diagnoseCtx, leased.Claim, leased.Reason,
@@ -238,7 +258,9 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 				d.Route = "human"
 			}
 			if d.Route == "decide" {
-				decision = d.Decision
+				result.Decision = &client.AttentionDecision{
+					Question: d.Decision.Question, Choice: d.Decision.Choice, Reason: d.Decision.Reason, Basis: d.Decision.Basis,
+				}
 			}
 			result.Retry = d.Route != "human"
 			result.Reason, result.Feedback = d.Reason, d.Feedback
@@ -248,21 +270,28 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		return
 	}
 	next, err := w.client.ResolveAttention(id, result)
+	if errors.Is(err, client.ErrNotAvailable) && result.Wait != "" {
+		// The server refused the wait budget. Escalate once; the park is the
+		// single deduplicated ask for this issue.
+		next, err = w.client.ResolveAttention(id, client.AttentionResult{Token: leased.Token,
+			Reason: "Fault persisted beyond the supervisor's wait budget; human attention required.\n\n" + leased.Reason})
+	}
 	if err != nil {
-		log.Printf("worker: attention result %s: %v", id, err)
+		if !errors.Is(err, client.ErrNotAvailable) {
+			log.Printf("worker: attention result %s: %v", id, err)
+		}
 		return
 	}
-	if decision != nil {
-		msg := fmt.Sprintf("%s -> %s: %s (basis: %s)", decision.Question, decision.Choice, decision.Reason, decision.Basis)
-		if _, err := w.client.PostLog(id, client.LogPayload{EntryType: "DECISION", FromRole: "diagnoser", Message: msg}); err != nil {
-			log.Printf("worker: record decision %s: %v", id, err)
-		}
+	if result.Wait == kindUsageLimit {
+		w.syncLimit()
 	}
 	if next != nil && w.executor != nil {
 		worktree := filepath.Join(repoLocalPath(w.cfg, remote), ".golem", "tickets", id, "worktree")
 		before, _ := codeProgress(ctx, worktree)
 		if err := w.executor.RunTicket(ctx, w.cfg, w.client, next); err != nil && ctx.Err() == nil {
-			if next.RetryPhase == "implement" || next.RetryPhase == "revising" {
+			// A resumed wait that stops again unchanged is the same fault, not a
+			// failed repair: the wait budget decides, not code progress.
+			if !leased.WaitResume && (next.RetryPhase == "implement" || next.RetryPhase == "revising") {
 				after, checkErr := codeProgress(ctx, worktree)
 				if checkErr == nil && before != "" && before == after {
 					err = fmt.Errorf("no code progress after automatic repair; human attention required: %w", err)

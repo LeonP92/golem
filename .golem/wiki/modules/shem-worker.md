@@ -119,6 +119,33 @@ unchanged failed code repairs stop, while spec/plan repair can progress without
 a commit. Worker output tails preserve usage/auth messages in the failure.
 Server fencing, counters and eligibility are in `api/attention.go`.
 
+Supervisor routes run before diagnosis: a due `wait_resume` claim retries the
+saved step without a new diagnosis; `classifyFailure` (limits.go) sends a usage
+limit or transient fault to a server-owned `wait` (a usage limit carries the
+reset time `parseLimitReset` parsed), and a refused wait escalates once to a
+human park. Tickets with `manual_approval` never enter these routes.
+
+Classification is by wording, never by backend name, and reads only the last
+4 KB of a reason (the agent's own error comes last; a reviewer's diff or gate
+output above it may mention limits as text). A "review gate did not pass"
+reason is a verdict, so only its first line counts. A usage limit is a
+usage/session/weekly/daily/monthly/hourly/plan limit; a transient fault is a
+rate limit, overload, gateway or connection fault, or a status code written as
+one (`status 503`), never a bare number or "timeout" (`TestTimeout`,
+`file.go:429`). `parseLimitReset` reads the last limit message and tries, in
+order: a delay ("in 3 hours 20 minutes", "retry after 90 seconds"), an ISO
+timestamp, a dated clock time ("Nov 4th, 2026 12:39 PM"; no year means the next
+such date) and a bare 12- or 24-hour clock time (its next occurrence). A
+parenthesised zone applies to the time before it, else the shem's zone; an
+unknown zone or no time reports false and the server backs off instead.
+
+The limit breaker (`limitBreaker`, per backend, injectable clock) holds the
+shem when its backend is limited: no new claims, resumes, revisions or
+diagnoses, while waits and `wait_resume` still run. It trips locally when a
+phase fails with a usage limit, and `syncLimit` re-learns it from
+`GET /api/shems/me` each poll, so it survives a restart. A ticket claimed as
+the breaker tripped is released unstarted.
+
 Startup and steady-state attention polling share `pollAttention`; failed reads
 are logged rather than silently treated as an empty queue.
 
@@ -153,3 +180,5 @@ after setup. A failed setup or environment check carries `evidence.EnvironmentMa
 `humanOnlyFailure` treats as a stop for automatic repair; `finishWorkPhase` keeps
 the command output after the marker. Prompts and phase output are redacted by the
 agentrunner adapters only; the client redacts what it posts.
+
+`migrateWaiting` (migrate.go) runs from the poll loop while the shem is held, with no model call. For each ticket from `Migratable()` (skipping `no_push`, `local://` and a ticket with a running agent, at most one attempt per ticket per 5 minutes) it: requires HEAD to be the checkpoint or a descendant of it; scans everything since the checkpoint with the evidence package's rules (`evidence.SensitivePath`, and `evidence.Clean` on the added lines, so credential assignments and private keys refuse; binary files refuse because they cannot be scanned); if the worktree has uncommitted work, commits it as one capture commit built in a private index (`git add -A`, so `.gitignore` still excludes files, no hooks, and a refusal leaves the user's own staging untouched); asks the server again whether the ticket is still migratable right before pushing; pushes HEAD to the ticket branch without force, through the Golem-owned mirror like `pushTicketBranch`, only when the remote tip is an ancestor of HEAD; confirms the remote holds HEAD; then calls `MigrateTicket` with the checkpoint it saw and the captured commit. Any failure leaves the ticket waiting here. A capture commit left by a crash is pushed on the next attempt. The capture does not advance the phase, so nothing reads as review-complete. Git runs with the agent environment (no push token); only the mirror push carries the credential. Residual risk: the scan is pattern-based, so a secret that matches no pattern and sits in a non-sensitive file name is not caught.
