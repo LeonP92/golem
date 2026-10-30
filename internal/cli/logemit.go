@@ -20,7 +20,7 @@ import (
 func ticketLogPath(repo, id string) string {
 	out, err := exec.Command("git", "-C", repo, "rev-parse", "--path-format=absolute", "--git-common-dir", "--absolute-git-dir").Output()
 	if err == nil {
-		if lines := strings.Fields(string(out)); len(lines) == 2 && lines[0] != lines[1] {
+		if lines := strings.Split(strings.TrimSpace(string(out)), "\n"); len(lines) == 2 && lines[0] != lines[1] { // not Fields: a path may hold spaces
 			repo = filepath.Dir(lines[0])
 		}
 	}

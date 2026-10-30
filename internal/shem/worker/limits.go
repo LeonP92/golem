@@ -22,13 +22,18 @@ const (
 // mention limits or status codes as plain text.
 const failureTail = 4 << 10
 
+// maxLocalHold caps how long a locally parsed reset holds the shem. It mirrors
+// the server default for supervisor.usage_limit_max, and syncLimit re-learns the
+// server's own value on the next poll.
+const maxLocalHold = 8 * time.Hour
+
 var (
 	// Quota exhaustion that clears by itself, in any agent's wording. Plain
 	// "quota exhausted" or billing text is not matched: no wait fixes those.
-	limitRE = regexp.MustCompile(`(?i)\b(?:usage|session|weekly|daily|monthly|hourly|plan)[ _]limit\b|\bhit your limit\b`)
+	limitRE = regexp.MustCompile(`(?i)\b(?:usage|session|weekly|daily|monthly|hourly|plan)[ _]limit\b|\bhit your limit\b|\b\d+[- ]?(?:hours?|hrs?|days?|weeks?)[- ]limit\b`)
 	// Faults that pass by themselves. A bare "timeout" or number is not enough
 	// (TestTimeout, file.go:429): a status code must read as one.
-	transientRE = regexp.MustCompile(`(?i)\brate[ _]limit|too many requests|overloaded|bad gateway|service unavailable|gateway time-?out|temporarily unavailable|connection (?:reset|refused)|network error|(?:connection|request|read|dial|tls|i/o) time(?:d )?-?out|\b(?:http|status|error|code)\b[ :=]*(?:429|500|502|503|504|529)\b`)
+	transientRE = regexp.MustCompile(`(?i)\brate[ _]limit(?:ed|ing|s)?\b|too many requests|overloaded|bad gateway|service unavailable|internal server error|gateway time-?out|temporarily unavailable|connection (?:reset|refused)|econnreset|socket hang up|network error|(?:connection|request|read|dial|tls|i/o) time(?:d )?-?out|\b(?:http|status|error|code)\b[ :=]*(?:429|502|503|504|529)\b`)
 )
 
 // classifyFailure returns "usage_limit", "transient" or "" (diagnose as usual).
@@ -55,7 +60,7 @@ func classifyFailure(reason string) string {
 // The ways an agent says when it is usable again, tried in this order. They
 // are shaped by the wording of the time, never by the agent's name.
 var (
-	clockPat  = `(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\.?)?`
+	clockPat  = `(\d{1,2})(?::(\d{2}))?\s*([ap]\.?m\b\.?)?`
 	zonePat   = `(?:\s*\(([^)]+)\))?`
 	delayRE   = regexp.MustCompile(`(?i)\b(?:in|after|retry[ -]after:?)\s*((?:\d+\s*(?:days?|d|hours?|hrs?|h|minutes?|mins?|m|seconds?|secs?|s)\b[\s,]*(?:and\s+)?)+)`)
 	delayUnit = regexp.MustCompile(`(?i)(\d+)\s*([dhms])`)

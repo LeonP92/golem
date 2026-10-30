@@ -26,6 +26,10 @@ func TestClassifyFailure(t *testing.T) {
 		"bare limit":           {"You've hit your limit", kindUsageLimit},
 		"other agent's limit":  {"Weekly limit reached; try again in 2 days", kindUsageLimit},
 		"limit after a dump":   {stderrDump + "ERROR: you hit your usage limit", kindUsageLimit},
+		"five-hour limit":      {"Claude 5-hour limit reached, try again later", kindUsageLimit},
+		"econnreset":           {"read tcp: ECONNRESET", kindTransient},
+		"rate limiter in code": {"added a rate limiter; FAIL TestRateLimiter", ""},
+		"status 500 in a test": {"got status 500, want 200", ""},
 		"overloaded":           {"API Error: 503 overloaded", kindTransient},
 		"too many":             {"429 Too Many Requests", kindTransient},
 		"reset":                {"connection reset by peer", kindTransient},
@@ -79,6 +83,7 @@ func TestParseLimitReset(t *testing.T) {
 		{"last limit message wins", "quoted: usage limit try again at 1:00 AM\nERROR: usage limit, try again at 8:00 PM", at(ny, 29, 20, 0), true},
 		{"time already past", "usage limit until 2026-10-01T00:00:00Z", time.Time{}, false},
 		{"bare number is not a time", "usage limit hit after 3 attempts at 7", time.Time{}, false},
+		{"am inside a word is not am", "session limit, resets at 3 amid the outage", time.Time{}, false},
 		{"limit without a time", "You've hit your usage limit", time.Time{}, false},
 		{"garbage", "something broke \x00 \u2603 try again later", time.Time{}, false},
 		{"empty", "", time.Time{}, false},
@@ -450,6 +455,19 @@ func TestMigrateWaitingCapturesPushesAndMoves(t *testing.T) {
 			os.WriteFile(filepath.Join(e.wt, ".env"), []byte("KEY=1\n"), 0644)
 			git(t, e.wt, "add", "-f", ".env")
 			git(t, e.wt, "commit", "-m", "oops")
+		}, false, false, func(t *testing.T, e *env) {
+			if heads := git(t, e.remote, "branch", "--list"); strings.TrimSpace(heads) != "" {
+				t.Errorf("something was pushed: %q", heads)
+			}
+		}},
+		{"secret committed before the checkpoint is not pushed", func(t *testing.T, e *env) {
+			base := strings.TrimSpace(git(t, e.wt, "rev-parse", "HEAD"))
+			os.WriteFile(filepath.Join(filepath.Dir(e.wt), "state.json"), []byte(`{"branch_base_sha":"`+base+`"}`), 0644)
+			os.WriteFile(filepath.Join(e.wt, ".env"), []byte("KEY=1\n"), 0644)
+			git(t, e.wt, "add", "-f", ".env")
+			git(t, e.wt, "commit", "-m", "oops")
+			head := strings.TrimSpace(git(t, e.wt, "rev-parse", "HEAD"))
+			e.stack.gdb.Model(&db.Ticket{}).Where("id = ?", e.id).Update("checkpoint_sha", head) // the checkpoint moved past the secret
 		}, false, false, func(t *testing.T, e *env) {
 			if heads := git(t, e.remote, "branch", "--list"); strings.TrimSpace(heads) != "" {
 				t.Errorf("something was pushed: %q", heads)

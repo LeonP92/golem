@@ -104,32 +104,40 @@ func (w *Worker) preserve(ctx context.Context, repoPath string, t client.Migrata
 	if err != nil {
 		return "", fmt.Errorf("git status: %w", err)
 	}
-	if len(strings.TrimSpace(string(out))) != 0 {
-		if head, err = w.capture(ctx, worktree, t.CheckpointSHA); err != nil {
-			return "", err
-		}
-	} else if head != t.CheckpointSHA {
-		// Commits the agent made after the checkpoint were never pushed: scan them too.
-		if err := w.scan(ctx, worktree, nil, t.CheckpointSHA, false); err != nil {
+	// Scan from the ticket's pinned base, not the checkpoint: commits before the
+	// checkpoint may be local-only, and this push is what publishes them.
+	scanBase := t.CheckpointSHA
+	if b, err := loadDiagnosisBase(filepath.Dir(worktree)); err == nil && b != "" {
+		scanBase = b
+	}
+	dirty := len(strings.TrimSpace(string(out))) != 0
+	if dirty {
+		if head, err = w.capture(ctx, worktree, scanBase); err != nil {
 			return "", err
 		}
 	}
-	if head != t.CheckpointSHA || !w.remoteHas(ctx, repoPath, t.RepoRemote, t.Branch, head) {
-		if w.afterCapture != nil {
-			w.afterCapture()
-		}
-		// The ticket may have been stopped, retried, pinned or moved while
-		// the capture ran. Ask the server again right before anything leaves
-		// this machine; the migrate call then fences the same facts.
-		if !w.stillMigratable(t) {
-			return "", fmt.Errorf("the ticket is no longer eligible to move; not pushing")
-		}
-		if err := w.pushCapture(ctx, repoPath, worktree, t.Branch, t.RepoRemote); err != nil {
+	if head == t.CheckpointSHA && w.remoteHas(ctx, repoPath, t.RepoRemote, t.Branch, head) {
+		return head, nil
+	}
+	if !dirty {
+		if err := w.scan(ctx, worktree, nil, scanBase, false); err != nil {
 			return "", err
 		}
-		if !w.remoteHas(ctx, repoPath, t.RepoRemote, t.Branch, head) {
-			return "", fmt.Errorf("the remote does not hold %s after the push", head)
-		}
+	}
+	if w.afterCapture != nil {
+		w.afterCapture()
+	}
+	// The ticket may have been stopped, retried, pinned or moved while
+	// the capture ran. Ask the server again right before anything leaves
+	// this machine; the migrate call then fences the same facts.
+	if !w.stillMigratable(t) {
+		return "", fmt.Errorf("the ticket is no longer eligible to move; not pushing")
+	}
+	if err := w.pushCapture(ctx, repoPath, worktree, t.Branch, t.RepoRemote); err != nil {
+		return "", err
+	}
+	if !w.remoteHas(ctx, repoPath, t.RepoRemote, t.Branch, head) {
+		return "", fmt.Errorf("the remote does not hold %s after the push", head)
 	}
 	return head, nil
 }
@@ -198,7 +206,7 @@ func (w *Worker) capture(ctx context.Context, worktree, base string) (string, er
 	return commit, nil
 }
 
-// scan refuses to publish what changed since base (the last checkpoint, which
+// scan refuses to publish what changed since base (the ticket's pinned base, else the checkpoint, which
 // the remote may not hold) when it touches a sensitive path (the evidence
 // package's list), adds a line evidence.Clean would redact (credential
 // assignments, private keys), or is binary and so cannot be scanned. cached

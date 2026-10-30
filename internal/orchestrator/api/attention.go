@@ -32,6 +32,7 @@ const (
 // one 30-minute incident deadline.
 const (
 	maxWaitChecks      = 5
+	maxLimitChecks     = 24 // eight days at the 8h usage_limit_max
 	waitIncidentWindow = 30 * time.Minute
 )
 
@@ -384,6 +385,9 @@ func (h *Handlers) resolveWait(tx *gorm.DB, t *db.Ticket, reason, kind string, r
 		checks, deadline = 0, ptrTime(now.Add(window))
 	}
 	checks++
+	if kind == waitUsageLimit && checks > maxLimitChecks {
+		return errNotRetryable // a limit that never lifts goes to a human
+	}
 	var until time.Time
 	switch {
 	case kind == waitUsageLimit && resetAt != nil && resetAt.After(now):

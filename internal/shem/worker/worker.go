@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
@@ -38,7 +39,8 @@ type Worker struct {
 	running      map[string]context.CancelFunc // ticketID → cancel for each active ticket
 	breaker      *limitBreaker                 // backends held until their usage limit resets
 	migrateTried map[string]time.Time
-	afterCapture func() // test seam: runs between the capture and the push
+	migrating    atomic.Bool // a migrateWaiting pass is running
+	afterCapture func()      // test seam: runs between the capture and the push
 	remoteHas    func(ctx context.Context, repoPath, remote, branch, sha string) bool
 
 	// graphBuildMu serialises `golem graph build` runs on this shem. Two of
@@ -110,6 +112,9 @@ func (w *Worker) Start() {
 	if _, err := w.client.Register(w.cfg.Name, repos, w.agent.Adapter.Name(), w.agent.Catalog); err != nil {
 		log.Printf("worker: register error: %v", err)
 	}
+	// Learn a standing usage limit before any resume or revision goroutine starts,
+	// so a restarted shem does not run an agent straight into the limit.
+	w.syncLimit()
 
 	// Log all assigned tickets so the operator knows the full picture on startup.
 	assigned, assignedErr := w.client.GetAssigned()
@@ -164,7 +169,6 @@ func (w *Worker) Start() {
 	// the receipt. The lane is idempotent at every step, so re-running it
 	// for a child whose receipt already landed costs one gate check.
 	w.integrateAssigned(assigned)
-	w.syncLimit()
 	w.pollAttention()
 
 	log.Printf("worker: poll loop started")
@@ -273,6 +277,9 @@ func (w *Worker) failTicket(ticketID string, cause error) {
 		until := w.breaker.now().Add(2 * time.Minute)
 		if at, ok := parseLimitReset(cause.Error(), w.breaker.now()); ok {
 			until = at
+			if limit := w.breaker.now().Add(maxLocalHold); until.After(limit) {
+				until = limit
+			}
 		}
 		w.breaker.trip(w.backend(), until)
 		if err := w.client.ReportBackendLimit(until); err != nil {
@@ -567,8 +574,11 @@ func (w *Worker) pollLoop() {
 			// or a person.
 			w.reclaimReaped()
 			w.syncLimit()
-			if w.held() {
-				w.migrateWaiting()
+			if w.held() && w.migrating.CompareAndSwap(false, true) {
+				go func() { // git and push work may hang; never hold up recovery polling
+					defer w.migrating.Store(false)
+					w.migrateWaiting()
+				}()
 			}
 			w.pollAttention()
 			if assigned, err := w.client.GetAssigned(); err == nil {

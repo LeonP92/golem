@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
@@ -136,21 +136,36 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	// (--base; the epic branch for an epic child), else the pinned base. The
 	// pinned SHA goes stale once siblings merge, and a diff taken from it
 	// then holds every sibling's work.
-	from := reviewBase(*base, s.BranchBaseSHA)
+	from := reviewBase(s.WorktreePath, *base, s.BranchBaseSHA)
 	diff, err := reviewDiff(s.WorktreePath, from, "HEAD", stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "getting branch diff: %v\n", err)
 		return 1
 	}
-	// An oversized diff goes to the reviewer as a per-file summary under a
-	// truncation marker, and the review cannot approve it (see below).
-	diffBytes, truncated := len(diff), false
-	if limit := cfg.ReviewMaxDiffBytes(); diffBytes > limit {
-		if diff, err = summarizeDiff(s.WorktreePath, from, "HEAD", diffBytes, limit); err != nil {
-			fmt.Fprintf(stderr, "summarizing branch diff: %v\n", err)
+	// A diff over the cap cannot be reviewed whole, so no reviewer is run (its
+	// verdict on a part would not be evidence): park with the fix instead.
+	if limit := cfg.ReviewMaxDiffBytes(); len(diff) > limit {
+		tooLarge := fmt.Sprintf("%s review diff too large (%d bytes, cap %d); no reviewer was run, so no approval was recorded. "+
+			"Fix: merge or rebase onto the base branch if it carries unrelated work, split the ticket, or raise review.max_diff_bytes in .golem/config.yaml.",
+			evidence.EnvironmentMarker, len(diff), limit)
+		w, err := blog.NewWriter(logPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "opening log: %v\n", err)
 			return 1
 		}
-		truncated = true
+		err = w.Append(blog.NewEntry("reviewer", blog.TypeStatus, tooLarge)) // first line, so the shem's environment-failure detection finds it
+		closeLogWriter(w, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "recording attestation: %v\n", err)
+			return 1
+		}
+		s.Phase = ticket.PhaseNeedsAttention
+		if err := s.Save(ticketDir); err != nil {
+			fmt.Fprintf(stderr, "saving ticket: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stderr, tooLarge)
+		return 1
 	}
 	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
@@ -167,15 +182,7 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "opening log: %v\n", err)
 		return 1
 	}
-	tooLarge := fmt.Sprintf("%s review diff too large (%d bytes, cap %d); the reviewer saw only a per-file summary, so no approval was recorded. "+
-		"Fix: merge or rebase onto the base branch if it carries unrelated work, split the ticket, or raise review.max_diff_bytes in .golem/config.yaml.",
-		evidence.EnvironmentMarker, diffBytes, cfg.ReviewMaxDiffBytes())
-	logged := result.Output
-	if truncated {
-		// First line, so the shem's environment-failure detection finds it.
-		logged = tooLarge + "\n" + logged
-	}
-	attestation := blog.NewEntry("reviewer", blog.TypeStatus, logged)
+	attestation := blog.NewEntry("reviewer", blog.TypeStatus, result.Output)
 	attestation.Model = result.Model
 	if err := w.Append(attestation); err != nil {
 		closeLogWriter(w, stderr)
@@ -183,18 +190,6 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 	closeLogWriter(w, stderr)
-
-	if truncated {
-		// The reviewer saw a summary, not the code: its verdict is not
-		// evidence. Park the ticket as an environment failure with the fix.
-		s.Phase = ticket.PhaseNeedsAttention
-		if err := s.Save(ticketDir); err != nil {
-			fmt.Fprintf(stderr, "saving ticket: %v\n", err)
-			return 1
-		}
-		fmt.Fprintln(stderr, tooLarge)
-		return 1
-	}
 
 	// A reviewer FAIL blocks the ticket like a failing gate. A missing
 	// verdict blocks only tickets with acceptance commands (epic children,
@@ -227,27 +222,22 @@ func collapseLongEntries(entries []blog.Entry, limit int) []blog.Entry {
 			continue
 		}
 		half := limit / 2
-		out[i].Message = e.Message[:half] + fmt.Sprintf("\n[... %d bytes truncated ...]\n", len(e.Message)-2*half) + e.Message[len(e.Message)-half:]
+		out[i].Message = strings.ToValidUTF8(e.Message[:half], "") + fmt.Sprintf("\n[... %d bytes truncated ...]\n", len(e.Message)-2*half) +
+			strings.ToValidUTF8(e.Message[len(e.Message)-half:], "")
 	}
 	return out
 }
 
-// reviewBase prefers the live base branch (--base) over the pinned SHA.
-func reviewBase(flagBase, pinned string) string {
-	if flagBase != "" {
-		return flagBase
+// reviewBase prefers the live base branch (--base) over the pinned SHA, but only
+// when this checkout can resolve it: an unfetched base would make reviewDiff
+// fall back to the last commit alone, and a partial review reads as a full one.
+// A local:// repository has no origin, so origin/<b> falls back to <b>.
+func reviewBase(worktree, flagBase, pinned string) string {
+	local, _ := strings.CutPrefix(flagBase, "origin/")
+	for _, b := range []string{flagBase, local} {
+		if b != "" && revExists(worktree, b) {
+			return b
+		}
 	}
 	return pinned
-}
-
-// summarizeDiff replaces an over-cap diff with a per-file summary and a marker
-// that says so, so the reviewer knows it is not seeing the code.
-func summarizeDiff(worktree, base, commit string, size, limit int) (string, error) {
-	cmd := exec.Command("git", "diff", "--numstat", base+"..."+commit)
-	cmd.Dir = worktree
-	stat, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("[DIFF TRUNCATED: %d bytes exceeds the %d byte cap; per-file summary (added, removed, path) follows, not the code]\n%s", size, limit, stat), nil
 }

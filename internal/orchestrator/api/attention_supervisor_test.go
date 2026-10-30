@@ -553,3 +553,26 @@ func TestAttemptsOnlyCountRealFailures(t *testing.T) {
 		}
 	}
 }
+
+const limitChecks = 24 // the api package's maxLimitChecks
+
+func TestParsedLimitThatNeverLiftsEscalates(t *testing.T) {
+	f := newRecoveryHarness(t)
+	const msg = "You've hit your usage limit. try again in 6 hours."
+	f.fail(t, msg)
+	waits := 0
+	for range limitChecks + 2 {
+		reset := time.Now().Add(6 * time.Hour)
+		if f.limitWait(t, msg, &reset) != 204 {
+			break
+		}
+		waits++
+		f.advance(t, time.Until(*f.fresh(t).AttentionWaitUntil)+time.Second)
+		c := f.claim(t, 3)
+		f.resolveResult(t, c, nil)
+		f.fail(t, msg)
+	}
+	if waits != limitChecks {
+		t.Fatalf("waited %d times, want exactly %d before asking a human", waits, limitChecks)
+	}
+}

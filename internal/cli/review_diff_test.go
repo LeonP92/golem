@@ -146,20 +146,6 @@ func TestReviewDiffUsesLiveBaseNotStalePin(t *testing.T) {
 	}
 }
 
-func TestSummarizeDiffMarksTruncation(t *testing.T) {
-	_, worktree, _ := setUpTicketForStepTest(t)
-	commitGo(t, worktree, "big.go")
-	out, err := summarizeDiff(worktree, "HEAD~1", "HEAD", 999999, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, want := range []string{"DIFF TRUNCATED", "999999", "big.go"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("summary lacks %q:\n%s", want, out)
-		}
-	}
-}
-
 func TestCollapseLongEntries(t *testing.T) {
 	long := strings.Repeat("a", 3000) + strings.Repeat("z", 20000) + strings.Repeat("b", 3000)
 	in := []blog.Entry{{Type: blog.TypeStatus, Message: long}, {Type: blog.TypeFinding, Message: long}, {Type: blog.TypeBlocker, Message: "short"}}
@@ -195,8 +181,8 @@ func TestLogEmitFromLinkedWorktreeLandsInRealLog(t *testing.T) {
 	}
 }
 
-// Over the byte cap the reviewer gets a summary under a truncation marker, but
-// the review cannot approve: the failure is an environment one that names the
+// Over the byte cap no reviewer runs (it would see only a part, and its verdict
+// would read as a whole review): the failure is an environment one that names the
 // size and the fix, whatever the provider says.
 func TestTicketReviewOversizedDiffIsEnvironmentFailure(t *testing.T) {
 	repo, worktree, id := setUpTicketForStepTest(t)
@@ -217,10 +203,8 @@ func TestTicketReviewOversizedDiffIsEnvironmentFailure(t *testing.T) {
 			t.Errorf("output lacks %q:\n%s", want, stderr.String())
 		}
 	}
-	got, err := os.ReadFile(prompt)
-	if err != nil || !strings.Contains(string(got), "DIFF TRUNCATED") || !strings.Contains(string(got), "big.go") ||
-		strings.Contains(string(got), "+package x") {
-		t.Errorf("reviewer did not get the summary and marker only: %v\n%s", err, got)
+	if _, err := os.Stat(prompt); err == nil {
+		t.Error("a reviewer ran on a diff it could not read whole")
 	}
 	s, _ := ticket.Load(filepath.Join(repo, ".golem", "tickets", id))
 	if s.Phase != ticket.PhaseNeedsAttention {
@@ -229,5 +213,20 @@ func TestTicketReviewOversizedDiffIsEnvironmentFailure(t *testing.T) {
 	entries, _ := blog.ReadAll(filepath.Join(repo, ".golem", "tickets", id, "log.jsonl"))
 	if last := entries[len(entries)-1]; last.Role != "reviewer" || !strings.HasPrefix(last.Message, evidence.EnvironmentMarker) {
 		t.Errorf("reviewer log entry must start with the environment marker: %+v", last)
+	}
+}
+
+func TestReviewBaseNeedsAResolvableLiveBase(t *testing.T) {
+	_, worktree, _ := setUpTicketForStepTest(t)
+	pinned, _ := revSHA(worktree, "HEAD")
+	if got := reviewBase(worktree, "no/such/branch", pinned); got != pinned {
+		t.Errorf("unresolvable --base used instead of the pin: %q", got)
+	}
+	gitIn(t, worktree, "branch", "only-local")
+	if got := reviewBase(worktree, "origin/only-local", pinned); got != "only-local" {
+		t.Errorf("origin/ base without an origin should fall back to the local name: %q", got)
+	}
+	if got := reviewBase(worktree, "", pinned); got != pinned {
+		t.Errorf("no --base: %q", got)
 	}
 }

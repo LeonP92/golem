@@ -18,11 +18,12 @@ ticket unless it opted out) and `golem
 ticket review` both run that gate and log its result bound to the head.
 Review runs the gate first, then the reviewer on the log and the branch
 diff from the merge-base with `--base` (the live base branch; the pinned
-`branch_base_sha` only when no `--base` is given, since it goes stale as
-siblings merge). A diff over `review.max_diff_bytes` (default 400000) goes to the reviewer as a
-per-file summary under a truncation marker, and the review cannot approve it:
+`branch_base_sha` when no `--base` is given or this checkout cannot resolve it,
+since an unfetched base would reduce the review to the last commit, and the pin
+goes stale as siblings merge). A diff over `review.max_diff_bytes` (default
+400000) is not reviewed at all, because a reviewer would see only part of it:
 the command exits 1 with an environment failure, `review diff too large (N
-bytes, cap C)` plus the fix, and parks the ticket in needs-attention. STATUS and BLOCKER bodies over 4KB are collapsed to head and tail in
+bytes, cap C)` plus the fix, runs no model and parks the ticket in needs-attention. STATUS and BLOCKER bodies over 4KB are collapsed to head and tail in
 the reviewer's log slice. `golem log emit`, `ask` and `answer` run from a
 linked worktree write to the primary repo's ticket log (git common dir). A reviewer `VERDICT: FAIL` parks the ticket
 in needs-attention like a failing gate; a missing verdict does so only for
