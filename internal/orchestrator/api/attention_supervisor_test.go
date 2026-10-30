@@ -695,3 +695,72 @@ func TestRemoteRepositoryWaitsInsteadOfFailingOver(t *testing.T) {
 		t.Fatalf("a remote repo failed over: %+v", got)
 	}
 }
+
+func TestFailoverCarriesAPinnedTicketAndDropsModelsItCannotMap(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.failoverSetup(t, "local://repo", true)
+	sel, _ := json.Marshal(models.Selections{"plan": "gpt-large", "review": "model-nobody-knows"})
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Update("models", string(sel))
+	f.limitWaitAt(t, "You've hit your usage limit. try again in 5 hours.", 5*time.Hour)
+	got := f.fresh(t)
+	if got.Phase != "unassigned" || got.ModelBackend != "claude-code" {
+		t.Fatalf("a ticket pinned to the source backend did not move: %+v", got)
+	}
+	if s := got.ModelSelections(); s["plan"] != "tier:large" || s["review"] != "" {
+		t.Fatalf("selections %v: the unmappable one must be dropped so a shem can claim the ticket", s)
+	}
+}
+
+func TestFailoverHappensOncePerTicket(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.failoverSetup(t, "local://repo", true)
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Update("migrations", 1)
+	f.limitWaitAt(t, "You've hit your usage limit. try again in 5 hours.", 5*time.Hour)
+	if got := f.fresh(t); got.Phase != "needs-attention" || got.ModelBackend != "codex" {
+		t.Fatalf("a ticket that already moved moved again: %+v", got)
+	}
+}
+
+func TestEarlierTransientWaitsDoNotMakeTheFirstLimitFailOver(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.failoverSetup(t, "local://repo", true)
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Updates(map[string]any{"attention_wait_checks": 3, "attention_wait_kind": "transient"})
+	f.fail(t, "You've hit your usage limit, somehow")
+	if code := f.limitWait(t, "You've hit your usage limit, somehow", nil); code != 204 {
+		t.Fatalf("limit wait: %d", code)
+	}
+	if got := f.fresh(t); got.Phase != "needs-attention" || got.ModelBackend != "codex" {
+		t.Fatalf("moved on a first limit with no parsed reset: %+v", got)
+	}
+}
+
+func TestFailoverHoldsTheSourceShemAndRefusesItsLateResult(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.failoverSetup(t, "local://repo", true)
+	msg := "You've hit your usage limit. try again in 5 hours."
+	f.fail(t, msg)
+	c := f.claim(t, 3)
+	reset := time.Now().Add(5 * time.Hour)
+	if out := f.resolveResult(t, c, &client.AttentionResult{Wait: "usage_limit", ResetAt: &reset, Reason: msg}); out.Code != 204 {
+		t.Fatalf("wait: %d", out.Code)
+	}
+	var src db.Shem
+	f.h.DB.First(&src, "id = ?", f.shem.ID)
+	if src.LimitedUntil == nil || !src.LimitedUntil.After(time.Now().Add(4*time.Hour)) {
+		t.Fatalf("source shem not held: %+v", src.LimitedUntil)
+	}
+	// The old shem reports again with its stale token: the ticket is no longer its own.
+	if out := f.resolveResult(t, c, &client.AttentionResult{Retry: true, Reason: "late", Feedback: "late"}); out.Code != 409 {
+		t.Fatalf("late result accepted: %d", out.Code)
+	}
+}
+
+func TestTransientIncidentsAreCappedPerTicket(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.h.DB.Model(&db.Ticket{}).Where("id = ?", f.ticket.ID).Update("attention_wait_incidents", 10)
+	f.fail(t, "API Error: 503 overloaded req_9f8e7d")
+	c := f.claim(t, 3)
+	if out := f.resolveResult(t, c, &client.AttentionResult{Wait: "transient", Reason: "API Error: 503 overloaded req_9f8e7d"}); out.Code != 409 {
+		t.Fatalf("an eleventh transient incident was still waited out: %d", out.Code)
+	}
+}
