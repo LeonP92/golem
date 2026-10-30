@@ -351,6 +351,15 @@ func (h *Handlers) actionRetryCurrentStep(w http.ResponseWriter, r *http.Request
 		return
 	}
 	phase := retryPhaseForTicket(ticket)
+	if ticket.Phase == "unassigned" {
+		http.Error(w, "ticket is already queued and waiting for a shem; nothing to retry", http.StatusConflict)
+		return
+	}
+	if ticket.Phase == "needs-attention" && (ticket.CheckpointSHA == nil || strings.TrimSpace(*ticket.CheckpointSHA) == "") {
+		// Nothing was saved, so the current step is the first one: a requeue is the same restart.
+		h.actionRequeue(w, r, id, feedback, raw, backend)
+		return
+	}
 	if ticket.Phase != "needs-attention" || phase == "" || ticket.CheckpointPhase == nil || strings.TrimSpace(*ticket.CheckpointPhase) == "" || ticket.CheckpointSHA == nil || strings.TrimSpace(*ticket.CheckpointSHA) == "" {
 		http.Error(w, "ticket has no saved checkpoint for a current-step retry; use requeue instead", http.StatusConflict)
 		return
