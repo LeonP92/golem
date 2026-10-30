@@ -16,6 +16,7 @@ import (
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/failure"
 	"github.com/leonp92/golem/internal/gate"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
@@ -196,7 +197,7 @@ func (w *Worker) recoverAttention(tickets []client.AttentionTicket) {
 		}
 		// A held backend cannot run a diagnosis. Limit and transient waits need
 		// no model call, so those still proceed.
-		if held && classifyFailure(t.Reason) == "" {
+		if held && failure.Classify(t.Reason) == "" {
 			continue
 		}
 		go w.tryAttention(t.TicketID, t.RepoRemote, max)
@@ -227,7 +228,7 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		return
 	}
 	result := client.AttentionResult{Token: leased.Token, Reason: "Human attention required: " + leased.Reason}
-	kind := classifyFailure(leased.Reason)
+	kind := failure.Classify(leased.Reason)
 	switch {
 	case leased.WaitResume:
 		// The wait elapsed; the failure evidence is stale by design. Resume
@@ -237,8 +238,8 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		result.Feedback = "The earlier stop was a recognized transient or usage-limit fault and its wait elapsed; retry the failed step as saved."
 	case kind != "":
 		result.Wait, result.Reason = kind, leased.Reason
-		if kind == kindUsageLimit {
-			if at, ok := parseLimitReset(leased.Reason, w.breaker.now()); ok {
+		if kind == failure.UsageLimit {
+			if at, ok := failure.ParseReset(leased.Reason, w.breaker.now()); ok {
 				result.ResetAt = &at
 			}
 		}
@@ -282,7 +283,7 @@ func (w *Worker) tryAttention(id, remote string, max int) {
 		}
 		return
 	}
-	if result.Wait == kindUsageLimit {
+	if result.Wait == failure.UsageLimit {
 		w.syncLimit()
 	}
 	if next != nil && w.executor != nil {
