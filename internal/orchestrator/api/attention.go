@@ -34,6 +34,7 @@ const (
 const (
 	maxWaitChecks      = 5
 	maxLimitChecks     = 24 // eight days at the 8h usage_limit_max
+	maxWaitIncidents   = 10 // transient incidents per ticket before a human is asked
 	waitIncidentWindow = 30 * time.Minute
 )
 
@@ -402,6 +403,14 @@ func (h *Handlers) resolveWait(tx *gorm.DB, t *db.Ticket, reason, kind string, r
 			window = p.LimitBackoffMax
 		}
 		checks, deadline = 0, ptrTime(now.Add(window))
+		if kind == waitTransient {
+			if t.AttentionWaitIncidents >= maxWaitIncidents {
+				return errNotRetryable // the fault keeps coming back under new wording; a human decides
+			}
+			if err := tx.Model(t).Update("attention_wait_incidents", gorm.Expr("attention_wait_incidents + 1")).Error; err != nil {
+				return err
+			}
+		}
 	}
 	checks++
 	if kind == waitUsageLimit && checks > maxLimitChecks {
@@ -478,7 +487,7 @@ func resetAttention() map[string]any {
 	return map[string]any{
 		"attention_attempts": 0, "attention_repeats": 0, "attention_fingerprint": "",
 		"attention_wait_until": nil, "attention_wait_checks": 0, "attention_wait_deadline": nil,
-		"attention_wait_fingerprint": "", "attention_wait_kind": "",
+		"attention_wait_fingerprint": "", "attention_wait_kind": "", "attention_wait_incidents": 0,
 		"migrated_backend": "", "migrations": 0,
 	}
 }

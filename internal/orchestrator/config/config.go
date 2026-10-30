@@ -258,7 +258,9 @@ type SupervisorConfig struct {
 	LimitBackoffMax string `yaml:"limit_backoff_max"`
 	// Failover maps a backend to the one its limit-waiting tickets move to
 	// (for example codex: claude-code). Empty means they wait the limit out.
-	// It applies to local:// repositories, where the shems share one checkout.
+	// It applies to local:// repositories, where both shems must run on one host
+	// with the same repo path, and also to tickets pinned to the source backend.
+	// A ticket moves once.
 	Failover map[string]string `yaml:"failover"`
 	// FailoverAfter is the shortest wait worth moving a ticket for (default 30m).
 	FailoverAfter string `yaml:"failover_after"`
