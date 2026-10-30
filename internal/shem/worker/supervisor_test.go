@@ -588,3 +588,20 @@ func replayBothLimited(t *testing.T, start int) {
 		t.Fatalf("resume: runsA=%d runsB=%d %+v", runsA, runsB, resumed)
 	}
 }
+
+func TestStartsFromTheTopOnlyWithoutACheckpoint(t *testing.T) {
+	phase := "plan"
+	for name, c := range map[string]struct {
+		claim client.ClaimResponse
+		want  bool
+	}{
+		"brainstorm retry, nothing saved": {client.ClaimResponse{RetryPhase: "brainstorm"}, true},
+		"brainstorm retry, plan saved":    {client.ClaimResponse{RetryPhase: "brainstorm", CheckpointPhase: &phase}, false},
+		"implement retry, nothing saved":  {client.ClaimResponse{RetryPhase: "implement"}, false},
+		"no retry":                        {client.ClaimResponse{}, false},
+	} {
+		if got := startsFromTheTop(&c.claim); got != c.want {
+			t.Errorf("%s: %v, want %v", name, got, c.want)
+		}
+	}
+}
