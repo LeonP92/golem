@@ -387,7 +387,7 @@ func TestRetryCurrentStepPreservesCheckpointAndQueuesFeedback(t *testing.T) {
 	}
 }
 
-func TestRetryCurrentStepRequiresSavedCheckpoint(t *testing.T) {
+func TestRetryCurrentStepWithoutACheckpointRestartsTheTicket(t *testing.T) {
 	h, mux, cookie := setupActionTest(t)
 	ticket := seedActionTicket(t, h, "needs-attention")
 	ticket.RetryPhase = "implement"
@@ -395,8 +395,22 @@ func TestRetryCurrentStepRequiresSavedCheckpoint(t *testing.T) {
 		t.Fatal(err)
 	}
 	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "retry-current-step"})
-	if w.Code != http.StatusConflict {
-		t.Fatalf("expected 409 without a checkpoint, got %d: %s", w.Code, w.Body.String())
+	if w.Code >= 300 {
+		t.Fatalf("expected a restart without a checkpoint, got %d: %s", w.Code, w.Body.String())
+	}
+	var got db.Ticket
+	h.DB.First(&got, "id = ?", ticket.ID)
+	if got.Phase != "unassigned" {
+		t.Fatalf("phase %q, want unassigned (queued again)", got.Phase)
+	}
+}
+
+func TestRetryCurrentStepOnAnAlreadyQueuedTicketSaysSo(t *testing.T) {
+	h, mux, cookie := setupActionTest(t)
+	ticket := seedActionTicket(t, h, "unassigned")
+	w := postAction(t, mux, cookie, ticket.ID, map[string]string{"action": "retry-current-step"})
+	if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), "already queued") {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
 }
 

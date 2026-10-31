@@ -14,6 +14,7 @@ import (
 
 	"github.com/leonp92/golem/internal/agentenv"
 	"github.com/leonp92/golem/internal/evidence"
+	"github.com/leonp92/golem/internal/failure"
 	"github.com/leonp92/golem/internal/models"
 	ws "github.com/leonp92/golem/internal/orchestrator/ws"
 	"github.com/leonp92/golem/internal/shem/client"
@@ -271,11 +272,11 @@ func resumeWorkerPhase(claim *client.ClaimResponse) string {
 // problem, and it is what the phase badge is claiming.
 func (w *Worker) failTicket(ticketID string, cause error) {
 	log.Printf("worker: ticket %s error: %v", ticketID, cause)
-	if classifyFailure(cause.Error()) == kindUsageLimit {
+	if failure.Classify(cause.Error()) == failure.UsageLimit {
 		// Hold the backend now and record it on the server, so a restart
 		// holds too even when no ticket wait follows.
 		until := w.breaker.now().Add(2 * time.Minute)
-		if at, ok := parseLimitReset(cause.Error(), w.breaker.now()); ok {
+		if at, ok := failure.ParseReset(cause.Error(), w.breaker.now()); ok {
 			until = at
 			if limit := w.breaker.now().Add(maxLocalHold); until.After(limit) {
 				until = limit

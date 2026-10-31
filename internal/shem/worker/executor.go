@@ -112,7 +112,7 @@ func (e *GolemExecutor) RunTicket(ctx context.Context, cfg *config.Config, c *cl
 
 	// Determine starting phase and ensure the ticket exists locally.
 	startPhase := "brainstorm"
-	if claim.RetryPhase != "" {
+	if claim.RetryPhase != "" && !startsFromTheTop(claim) {
 		postStatus(c, ticketID, "Retrying "+claim.RetryPhase+" from the saved branch checkpoint")
 		startPhase = retryWorkerPhase(claim.RetryPhase)
 		if startPhase == "" {
@@ -1049,4 +1049,11 @@ func (e *GolemExecutor) generatePRDescription(ctx context.Context, repoPath, tic
 		return "", fmt.Errorf("%w\n%s", err, strings.TrimSpace(stderr.String()))
 	}
 	return strings.TrimSpace(stdout.String()), nil
+}
+
+// startsFromTheTop reports a brainstorm retry with nothing checkpointed: the
+// ticket is begun again as a fresh one, because there is no branch state to
+// restore or phase to advance from.
+func startsFromTheTop(claim *client.ClaimResponse) bool {
+	return claim.RetryPhase == "brainstorm" && claim.CheckpointPhase == nil
 }

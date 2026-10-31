@@ -101,8 +101,11 @@ type Ticket struct {
 	// it until the next check is due, WaitFingerprint binds the incident to
 	// one normalized failure, WaitChecks and WaitDeadline bound the incident
 	// (transient: 5 checks within 30 minutes; usage limit: until the reset). Waits do not spend AttentionAttempts.
-	AttentionWaitUntil       *time.Time `json:"-"`
-	AttentionWaitChecks      int        `gorm:"not null;default:0" json:"-"`
+	AttentionWaitUntil  *time.Time `json:"-"`
+	AttentionWaitChecks int        `gorm:"not null;default:0" json:"-"`
+	// AttentionWaitIncidents counts the transient wait incidents of the ticket, so a failure whose
+	// text never repeats exactly (a request id in the message) cannot restart the wait forever.
+	AttentionWaitIncidents   int        `gorm:"not null;default:0" json:"-"`
 	AttentionWaitDeadline    *time.Time `json:"-"`
 	AttentionWaitFingerprint string     `gorm:"not null;default:''" json:"-"`
 	// AttentionWaitKind is "transient" or "usage_limit"; a usage_limit wait's
