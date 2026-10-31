@@ -9,6 +9,8 @@
   command: the first word of the line or of the text after `;`, `&&`, `||`,
   `|`, `(`, a backtick or `$(` (`commandSegments`), and inside `sh -c "..."`.
   Words in arguments (`git commit -m "drop sudo"`) are not matched.
+  The obfuscation substrings (`| sh`, `base64 -d`) are matched outside quotes and
+  inside `sh -c` scripts, so a quoted pattern like `rg "a|shell"` is allowed.
 - `Check` maps tool names (Claude, Codex, OpenCode) to rules: writes
   (`Write`, `Edit`, `MultiEdit`, `NotebookEdit`, `patch`/`apply_patch`) must stay
   inside the worktree; `WebFetch` hosts must be in `allow_network`; shell

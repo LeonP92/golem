@@ -38,10 +38,8 @@ func Evaluate(policy config.PolicyConfig, worktreePath, tool string, args []stri
 		}
 	}
 
-	for _, bad := range obfuscationSubstrings {
-		if strings.Contains(joined, bad) {
-			return Decision{Allowed: false, Reason: "denied obfuscation vector: " + bad}
-		}
+	if bad := obfuscationVector(joined, 0); bad != "" {
+		return Decision{Allowed: false, Reason: "denied obfuscation vector: " + bad}
 	}
 
 	if strings.Contains(joined, "curl") || strings.Contains(joined, "wget") {
@@ -122,4 +120,52 @@ func resolveExisting(path string) string {
 		tail = filepath.Join(filepath.Base(path), tail)
 		path = parent
 	}
+}
+
+// obfuscationVector returns the first obfuscation substring found outside quotes, including inside the script of a
+// `sh -c "<script>"`: a pipe inside a search pattern (`rg "a|shell"`) is data, not a pipe to a shell.
+func obfuscationVector(text string, depth int) string {
+	free := outsideQuotes(text)
+	for _, bad := range obfuscationSubstrings {
+		if strings.Contains(free, bad) {
+			return bad
+		}
+	}
+	if depth >= 3 {
+		return ""
+	}
+	for _, seg := range splitCommandLine(text, 0) {
+		if !shellTools[strings.ToLower(filepath.Base(seg[0]))] {
+			continue
+		}
+		for i := 1; i+1 < len(seg); i++ {
+			if seg[i] == "-c" || seg[i] == "-lc" {
+				if bad := obfuscationVector(seg[i+1], depth+1); bad != "" {
+					return bad
+				}
+				break
+			}
+		}
+	}
+	return ""
+}
+
+// outsideQuotes drops quoted text, keeping a space where it was.
+func outsideQuotes(s string) string {
+	var b strings.Builder
+	var quote rune
+	for _, r := range s {
+		switch {
+		case quote != 0:
+			if r == quote {
+				quote = 0
+				b.WriteRune(' ')
+			}
+		case r == '"' || r == '\'':
+			quote = r
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
