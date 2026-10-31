@@ -2,9 +2,14 @@
 # Shem container entrypoint.
 # Prepares the agent backend's environment before starting golem-shem.
 #
-# GOLEM_BACKEND (default: claude-code) selects which backend block below
+# GOLEM_BACKEND (required, no default) selects which backend block below
 # runs; the image must have been built with that backend in GOLEM_BACKENDS
-# (see Dockerfile) for its CLI to exist.
+# (see Dockerfile) for its CLI to exist. The published release images install
+# all three CLIs, so the variable alone picks the backend at runtime.
+#
+# Everything this container needs arrives through the environment, and a
+# missing or unknown value stops the container here, at startup — not in a
+# warning nobody reads, and not as a ticket that fails its first phase.
 #
 # claude-code auth modes (auto-detected — no manual configuration required):
 #
@@ -27,14 +32,32 @@
 # credential files are copied in.
 set -e
 
-GOLEM_BACKEND="${GOLEM_BACKEND:-claude-code}"
+# No default: the backend is runtime configuration, and guessing it used to
+# start a claude-code shem for an operator who never asked for one.
+if [ -z "$GOLEM_BACKEND" ]; then
+  echo "shem: GOLEM_BACKEND is not set — name the backend this shem runs:" >&2
+  echo "shem:   claude-code, codex or opencode. Set it in .env; see .env.example." >&2
+  exit 1
+fi
 case "$GOLEM_BACKEND" in
-  claude-code|codex|opencode) ;;
+  claude-code) golem_backend_cli=claude ;;
+  codex)       golem_backend_cli=codex ;;
+  opencode)    golem_backend_cli=opencode ;;
   *)
-    echo "shem: WARNING unknown GOLEM_BACKEND '$GOLEM_BACKEND' (known: claude-code, codex, opencode);" >&2
-    echo "shem:   no auth bootstrap or project trust will be prepared." >&2
+    echo "shem: unknown GOLEM_BACKEND '$GOLEM_BACKEND' (known: claude-code, codex, opencode)." >&2
+    exit 1
     ;;
 esac
+
+# A backend whose CLI is not in the image fails its first phase, minutes after
+# startup and one ticket deep. Name the mismatch now: the image was built
+# without GOLEM_BACKENDS including this backend.
+if ! command -v "$golem_backend_cli" >/dev/null 2>&1; then
+  echo "shem: GOLEM_BACKEND=$GOLEM_BACKEND but its CLI ('$golem_backend_cli') is not in this image." >&2
+  echo "shem: rebuild with $GOLEM_BACKEND in GOLEM_BACKENDS (see Dockerfile), or use an" >&2
+  echo "shem: image that ships it." >&2
+  exit 1
+fi
 
 CLAUDE_JSON="${HOME}/.claude.json"
 CLAUDE_DIR="${HOME}/.claude"
@@ -109,20 +132,48 @@ copy_from_mount() { # <src dir> <dest dir> <file>...
 }
 if [ "$GOLEM_BACKEND" = "codex" ]; then
   copy_from_mount "$CODEX_MOUNT" "$CODEX_DIR" auth.json config.toml
-  if [ ! -f "$CODEX_DIR/auth.json" ] && [ -z "$CODEX_API_KEY" ] &&
-     [ -z "$CODEX_ACCESS_TOKEN" ] && [ -z "$OPENAI_API_KEY" ]; then
-    echo "shem: WARNING no codex credentials — every phase will fail. Mount a logged-in" >&2
-    echo "shem:   CODEX_HOME, or set CODEX_API_KEY, CODEX_ACCESS_TOKEN or OPENAI_API_KEY." >&2
-  fi
 fi
 if [ "$GOLEM_BACKEND" = "opencode" ]; then
   copy_from_mount "$OPENCODE_MOUNT" "$OPENCODE_DIR" auth.json
+fi
+
+# --- Credentials: required, checked at startup --------------------------------
+# The agent cannot answer a login prompt, so a missing credential is not a
+# degraded mode to start in — every phase would fail on it. Stop here instead.
+# The check knows the common credential routes only. A backend that authenticates
+# some other way (Bedrock or Vertex cloud credentials, a gateway token, a custom
+# model provider with its own key variable) opts out with GOLEM_SKIP_CREDENTIAL_CHECK=1.
+if [ "${GOLEM_SKIP_CREDENTIAL_CHECK:-}" = "1" ]; then
+  echo "shem: WARNING GOLEM_SKIP_CREDENTIAL_CHECK=1 — not checking $GOLEM_BACKEND credentials." >&2
+else
+case "$GOLEM_BACKEND" in
+claude-code)
+  if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ] &&
+     [ ! -f "$CLAUDE_DIR/.credentials.json" ]; then
+    echo "shem: no claude-code credentials — the agent would report \"Not logged in\" on" >&2
+    echo "shem:   every phase. Mount a logged-in CLAUDE_HOME, or set ANTHROPIC_API_KEY" >&2
+    echo "shem:   or CLAUDE_CODE_OAUTH_TOKEN." >&2
+    exit 1
+  fi
+  ;;
+codex)
+  if [ ! -f "$CODEX_DIR/auth.json" ] && [ -z "$CODEX_API_KEY" ] &&
+     [ -z "$CODEX_ACCESS_TOKEN" ] && [ -z "$OPENAI_API_KEY" ]; then
+    echo "shem: no codex credentials — every phase would fail. Mount a logged-in" >&2
+    echo "shem:   CODEX_HOME, or set CODEX_API_KEY, CODEX_ACCESS_TOKEN or OPENAI_API_KEY." >&2
+    exit 1
+  fi
+  ;;
+opencode)
   if [ ! -f "$OPENCODE_DIR/auth.json" ] && [ -z "$ANTHROPIC_API_KEY" ] &&
      [ -z "$OPENAI_API_KEY" ] && [ -z "$OPENCODE_CONFIG_CONTENT" ]; then
-    echo "shem: WARNING no opencode credentials — phases will fail. Mount a logged-in" >&2
+    echo "shem: no opencode credentials — every phase would fail. Mount a logged-in" >&2
     echo "shem:   OPENCODE_HOME, or set ANTHROPIC_API_KEY, OPENAI_API_KEY or" >&2
     echo "shem:   OPENCODE_CONFIG_CONTENT." >&2
+    exit 1
   fi
+  ;;
+esac
 fi
 
 # --- Agent account home -------------------------------------------------------
@@ -155,13 +206,6 @@ if [ -n "$GOLEM_AGENT_USER" ]; then
       fi
       if [ ! -f "$agent_home/.claude.json" ]; then
         printf '{"hasCompletedSetup":true,"projects":{}}\n' > "$agent_home/.claude.json"
-      fi
-      # Say so now rather than letting every phase fail with "Not logged in".
-      if [ ! -f "$agent_home/.claude/.credentials.json" ] &&
-         [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-        echo "shem: WARNING no credentials for $GOLEM_AGENT_USER — claude will report" >&2
-        echo "shem:   \"Not logged in\" and every phase will fail. Mount a logged-in" >&2
-        echo "shem:   CLAUDE_HOME, or set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN." >&2
       fi
       ;;
     codex)

@@ -113,3 +113,74 @@ func TestAttentionPolicy(t *testing.T) {
 		t.Fatal("negative retry max accepted")
 	}
 }
+
+// GOLEM_BACKEND is how a container picks its backend at runtime: it selects
+// the adapter when shem.yaml declares none, and only a genuinely conflicting
+// explicit adapter is a startup error.
+func TestLoad_GolemBackendPrecedence(t *testing.T) {
+	write := func(t *testing.T, body string) string {
+		t.Helper()
+		f, err := os.CreateTemp("", "shem*.yaml")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := f.WriteString(body); err != nil {
+			t.Fatal(err)
+		}
+		f.Close()
+		t.Cleanup(func() { os.Remove(f.Name()) })
+		return f.Name()
+	}
+	const noBlock = "orchestrator: https://golem.example.com\napi_key: secret\n"
+	const codexBlock = noBlock + "backend:\n  adapter: codex\n"
+
+	t.Run("unset env leaves config resolution alone", func(t *testing.T) {
+		t.Setenv("GOLEM_BACKEND", "")
+		cfg, err := config.Load(write(t, noBlock))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Backend.Adapter != "claude-code" {
+			t.Errorf("adapter: got %q", cfg.Backend.Adapter)
+		}
+	})
+	t.Run("env selects the adapter when the config declares none", func(t *testing.T) {
+		t.Setenv("GOLEM_BACKEND", "codex")
+		cfg, err := config.Load(write(t, noBlock))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Backend.Adapter != "codex" {
+			t.Errorf("adapter: got %q", cfg.Backend.Adapter)
+		}
+	})
+	t.Run("env fills a block that names no adapter", func(t *testing.T) {
+		t.Setenv("GOLEM_BACKEND", "opencode")
+		cfg, err := config.Load(write(t, noBlock+"backend:\n  supports_selection: false\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if cfg.Backend.Adapter != "opencode" {
+			t.Errorf("adapter: got %q", cfg.Backend.Adapter)
+		}
+	})
+	t.Run("matching explicit adapter passes", func(t *testing.T) {
+		t.Setenv("GOLEM_BACKEND", "codex")
+		if _, err := config.Load(write(t, codexBlock)); err != nil {
+			t.Fatal(err)
+		}
+	})
+	t.Run("conflicting explicit adapter fails at startup", func(t *testing.T) {
+		t.Setenv("GOLEM_BACKEND", "claude-code")
+		_, err := config.Load(write(t, codexBlock))
+		if err == nil {
+			t.Fatal("expected an error for GOLEM_BACKEND=claude-code with adapter: codex")
+		}
+	})
+	t.Run("unknown env adapter fails at startup", func(t *testing.T) {
+		t.Setenv("GOLEM_BACKEND", "bogus")
+		if _, err := config.Load(write(t, noBlock)); err == nil {
+			t.Fatal("expected an error for an unknown GOLEM_BACKEND")
+		}
+	})
+}

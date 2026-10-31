@@ -41,9 +41,9 @@ func TestEntrypointCopiesTheSessionToTheAgentHome(t *testing.T) {
 		}
 	}
 
-	// And the end state is checked, so a missing credential is named at start
-	// rather than as a failing phase later.
-	if !strings.Contains(script, `.credentials.json" ]`) {
-		t.Error("the entrypoint never checks that the agent ended up with credentials")
+	// A missing credential is a startup error now, checked before the agent
+	// account is prepared rather than surfacing as a failing phase later.
+	if !strings.Contains(script, `.credentials.json" ]`) || !strings.Contains(script, "no claude-code credentials") {
+		t.Error("the entrypoint no longer checks for claude-code credentials at startup")
 	}
 }
