@@ -68,7 +68,7 @@ CMD ["/etc/golem/orchestrator.yaml"]
 # unsupported (https://playwright.dev/docs/docker), and the baked-in Chromium
 # below is what lets the agent test UI headlessly. node:22-trixie-slim
 # keeps the same Node toolchain the Alpine image carried.
-FROM node:22-trixie-slim@sha256:2117f713a417f3aff682ac8f5bc2ebbdf1beed51f36e67ab1e0fd3866b6d2d8f AS shem
+FROM node:25-trixie-slim@sha256:aabbe39553d15ede8a97cc60c9e1a97034ff772afcf696ea42b94e7f5f2ec71b AS shem
 # All three CLIs by default: the image is one runtime-configured image,
 # not one build per backend. GOLEM_BACKEND picks among them at startup.
 ARG GOLEM_BACKENDS="claude-code codex opencode"
