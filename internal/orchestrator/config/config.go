@@ -236,13 +236,41 @@ func reportBadDurations(g GitHubConfig) {
 
 // Config holds all orchestrator server configuration.
 type Config struct {
-	Port          int          `yaml:"port"`
-	DBPath        string       `yaml:"db_path"`
-	SessionSecret string       `yaml:"session_secret"`
-	BaseURL       string       `yaml:"base_url"`
-	TLS           TLSConfig    `yaml:"tls"`
-	GitHub        GitHubConfig `yaml:"github"`
-	CSP           CSPConfig    `yaml:"csp"`
+	Port          int              `yaml:"port"`
+	DBPath        string           `yaml:"db_path"`
+	SessionSecret string           `yaml:"session_secret"`
+	BaseURL       string           `yaml:"base_url"`
+	TLS           TLSConfig        `yaml:"tls"`
+	GitHub        GitHubConfig     `yaml:"github"`
+	CSP           CSPConfig        `yaml:"csp"`
+	Supervisor    SupervisorConfig `yaml:"supervisor"`
+}
+
+// SupervisorConfig sets the caps on the supervisor's usage-limit waits. Empty
+// or unusable values take the defaults.
+type SupervisorConfig struct {
+	// UsageLimitMaxWait caps one wait for a parsed reset time (default 8h).
+	UsageLimitMaxWait string `yaml:"usage_limit_max_wait"`
+	// LimitBackoff is the schedule when no reset time can be parsed
+	// (default 15m, 30m, 1h, 2h); its last step repeats.
+	LimitBackoff []string `yaml:"limit_backoff"`
+	// LimitBackoffMax is the total wait before a human is asked (default 6h).
+	LimitBackoffMax string `yaml:"limit_backoff_max"`
+}
+
+// Durations resolves the three caps: max wait, backoff steps and total backoff
+// budget. A zero or empty result tells the caller to use its own default.
+func (c SupervisorConfig) Durations() (maxWait time.Duration, backoff []time.Duration, total time.Duration) {
+	maxWait = parseDurationOr("supervisor.usage_limit_max_wait", c.UsageLimitMaxWait, 0)
+	total = parseDurationOr("supervisor.limit_backoff_max", c.LimitBackoffMax, 0)
+	for _, raw := range c.LimitBackoff {
+		d := parseDurationOr("supervisor.limit_backoff", raw, 0)
+		if d == 0 {
+			return maxWait, nil, total // one bad step discards the schedule, not the others
+		}
+		backoff = append(backoff, d)
+	}
+	return maxWait, backoff, total
 }
 
 // defaultPortEnv is read by ListenPort. Not a secret, so it is read

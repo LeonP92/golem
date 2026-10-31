@@ -45,6 +45,7 @@ func newApprovalStack(t *testing.T) *approvalStack {
 	h := api.NewHandlers(gdb, ws.NewHub(), sse.NewBroker())
 	mux := http.NewServeMux()
 	h.RegisterHumanRoutes(mux)
+	h.RegisterShemRoutes(mux)
 	h.RegisterTicketRoutes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)

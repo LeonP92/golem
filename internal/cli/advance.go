@@ -7,10 +7,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
 	"github.com/leonp92/golem/internal/config"
+	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/ticket"
 )
@@ -118,6 +120,7 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "reading log: %v\n", err)
 		return 1
 	}
+	entries = collapseLongEntries(entries, maxLogBodyBytes)
 
 	runner, err := mf.runner(cfg, s.WorktreePath)
 	if err != nil {
@@ -129,14 +132,39 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	// Review the whole branch: from the pinned base, else --base.
-	from := s.BranchBaseSHA
-	if from == "" {
-		from = *base
-	}
+	// Review the whole branch: from the merge-base with the live base branch
+	// (--base; the epic branch for an epic child), else the pinned base. The
+	// pinned SHA goes stale once siblings merge, and a diff taken from it
+	// then holds every sibling's work.
+	from := reviewBase(s.WorktreePath, *base, s.BranchBaseSHA)
 	diff, err := reviewDiff(s.WorktreePath, from, "HEAD", stderr)
 	if err != nil {
 		fmt.Fprintf(stderr, "getting branch diff: %v\n", err)
+		return 1
+	}
+	// A diff over the cap cannot be reviewed whole, so no reviewer is run (its
+	// verdict on a part would not be evidence): park with the fix instead.
+	if limit := cfg.ReviewMaxDiffBytes(); len(diff) > limit {
+		tooLarge := fmt.Sprintf("%s review diff too large (%d bytes, cap %d); no reviewer was run, so no approval was recorded. "+
+			"Fix: merge or rebase onto the base branch if it carries unrelated work, split the ticket, or raise review.max_diff_bytes in .golem/config.yaml.",
+			evidence.EnvironmentMarker, len(diff), limit)
+		w, err := blog.NewWriter(logPath)
+		if err != nil {
+			fmt.Fprintf(stderr, "opening log: %v\n", err)
+			return 1
+		}
+		err = w.Append(blog.NewEntry("reviewer", blog.TypeStatus, tooLarge)) // first line, so the shem's environment-failure detection finds it
+		closeLogWriter(w, stderr)
+		if err != nil {
+			fmt.Fprintf(stderr, "recording attestation: %v\n", err)
+			return 1
+		}
+		s.Phase = ticket.PhaseNeedsAttention
+		if err := s.Save(ticketDir); err != nil {
+			fmt.Fprintf(stderr, "saving ticket: %v\n", err)
+			return 1
+		}
+		fmt.Fprintln(stderr, tooLarge)
 		return 1
 	}
 	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
@@ -178,4 +206,38 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 
 	fmt.Fprintln(stdout, result.Output)
 	return 0
+}
+
+// maxLogBodyBytes bounds one STATUS or BLOCKER body in the reviewer's log
+// slice. Nested gate output grew log files to 490 KB.
+const maxLogBodyBytes = 4 << 10
+
+// collapseLongEntries keeps the head and tail of an oversized STATUS or
+// BLOCKER body, where a command's verdict and its last output usually are.
+func collapseLongEntries(entries []blog.Entry, limit int) []blog.Entry {
+	out := make([]blog.Entry, len(entries))
+	copy(out, entries)
+	for i, e := range out {
+		if (e.Type != blog.TypeStatus && e.Type != blog.TypeBlocker) || len(e.Message) <= limit {
+			continue
+		}
+		half := limit / 2
+		out[i].Message = strings.ToValidUTF8(e.Message[:half], "") + fmt.Sprintf("\n[... %d bytes truncated ...]\n", len(e.Message)-2*half) +
+			strings.ToValidUTF8(e.Message[len(e.Message)-half:], "")
+	}
+	return out
+}
+
+// reviewBase prefers the live base branch (--base) over the pinned SHA, but only
+// when this checkout can resolve it: an unfetched base would make reviewDiff
+// fall back to the last commit alone, and a partial review reads as a full one.
+// A local:// repository has no origin, so origin/<b> falls back to <b>.
+func reviewBase(worktree, flagBase, pinned string) string {
+	local, _ := strings.CutPrefix(flagBase, "origin/")
+	for _, b := range []string{flagBase, local} {
+		if b != "" && revExists(worktree, b) {
+			return b
+		}
+	}
+	return pinned
 }

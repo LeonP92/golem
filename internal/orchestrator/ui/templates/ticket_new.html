@@ -101,8 +101,9 @@
           <span>
             <span class="label-text font-medium">Require my approval after the spec and the plan</span>
             <span class="label-text-alt block text-base-content/50">
-              Off: the ticket moves through brainstorm, plan and implement on its own, gated by automatic validation.
-              On: it stops after the spec and after the plan until you approve or request changes.
+              Off: the ticket moves through brainstorm, plan and implement on its own, gated by automatic validation,
+              and the supervisor waits out transient faults and runs approved recovery before ever asking you.
+              On: it stops after the spec and after the plan until you approve or request changes, and a blocked step always waits for you.
             </span>
           </span>
         </label>
