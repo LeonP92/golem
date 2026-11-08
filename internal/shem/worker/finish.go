@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/boundctx"
 	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/shem/client"
@@ -65,9 +66,9 @@ func (e *GolemExecutor) finishWorkPhase(ctx context.Context, cfg *config.Config,
 			}
 			// Only a marker that starts a line is ours; test output can quote it mid-line.
 			if i := strings.Index(ev, evidence.EnvironmentMarker); i == 0 || i > 0 && ev[i-1] == '\n' {
-				return errors.New(strings.TrimSpace(ev[i:]))
+				return errors.New(boundctx.Excerpt(strings.TrimSpace(ev[i:]), 2*boundctx.DefaultPerInput))
 			}
-			return fmt.Errorf("%s finished but the review gate did not pass; reviewer attestation and gate evidence:\n%s", what, ev)
+			return fmt.Errorf("%s finished but the review gate did not pass; reviewer attestation and gate evidence:\n%s", what, boundctx.Excerpt(ev, 2*boundctx.DefaultPerInput))
 		}
 		// The local phase is named because it is the whole diagnosis: "plan"
 		// means the agent stopped at the planning gate, "implement" means the

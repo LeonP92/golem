@@ -1,6 +1,7 @@
 package agentrunner
 
 import (
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -134,5 +135,22 @@ func TestBuildPrompt_NeutralizesEmbeddedDelimiters(t *testing.T) {
 				t.Errorf("attacker payload escaped past the closing diff delimiter:\n%s", got)
 			}
 		})
+	}
+}
+
+func TestBuildPromptBoundsHugeInputs(t *testing.T) {
+	dir := t.TempDir()
+	huge := strings.Repeat("noisy output line\n", 10<<20/18)
+	var entries []blog.Entry
+	for range 80 {
+		entries = append(entries, blog.NewEntry("gate", blog.TypeStatus, huge))
+	}
+	prompt := BuildPrompt(Context{RolePrompt: "role", LogSlice: entries, Diff: huge, SpillDir: dir})
+	if len(prompt) > 400<<10 {
+		t.Fatalf("prompt is %d bytes for 800 MB of input", len(prompt))
+	}
+	files, _ := filepath.Glob(filepath.Join(dir, "prompt-*", "*.txt"))
+	if len(files) == 0 || !strings.Contains(prompt, files[0]) && !strings.Contains(prompt, "prompt-") {
+		t.Fatalf("no spilled files referenced in the prompt: %v", files)
 	}
 }
