@@ -231,11 +231,11 @@ func Excerpt(text string, max int) string {
 		return text
 	}
 	h := max / 2
-	for h > 0 && !utf8.RuneStart(text[h]) {
+	for i := 0; i < utf8.UTFMax-1 && h > 0 && !utf8.RuneStart(text[h]); i++ {
 		h--
 	}
 	t := len(text) - max/2
-	for t < len(text) && !utf8.RuneStart(text[t]) {
+	for i := 0; i < utf8.UTFMax-1 && t < len(text) && !utf8.RuneStart(text[t]); i++ {
 		t++
 	}
 	return text[:h] + fmt.Sprintf("\n[... %d bytes omitted ...]\n", t-h) + text[t:]

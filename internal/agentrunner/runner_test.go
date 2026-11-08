@@ -179,7 +179,18 @@ func TestSpillAccessOnlyWhenSomethingWasSaved(t *testing.T) {
 		t.Errorf("missing dir: %v", got)
 	}
 	got := spillAccess(t.TempDir())
-	if len(got) != 4 || got[0] != "--add-dir" || got[2] != "--allowedTools" || !strings.HasPrefix(got[3], "Read(/") || !strings.HasSuffix(got[3], "/**)") {
+	if len(got) != 4 || got[0] != "--add-dir" || got[2] != "--allowedTools" || !strings.HasPrefix(got[3], "Read(//") || !strings.HasSuffix(got[3], "/**)") {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestReadRule(t *testing.T) {
+	for in, want := range map[string]string{
+		"/data/t/context": "Read(//data/t/context/**)",
+		"C:/Users/x/ctx":  "Read(//C:/Users/x/ctx/**)",
+	} {
+		if got := readRule(in); got != want {
+			t.Errorf("readRule(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

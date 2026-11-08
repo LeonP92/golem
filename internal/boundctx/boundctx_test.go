@@ -211,3 +211,10 @@ func TestUnreadableNeverPointsTheAgentAtFiles(t *testing.T) {
 		t.Fatalf("files are still saved for the operator: %v", files)
 	}
 }
+
+func TestExcerptAllContinuationBytesKeepsItsBudget(t *testing.T) {
+	got := Excerpt(strings.Repeat("\x80", 5000), 1000)
+	if len(got) < 900 {
+		t.Fatalf("collapsed to %d bytes", len(got))
+	}
+}
