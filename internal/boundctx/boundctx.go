@@ -4,15 +4,18 @@
 // was rejected as "~1241087 tokens (limit 1000000)". A Set bounds each input:
 // one that fits is passed through untouched, one that does not is written in
 // full to a file and replaced by a head and tail excerpt, the path, and a line
-// saying the agent may read the file with its normal tools.
+// saying the agent may read the file.
 package boundctx
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -24,23 +27,30 @@ const (
 	DefaultTotal = 128 << 10
 	// DefaultDiffLimit bounds a diff in the prompt unless the caller says more.
 	DefaultDiffLimit = 100 << 10
+	// MaxRolePrompt is the ceiling on the instruction part of a prompt.
+	MaxRolePrompt = 64 << 10
 
 	// minExcerpt is the least worth showing; below it an input is a pointer.
 	minExcerpt = 1 << 10
 	topFiles   = 15
+	// pruneAfter is how long spilled files stay.
+	pruneAfter = 7 * 24 * time.Hour
 )
 
 // Set bounds the inputs of one prompt. The zero value uses the defaults and
 // writes no files, so an overflow leaves only the excerpt.
 type Set struct {
-	// Dir is where full inputs go. A unique prompt-* directory is created in
-	// it on the first overflow. Empty means do not write files.
+	// Dir is where full inputs go. Files are named by content, so building the
+	// same prompt again reuses them. Empty means do not write files.
 	Dir      string
 	PerInput int
 	Total    int
+	// Unreadable means the agent has no tools: files are saved for the operator
+	// and the prompt does not point the agent at them.
+	Unreadable bool
 
-	used int
-	dir  string
+	used   int
+	pruned bool
 }
 
 func (s *Set) perInput() int {
@@ -57,9 +67,12 @@ func (s *Set) total() int {
 	return DefaultTotal
 }
 
+// Item is one named input of a sequence.
+type Item struct{ Name, Text string }
+
 // Bound returns text when it fits the per-input limit and the remaining
 // total. Otherwise it saves text under name and returns an excerpt with a
-// pointer. Name should be short and filename-safe; it is sanitised anyway.
+// pointer, or only the pointer when little room is left.
 func (s *Set) Bound(name, text string) string {
 	room := s.total() - s.used
 	if len(text) <= s.perInput() && len(text) <= room {
@@ -67,18 +80,55 @@ func (s *Set) Bound(name, text string) string {
 		return text
 	}
 	budget := min(s.perInput(), room)
+	var out string
 	if budget < minExcerpt {
-		note := s.spill(name, text, 0)
-		s.used += len(note)
-		return note
+		out = s.pointer(name, text)
+	} else {
+		out = Excerpt(text, budget) + s.saved(name, text)
 	}
-	out := Excerpt(text, budget) + s.spill(name, text, len(text))
 	s.used += len(out)
 	return out
 }
 
+// BoundSeq bounds items, oldest first, spending the budget on the newest. When
+// the budget runs out the older items are replaced by a single note at the
+// front, with their full text in one file; the result then has one more
+// element than the kept items. The total stays within the Set's Total plus
+// that one note.
+func (s *Set) BoundSeq(items []Item) []string {
+	out := make([]string, len(items))
+	cut := 0 // items[:cut] are omitted
+	for i := len(items) - 1; i >= 0; i-- {
+		room := s.total() - s.used
+		it := items[i]
+		if len(it.Text) <= min(s.perInput(), room) {
+			s.used += len(it.Text)
+			out[i] = it.Text
+			continue
+		}
+		budget := min(s.perInput(), room)
+		if budget < minExcerpt {
+			cut = i + 1
+			break
+		}
+		out[i] = Excerpt(it.Text, budget) + s.saved(it.Name, it.Text)
+		s.used += len(out[i])
+	}
+	if cut == 0 {
+		return out
+	}
+	var all strings.Builder
+	for _, it := range items[:cut] {
+		fmt.Fprintf(&all, "=== %s ===\n%s\n", it.Name, it.Text)
+	}
+	note := s.pointer(fmt.Sprintf("%d older entries", cut), all.String())
+	s.used += len(note)
+	return append([]string{note}, out[cut:]...)
+}
+
 // BoundDiff returns diff when it is at most limit bytes. A larger diff becomes
-// a per-file summary, an excerpt, and the path of the full diff.
+// a per-file summary, an excerpt, a statement of what was not seen, and the
+// path of the full diff.
 func (s *Set) BoundDiff(name, diff string, limit int) string {
 	if limit <= 0 {
 		limit = DefaultDiffLimit
@@ -86,58 +136,76 @@ func (s *Set) BoundDiff(name, diff string, limit int) string {
 	if len(diff) <= limit {
 		return diff
 	}
-	budget := min(s.perInput(), limit)
-	return DiffSummary(diff) + "\n" + Excerpt(diff, budget) +
-		s.spill(name, diff, len(diff)) +
-		"Generated and fixture files (testdata, golden files, lockfiles) can be reviewed by sampling a few of them.\n"
+	excerpt := Excerpt(diff, min(s.perInput(), limit))
+	path, _ := s.write(name, diff)
+	read := "The full diff is not available to you."
+	if path != "" && !s.Unreadable {
+		read = "Read " + path + " for the rest."
+	}
+	return DiffSummary(diff) + "\nExcerpt covers: " + strings.Join(diffFiles(excerpt), ", ") + "\n" +
+		"UNSEEN: only this excerpt and the file summary were provided, not the whole diff. " +
+		"Request changes for anything you cannot judge from them. " + read + "\n" +
+		"Generated and fixture files (testdata, golden files, lockfiles) can be reviewed by sampling a few of them.\n\n" +
+		excerpt + "\n"
 }
 
-// spill writes text to a file and returns the pointer line, or "" when the
-// Set has nowhere to write. size is the full length to report; 0 means the
-// pointer stands alone.
-func (s *Set) spill(name, text string, size int) string {
+// pointer replaces text entirely.
+func (s *Set) pointer(name, text string) string {
+	path, err := s.write(name, text)
+	if err == nil && s.Unreadable {
+		return fmt.Sprintf("[%s: %d bytes omitted; the full text is saved for the operator, not readable in this session]", name, len(text))
+	}
+	if err != nil {
+		return fmt.Sprintf("[%s: %d bytes omitted]", name, len(text))
+	}
+	return fmt.Sprintf("[%s: %d bytes omitted; the full text is in %s, which you may read with your file or shell tools]", name, len(text), path)
+}
+
+// saved is the line after an excerpt; empty when there is nowhere to write.
+func (s *Set) saved(name, text string) string {
 	path, err := s.write(name, text)
 	switch {
-	case err != nil && s.Dir != "":
+	case err == nil && s.Unreadable:
+		return fmt.Sprintf("\n[full text, %d bytes, saved for the operator; not readable in this session]\n", len(text))
+	case err == nil:
+		return fmt.Sprintf("\n[full text, %d bytes, in %s; you may read it with your file or shell tools]\n", len(text), path)
+	case s.Dir != "":
 		return fmt.Sprintf("\n[full text of %q not saved: %v]\n", name, err)
-	case err != nil && size == 0:
-		return fmt.Sprintf("[%s: %d bytes omitted]", name, len(text))
-	case err != nil:
-		return ""
-	case size == 0:
-		return fmt.Sprintf("[%s: %d bytes omitted; read the full text at %s with your normal file tools if you need it]", name, len(text), path)
 	}
-	return fmt.Sprintf("\n[full text, %d bytes, saved at %s; read it with your normal file tools if you need more]\n", size, path)
+	return ""
 }
 
+// write saves text under a name derived from its content and returns the path.
+// Writing the same text again changes nothing, so repeated prompts for one
+// ticket do not grow the directory.
 func (s *Set) write(name, text string) (string, error) {
 	if s.Dir == "" {
 		return "", fmt.Errorf("no directory")
 	}
-	if s.dir == "" {
-		if err := os.MkdirAll(s.Dir, 0o755); err != nil {
-			return "", err
-		}
-		d, err := os.MkdirTemp(s.Dir, "prompt-")
-		if err != nil {
-			return "", err
-		}
-		s.dir = d
+	if err := os.MkdirAll(s.Dir, 0o755); err != nil {
+		return "", err
 	}
-	path := filepath.Join(s.dir, safeName(name)+".txt")
-	for i := 2; ; i++ { // two inputs may share a name
-		f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if err == nil {
-			_, werr := f.WriteString(text)
-			if cerr := f.Close(); werr == nil {
-				werr = cerr
-			}
-			return path, werr
+	if !s.pruned {
+		s.pruned = true
+		prune(s.Dir)
+	}
+	sum := sha256.Sum256([]byte(text))
+	path := filepath.Join(s.Dir, safeName(name)+"-"+hex.EncodeToString(sum[:4])+".txt")
+	if st, err := os.Stat(path); err == nil && st.Size() == int64(len(text)) {
+		now := time.Now()
+		_ = os.Chtimes(path, now, now)
+		return path, nil
+	}
+	return path, os.WriteFile(path, []byte(text), 0o644)
+}
+
+// prune removes spilled files nobody has asked for in a week.
+func prune(dir string) {
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if info, err := e.Info(); err == nil && !e.IsDir() && time.Since(info.ModTime()) > pruneAfter {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
-		if !os.IsExist(err) {
-			return "", err
-		}
-		path = filepath.Join(s.dir, fmt.Sprintf("%s-%d.txt", safeName(name), i))
 	}
 }
 
@@ -156,42 +224,40 @@ func safeName(name string) string {
 
 // Excerpt returns text unchanged when it fits max bytes, and otherwise its
 // first and last halves around a marker saying how much was left out. Cuts
-// fall on rune boundaries. The result is about max bytes plus the marker.
+// move to the nearest rune start, so a multi-byte character is dropped whole
+// rather than split; bytes that were never valid UTF-8 are left alone.
 func Excerpt(text string, max int) string {
 	if len(text) <= max {
 		return text
 	}
-	half := max / 2
-	head := text[:half]
-	for len(head) > 0 && !utf8.ValidString(head) {
-		head = head[:len(head)-1]
+	h := max / 2
+	for h > 0 && !utf8.RuneStart(text[h]) {
+		h--
 	}
-	tail := text[len(text)-half:]
-	for len(tail) > 0 && !utf8.ValidString(tail) {
-		tail = tail[1:]
+	t := len(text) - max/2
+	for t < len(text) && !utf8.RuneStart(text[t]) {
+		t++
 	}
-	omitted := len(text) - len(head) - len(tail)
-	return head + fmt.Sprintf("\n[... %d bytes omitted ...]\n", omitted) + tail
+	return text[:h] + fmt.Sprintf("\n[... %d bytes omitted ...]\n", t-h) + text[t:]
 }
 
-// DiffSummary lists the files, line counts and largest files of a unified
-// diff, marking generated and fixture files.
-func DiffSummary(diff string) string {
-	type file struct {
-		path      string
-		add, del  int
-		bytes     int
-		generated bool
-	}
-	var files []*file
-	var cur *file
+type fileStat struct {
+	path      string
+	add, del  int
+	bytes     int
+	generated bool
+}
+
+func diffStats(diff string) []*fileStat {
+	var files []*fileStat
+	var cur *fileStat
 	for _, line := range strings.SplitAfter(diff, "\n") {
 		if rest, ok := strings.CutPrefix(line, "diff --git "); ok {
 			path := strings.TrimSpace(rest)
 			if i := strings.LastIndex(path, " b/"); i >= 0 {
 				path = path[i+3:]
 			}
-			cur = &file{path: path, generated: generatedPath(path)}
+			cur = &fileStat{path: path, generated: generatedPath(path)}
 			files = append(files, cur)
 		}
 		if cur == nil {
@@ -206,6 +272,25 @@ func DiffSummary(diff string) string {
 			cur.del++
 		}
 	}
+	return files
+}
+
+// diffFiles names the files whose header appears in a piece of diff.
+func diffFiles(excerpt string) []string {
+	var names []string
+	for _, f := range diffStats(excerpt) {
+		names = append(names, f.path)
+	}
+	if len(names) == 0 {
+		return []string{"(parts of one file)"}
+	}
+	return names
+}
+
+// DiffSummary lists the files, line counts and largest files of a unified
+// diff, marking generated and fixture files.
+func DiffSummary(diff string) string {
+	files := diffStats(diff)
 	var add, del int
 	for _, f := range files {
 		add += f.add
