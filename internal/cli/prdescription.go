@@ -113,6 +113,7 @@ func TicketPRDescription(args []string, stdout, stderr io.Writer) int {
 	result, err := runner.RunAgent(context.Background(), "pr-description", agentrunner.Context{
 		LogSlice:   entries,
 		RolePrompt: prompt,
+		SpillDir:   filepath.Join(ticketDir, "context"),
 	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running pr-description: %v\n", err)

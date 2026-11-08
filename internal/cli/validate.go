@@ -138,6 +138,7 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 	}
 	result, err := runner.RunAgent(context.Background(), "spec-adherence", agentrunner.Context{
 		LogSlice:   before,
+		SpillDir:   filepath.Join(ticketDir, "context"),
 		RolePrompt: string(rolePrompt) + "\n\n" + validationInstruction(*stage, *id, artifactName, string(artifact)),
 	}, model)
 	if err != nil {

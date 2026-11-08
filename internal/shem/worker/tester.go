@@ -159,6 +159,7 @@ func buildTesterPrompt(ctx context.Context, role string, claim *client.ClaimResp
 		RolePrompt: role + tester.Contract + "\nYou cannot run commands in this session. Judge the candidate diff and acceptance results supplied as data. A non-zero acceptance exit is a FAIL.\n",
 		Diff:       string(diff),
 		LogSlice:   []blog.Entry{blog.NewEntry("worker", blog.TypeStatus, evidence)},
+		SpillDir:   filepath.Join(ticketDir, "context"),
 	}), nil
 }
 

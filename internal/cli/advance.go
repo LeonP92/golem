@@ -170,6 +170,8 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
 		Diff:       diff,
+		SpillDir:   filepath.Join(ticketDir, "context"),
+		DiffLimit:  cfg.ReviewMaxDiffBytes(),
 		RolePrompt: string(rolePrompt) + reviewerVerdictContract, // the contract must not depend on an editable role file
 	}, model)
 	if err != nil {
