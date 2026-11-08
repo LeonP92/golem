@@ -230,3 +230,34 @@ func TestReviewBaseNeedsAResolvableLiveBase(t *testing.T) {
 		t.Errorf("no --base: %q", got)
 	}
 }
+
+// A diff over the cap but under four times it is not parked: the reviewer runs on a summary and an excerpt, is told
+// what it did not see, and the whole diff is saved where it can read it.
+func TestTicketReviewDiffBetweenCapAndHardLimitGetsASummary(t *testing.T) {
+	repo, worktree, id := setUpTicketForStepTest(t)
+	writeReviewerSetup(t, repo)
+	big := strings.Repeat("// padding line to make the diff longer than the cap\n", 60)
+	os.WriteFile(filepath.Join(worktree, "big.go"), []byte("package x\n"+big), 0o644)
+	gitIn(t, worktree, "add", "big.go")
+	gitIn(t, worktree, "commit", "-q", "-m", "big")
+	cfgPath := filepath.Join(repo, ".golem", "config.yaml")
+	cfg, _ := os.ReadFile(cfgPath)
+	os.WriteFile(cfgPath, append(cfg, []byte("review:\n  max_diff_bytes: 2000\n")...), 0o644) // the diff is about 3.2 KB: over 1x, under 4x
+	prompt := capturePrompt(t)
+
+	var stdout, stderr bytes.Buffer
+	if code := TicketReview([]string{"--repo", repo, "--ticket", id, "--base", "HEAD~1"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	got, err := os.ReadFile(prompt)
+	if err != nil {
+		t.Fatal("no reviewer ran on a diff under the hard limit")
+	}
+	if !strings.Contains(string(got), "UNSEEN") {
+		t.Errorf("the reviewer was not told what it did not see:\n%s", got)
+	}
+	saved, _ := filepath.Glob(filepath.Join(repo, ".golem", "tickets", id, "context", "*"))
+	if len(saved) == 0 {
+		t.Error("the full diff was not saved for the reviewer to read")
+	}
+}
