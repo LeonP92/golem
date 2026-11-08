@@ -181,7 +181,7 @@ func TestLogEmitFromLinkedWorktreeLandsInRealLog(t *testing.T) {
 	}
 }
 
-// Over the byte cap no reviewer runs (it would see only a part, and its verdict
+// Over four times the cap no reviewer runs (it would see only a part, and its verdict
 // would read as a whole review): the failure is an environment one that names the
 // size and the fix, whatever the provider says.
 func TestTicketReviewOversizedDiffIsEnvironmentFailure(t *testing.T) {
@@ -189,7 +189,7 @@ func TestTicketReviewOversizedDiffIsEnvironmentFailure(t *testing.T) {
 	writeReviewerSetup(t, repo)
 	cfgPath := filepath.Join(repo, ".golem", "config.yaml")
 	cfg, _ := os.ReadFile(cfgPath)
-	os.WriteFile(cfgPath, append(cfg, []byte("review:\n  max_diff_bytes: 50\n")...), 0o644)
+	os.WriteFile(cfgPath, append(cfg, []byte("review:\n  max_diff_bytes: 5\n")...), 0o644)
 	commitGo(t, worktree, "big.go")
 	prompt := capturePrompt(t)
 

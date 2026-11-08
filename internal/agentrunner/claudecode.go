@@ -410,5 +410,11 @@ func spillAccess(dir string) []string {
 	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
 		return nil
 	}
-	return []string{"--add-dir", abs, "--allowedTools", "Read(/" + filepath.ToSlash(abs) + "/**)"}
+	return []string{"--add-dir", abs, "--allowedTools", readRule(abs)}
+}
+
+// readRule is the Read permission for everything under dir: "//" marks an
+// absolute filesystem path, whether it is /data/x or C:/x.
+func readRule(dir string) string {
+	return "Read(//" + strings.TrimPrefix(filepath.ToSlash(dir), "/") + "/**)"
 }
