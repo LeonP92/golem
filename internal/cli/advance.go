@@ -172,8 +172,8 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		LogSlice:   entries,
 		Diff:       diff,
 		SpillDir:   filepath.Join(ticketDir, "context"),
-		DiffLimit:  cfg.ReviewMaxDiffBytes(),                     // larger diffs go as summary + excerpt + file
-		RolePrompt: string(rolePrompt) + reviewerVerdictContract, // the contract must not depend on an editable role file
+		DiffLimit:  min(cfg.ReviewMaxDiffBytes(), maxInlineReviewDiff), // larger diffs go as summary + excerpt + file
+		RolePrompt: string(rolePrompt) + reviewerVerdictContract,       // the contract must not depend on an editable role file
 	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running reviewer: %v\n", err)
@@ -244,3 +244,7 @@ func reviewBase(worktree, flagBase, pinned string) string {
 	}
 	return pinned
 }
+
+// maxInlineReviewDiff caps what review.max_diff_bytes can ask to send whole: a larger setting would bring back the
+// prompt overflow this limit exists to prevent. Bigger diffs get the summary, an excerpt and the file.
+const maxInlineReviewDiff = 600_000

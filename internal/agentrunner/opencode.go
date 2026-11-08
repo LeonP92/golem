@@ -333,6 +333,7 @@ func (o OpenCode) RunAgent(ctx context.Context, role string, in Context, model s
 	}
 	cmd := agentCmd(ctx, o.opts, cwd, argv...)
 	cmd.Env = append(cmd.Env, policyEnv...)
+	in.SpillUnreadable = session.noTools // a no-tool session cannot open the saved files; the excerpt is all it has
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer
