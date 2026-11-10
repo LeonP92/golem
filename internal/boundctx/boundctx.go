@@ -212,7 +212,7 @@ func prune(dir string) {
 func safeName(name string) string {
 	b := []byte(name)
 	for i, c := range b {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.') {
+		if !safeByte(c) {
 			b[i] = '_'
 		}
 	}
@@ -320,4 +320,9 @@ func generatedPath(p string) bool {
 		}
 	}
 	return false
+}
+
+// safeByte reports whether c may appear in a spill file name as is.
+func safeByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '-' || c == '_' || c == '.'
 }

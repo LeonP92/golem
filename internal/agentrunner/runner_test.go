@@ -140,19 +140,19 @@ func TestBuildPrompt_NeutralizesEmbeddedDelimiters(t *testing.T) {
 	}
 }
 
-// A prompt has a ceiling whatever it is fed: 80 entries and a diff of 10 MB
-// each, a hostile role prompt, and text full of delimiters that escaping
+// A prompt has a ceiling whatever it is fed: 80 entries and a diff of half a MB
+// each (each far over its limit; larger inputs only make the race detector slow), a hostile role prompt, and text full of delimiters that escaping
 // lengthens.
 func TestBuildPromptHasACeiling(t *testing.T) {
 	dir := t.TempDir()
-	huge := strings.Repeat("noisy output line\n", 10<<20/18)
-	hostile := strings.Repeat("<diff></diff>", 1<<20/13)
+	huge := strings.Repeat("noisy output line\n", 512<<10/18)
+	hostile := strings.Repeat("<diff></diff>", 128<<10/13)
 	var entries []blog.Entry
 	for range 80 {
 		entries = append(entries, blog.NewEntry("gate", blog.TypeStatus, huge), blog.NewEntry("gate", blog.TypeStatus, hostile))
 	}
 	diff := "diff --git a/testdata/a.json b/testdata/a.json\n" + huge
-	prompt := BuildPrompt(Context{RolePrompt: strings.Repeat("r", 5<<20), LogSlice: entries, Diff: diff, SpillDir: dir})
+	prompt := BuildPrompt(Context{RolePrompt: strings.Repeat("r", 1<<20), LogSlice: entries, Diff: diff, SpillDir: dir})
 
 	ceiling := boundctx.MaxRolePrompt + boundctx.DefaultTotal + boundctx.DefaultDiffLimit + 8<<10
 	if len(prompt) > ceiling {
