@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/leonp92/golem/internal/epic"
@@ -39,6 +41,7 @@ func (h *Handlers) RegisterEpicRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/epics/{id}/merge-final", write(rbac.PermTicketManage, h.mergeFinalEpic))
 	mux.Handle("POST /api/epics/{id}/pause", write(rbac.PermTicketManage, h.pauseEpic))
 	mux.Handle("POST /api/epics/{id}/resume", write(rbac.PermTicketManage, h.resumeEpic))
+	mux.Handle("POST /api/epics/{id}/cancel", write(rbac.PermTicketManage, h.cancelEpic))
 	// Shem-authenticated: the tester posts verdicts for the child it holds,
 	// and the shem that did a child's work runs the integration lane through
 	// the gate check and the result receipt.
@@ -95,6 +98,52 @@ func (h *Handlers) resumeEpic(w http.ResponseWriter, r *http.Request) {
 		h.Hub.Broadcast(e.RepoRemote, ws.WSMessage{Type: "epic_resumed", Repo: e.RepoRemote})
 	}
 	writeEpicResult(w, 0, nil, nil)
+}
+
+// cancelEpic abandons a run and closes its open children through the ticket
+// close path, in one transaction. The body is optional: JSON {"reason"} or
+// the page's form field. Branches and receipts stay.
+func (h *Handlers) cancelEpic(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Reason string `json:"reason"`
+	}
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "application/x-www-form-urlencoded") {
+		if err := r.ParseForm(); err != nil {
+			http.Error(w, "bad request", http.StatusBadRequest)
+			return
+		}
+		body.Reason = r.PostForm.Get("reason")
+	} else if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	who := actor(r)
+	note := "Closed because its epic run was cancelled"
+	if who != "" {
+		note += " by " + who
+	}
+	if body.Reason != "" {
+		note += ": " + body.Reason
+	}
+	var closed []db.Ticket
+	err := epics.Cancel(h.DB, r.PathValue("id"), body.Reason, who, func(tx *gorm.DB, child db.Ticket) error {
+		fresh, err := closeTicketTx(tx, child.ID)
+		if err != nil {
+			return err
+		}
+		if err := tx.Where("ticket_id = ? AND resolved_at IS NULL", child.ID).Delete(&db.HumanInput{}).Error; err != nil {
+			return err
+		}
+		closed = append(closed, fresh)
+		return appendLogTx(tx, child.ID, "STATUS", "human", "", note+".")
+	})
+	if err == nil {
+		log.Printf("epics api: run %s cancelled by %q, %d child(ren) closed", r.PathValue("id"), who, len(closed))
+		for _, child := range closed {
+			h.notifyIntegratedChildClosed(child)
+		}
+	}
+	writeEpicResult(w, http.StatusOK, map[string]int{"closed": len(closed)}, err)
 }
 
 // mergeFinalEpic records the human final merge: the caller attests the
@@ -436,8 +485,8 @@ func (h *Handlers) pushIntegrationRevision(child db.Ticket) {
 	h.Hub.Push(*child.AssignedShem, ws.WSMessage{Type: "ticket_revise", TicketID: &child.ID, Repo: child.RepoRemote}) //nolint:errcheck
 }
 
-// notifyIntegratedChildClosed releases the shem's worktree after the receipt
-// made the child terminal. The phase and receipt are committed before this
+// notifyIntegratedChildClosed releases the shem's worktree after a receipt or
+// a run cancel made the child terminal. The phase is committed before this
 // notification is sent.
 func (h *Handlers) notifyIntegratedChildClosed(child db.Ticket) {
 	if child.AssignedShem == nil || h.Hub == nil {
