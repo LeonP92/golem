@@ -773,6 +773,7 @@ func forwardNewLines(logPath string, ticketID string, forwarded *int, c *client.
 	// A long line arrives cut to its start and end, so it neither stops
 	// forwarding nor is lost. A last line without its newline is still being
 	// written (blog.Writer ends every entry with one); the next pass sends it.
+	// Lines decode into the full blog.Entry, so one with a bad timestamp is skipped.
 	line := 0
 	_ = blog.ForEach(f, func(e *blog.Entry, _ error, terminated bool) error {
 		if !terminated {

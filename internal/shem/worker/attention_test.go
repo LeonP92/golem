@@ -202,7 +202,7 @@ func TestForwardNewLinesSurvivesOverlongLine(t *testing.T) {
 	}
 	// Truncated once, by the reader, and in plain text.
 	if m := got[0].Message; len(m) > maxForwardedMessage || !strings.HasSuffix(m, "xxx\nFAIL TestHandler") ||
-		strings.Contains(m, "omitted") || got[0].FromRole != "gate" {
+		strings.Count(m, "[line truncated") != 1 || strings.Count(m, "[...") != 1 || got[0].FromRole != "gate" {
 		t.Fatalf("long entry: %d bytes, role %q", len(m), got[0].FromRole)
 	}
 }

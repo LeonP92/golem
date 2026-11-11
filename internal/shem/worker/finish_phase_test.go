@@ -195,6 +195,24 @@ func TestFinishWorkPhaseKeepsEnvironmentEvidenceInOverlongGateEntry(t *testing.T
 	}
 }
 
+// The gate puts the marker first and the command output after it.
+func TestFinishWorkPhaseKeepsLeadingMarkerInOverlongGateEntry(t *testing.T) {
+	cfg := &config.Config{NoPush: true}
+	claim := &client.ClaimResponse{TicketID: "t-1", Branch: "ticket/t-1"}
+	dir := t.TempDir()
+	writeState(t, dir, "needs-attention", "")
+	w, err := blog.NewWriter(filepath.Join(dir, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Append(blog.NewEntry("gate", blog.TypeStatus, evidence.EnvironmentMarker+" environment command=\"npm test\" exit=127\n"+strings.Repeat("npm ERR! \"x\"\n", 1<<17)+"node: not found"))
+	w.Close()
+	err = testExecutor(t).finishWorkPhase(context.Background(), cfg, nil, claim, dir, dir, "Implementation", claim.Branch)
+	if err == nil || !strings.HasPrefix(err.Error(), evidence.EnvironmentMarker+" environment command=\"npm test\"") || !strings.Contains(err.Error(), "node: not found") {
+		t.Fatalf("environment evidence lost: %.300v", err)
+	}
+}
+
 // Test output can quote the marker; only a marker that starts a line stops repair.
 func TestFinishWorkPhaseIgnoresMarkerQuotedMidLine(t *testing.T) {
 	cfg := &config.Config{NoPush: true}
