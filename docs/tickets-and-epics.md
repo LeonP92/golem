@@ -267,9 +267,15 @@ Close action closes one: its shem is told to stop, a linked issue is closed,
 and the child's log says who cancelled the run and why. An active plan job is
 failed and the merge slot is freed. Nothing is deleted: branches, the
 integration branch, merged receipts and a final pull request stay as they
-are. A cancelled run cannot be resumed, started or completed. The epics list
+are. A cancelled run cannot be resumed, started or completed. The epics page
 hides cancelled runs by default; pick `cancelled` in the state filter to see
-them.
+them. `GET /api/epics` is not filtered that way: it returns cancelled runs
+with the rest unless `?state=` asks for one state. The reason is capped at
+500 characters.
+
+Known limit: a shem already running a plan-generation session is not told to
+stop. Its job is marked failed at once, so whatever it posts afterwards is
+refused, but the session runs to its end first.
 
 ![An epic run: approved plan, requirements, and children in dependency order](images/epic-run.png)
 

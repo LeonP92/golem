@@ -39,7 +39,7 @@ States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
   `CancelledBy`, `CancelledAt`, deletes the integration slot, fails an
   active plan job, and passes every non-closed child to a close hook
   (`api.cancelEpic` uses the ticket close path, logs on each child, then
-  pushes `ticket_closed`). A repeat is a no-op; `completed` is refused.
+  pushes `ticket_closed`). A repeat is a no-op (`changed` false); `completed` is refused.
   `Start` and `AddRevision` touch the epic row first so they serialize with
   it. Every other step already whitelists its states, so a cancelled run
   never starts, claims, integrates or completes.
