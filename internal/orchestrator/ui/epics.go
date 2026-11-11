@@ -24,8 +24,23 @@ func (h *Handlers) epicsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	// Cancelled runs are kept, never deleted, but stay out of the default
+	// view; the state filter shows them.
+	hidden := 0
+	if state == "" {
+		kept := list[:0]
+		for _, e := range list {
+			if e.State == epics.StateCancelled {
+				hidden++
+				continue
+			}
+			kept = append(kept, e)
+		}
+		list = kept
+	}
 	data := h.base(r, "epics")
 	data["Epics"] = list
+	data["HiddenCancelled"] = hidden
 	data["RepoFilter"] = repo
 	data["StateFilter"] = state
 	data["States"] = epics.States
