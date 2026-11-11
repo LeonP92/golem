@@ -152,3 +152,47 @@ func TestForEachReportsUnterminatedLine(t *testing.T) {
 		t.Fatalf("terminated %v, err %v", ends, err)
 	}
 }
+
+// The cut edge of a fragment may split an escape, a rune or a surrogate
+// pair; what is left of the split character is dropped, nothing else.
+func TestUnquoteFragmentCutEdges(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		frag     string
+		cutStart bool
+		want     string
+	}{
+		{"head inside é", "abc\xc3", false, "abc"},
+		{"tail inside é", "\xa9def", true, "def"},
+		{"head inside 😀 bytes", "abc\xf0\x9f", false, "abc"},
+		{"tail inside 😀 bytes", "\x98\x80xyz", true, "xyz"},
+		{"head between 😀 escapes", `abc\ud83d`, false, "abc"},
+		{"head inside 😀 escape", `abc\ud83d\ude`, false, "abc"},
+		{"tail between 😀 escapes", `\ude00xyz`, true, "xyz"},
+		{"tail inside 😀 escape", `d83d\ude00xyz`, true, "xyz"},
+		{"head inside u escape", `abc\u00`, false, "abc"},
+		{"head trailing backslash", `abc\`, false, "abc"},
+		{"head escaped backslash", `abc\\`, false, `abc\`},
+		{"tail escaped quote cut", `"xyz`, true, "xyz"},
+		{"tail escaped backslash cut", `\xyz`, true, "xyz"},
+		{"tail escape letter cut", `nxyz`, true, "nxyz"},
+		{"whole escapes", `a\"b\né`, false, "a\"b\né"},
+	} {
+		if got := unquoteFragment([]byte(tc.frag), tc.cutStart); got != tc.want {
+			t.Errorf("%s: got %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
+// A long line whose last quote is escaped has no closing quote; its tail is
+// kept raw rather than decoded as if the string ended there.
+func TestReadAllKeepsUnclosedLongLineRaw(t *testing.T) {
+	line := `{"role":"r","type":"STATUS","message":"` + strings.Repeat("x", maxLine) + `\"}`
+	entries, err := ReadAll(writeLog(t, line+"\n"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("got %d entries, err %v", len(entries), err)
+	}
+	if m := entries[0].Message; !strings.HasSuffix(m, `x\"}`) {
+		t.Fatalf("tail decoded: %q", m[len(m)-20:])
+	}
+}

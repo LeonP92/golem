@@ -8,6 +8,7 @@ import (
 	"io"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 const (
@@ -149,18 +150,44 @@ func escaped(b []byte, i int) bool {
 }
 
 // unquoteFragment decodes part of a JSON string body. The cut edge (the
-// start when cutStart, else the end) may split an escape such as \u00e9, so
-// up to six bytes are dropped there until it decodes; raw bytes otherwise.
+// start when cutStart, else the end) may split a rune, an escape such as
+// \u00e9, or a surrogate pair: the split rune's bytes are dropped, up to six
+// bytes are dropped until it decodes, and a replacement character the split
+// left within six bytes of the edge goes with what precedes or follows it.
+// Raw bytes when it does not decode.
 func unquoteFragment(f []byte, cutStart bool) string {
-	for drop := 0; drop <= 6 && drop <= len(f); drop++ {
+	if cutStart {
+		for i := 0; i < utf8.UTFMax-1 && len(f) > 0 && !utf8.RuneStart(f[0]); i++ {
+			f = f[1:]
+		}
+	} else if i := max(0, len(f)-(utf8.UTFMax-1)); len(f) > 0 {
+		for j := len(f) - 1; j >= i; j-- {
+			if utf8.RuneStart(f[j]) {
+				if !utf8.FullRune(f[j:]) {
+					f = f[:j]
+				}
+				break
+			}
+		}
+	}
+	const edge = 6
+	for drop := 0; drop <= edge && drop <= len(f); drop++ {
 		g := f[:len(f)-drop]
 		if cutStart {
 			g = f[drop:]
 		}
 		var s string
-		if json.Unmarshal(append(append([]byte{'"'}, g...), '"'), &s) == nil {
-			return s
+		if json.Unmarshal(append(append([]byte{'"'}, g...), '"'), &s) != nil {
+			continue
 		}
+		if cutStart {
+			if i := strings.IndexRune(s, utf8.RuneError); i >= 0 && i <= edge {
+				s = s[i+len(string(utf8.RuneError)):]
+			}
+		} else if i := strings.LastIndex(s, string(utf8.RuneError)); i >= 0 && len(s)-i <= edge {
+			s = s[:i]
+		}
+		return s
 	}
 	return string(f)
 }
