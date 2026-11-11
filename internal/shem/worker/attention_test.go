@@ -2,9 +2,12 @@ package worker
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/leonp92/golem/internal/evidence"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -137,6 +140,70 @@ func TestDiagnoserReceivesEvidenceAndModel(t *testing.T) {
 		if !strings.Contains(prompt, want) {
 			t.Errorf("missing %q", want)
 		}
+	}
+}
+
+// One gate output line over the read limit used to park the ticket with
+// "bufio.Scanner: token too long"; the diagnosis now runs and sees the end.
+func TestDiagnoserReadsOverlongEvidenceLine(t *testing.T) {
+	dir := diagnoseFixture(t)
+	w, err := blog.NewWriter(filepath.Join(dir, "log.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Append(blog.NewEntry("gate", blog.TypeBlocker, strings.Repeat(`{"pass":true},`, 1<<17)+"\nFAIL TestHandler \"x\""))
+	w.Close()
+	runner := &evidenceRunner{}
+	result, err := ModelDiagnoser{Runner: runner}.Diagnose(context.Background(), &client.ClaimResponse{}, "gate failed", dir)
+	if err != nil || result.Route != "retry" {
+		t.Fatalf("diagnosis: %+v %v", result, err)
+	}
+	prompt := agentrunner.BuildPrompt(runner.input)
+	for _, want := range []string{"FAIL: missing assertion", "line truncated", "{\"pass\":true},\nFAIL TestHandler \"x\""} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if len(prompt) > 512<<10 {
+		t.Errorf("prompt %d bytes", len(prompt))
+	}
+}
+
+// A long line used to end forwarding for the rest of the ticket.
+func TestForwardNewLinesSurvivesOverlongLine(t *testing.T) {
+	var got []client.LogPayload
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p client.LogPayload
+		if json.NewDecoder(r.Body).Decode(&p) == nil {
+			got = append(got, p)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"sequence_num":1}`)
+	}))
+	defer srv.Close()
+	path := filepath.Join(t.TempDir(), "log.jsonl")
+	w, err := blog.NewWriter(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Append(blog.NewEntry("gate", blog.TypeBlocker, strings.Repeat("x", 2<<20)+"\nFAIL TestHandler"))
+	w.Append(blog.NewEntry("reviewer", blog.TypeFinding, "after"))
+	w.Close()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.WriteString(`{"role":"half`) // a writer mid-append
+	f.Close()
+	forwarded := 0
+	forwardNewLines(path, "t1", &forwarded, client.New(srv.URL, "k", "s"))
+	if forwarded != 2 || len(got) != 2 || got[1].Message != "after" {
+		t.Fatalf("forwarded %d, got %d", forwarded, len(got))
+	}
+	// Truncated once, by the reader, and in plain text.
+	if m := got[0].Message; len(m) > maxForwardedMessage || !strings.HasSuffix(m, "xxx\nFAIL TestHandler") ||
+		strings.Contains(m, "omitted") || got[0].FromRole != "gate" {
+		t.Fatalf("long entry: %d bytes, role %q", len(m), got[0].FromRole)
 	}
 }
 

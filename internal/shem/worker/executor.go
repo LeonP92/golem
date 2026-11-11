@@ -1,7 +1,6 @@
 package worker
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -17,6 +16,8 @@ import (
 	"time"
 
 	"github.com/leonp92/golem/internal/agentenv"
+	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/boundctx"
 	"github.com/leonp92/golem/internal/evidence"
 	"github.com/leonp92/golem/internal/forge"
 	"github.com/leonp92/golem/internal/models"
@@ -754,12 +755,10 @@ func tailLog(logPath string, ticketID string, skipLines int, c *client.Client, s
 	}
 }
 
-// rawBlogEntry matches the JSON schema written by blog.Writer (role, type, message).
-type rawBlogEntry struct {
-	Role    string `json:"role"`
-	Type    string `json:"type"`
-	Message string `json:"message"`
-}
+// maxForwardedMessage bounds one entry posted to the server: the line reader
+// used to stop at 64 KiB, so no longer entry was ever stored there. An entry
+// blog already truncated fits, so it is not cut a second time.
+const maxForwardedMessage = 64 << 10
 
 // forwardNewLines opens logPath, skips *forwarded lines, and POSTs any new ones.
 // *forwarded always advances past each processed line so a transient PostLog
@@ -771,17 +770,20 @@ func forwardNewLines(logPath string, ticketID string, forwarded *int, c *client.
 	}
 	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 
-	scanner := bufio.NewScanner(f)
+	// A long line arrives cut to its start and end, so it neither stops
+	// forwarding nor is lost. A last line without its newline is still being
+	// written (blog.Writer ends every entry with one); the next pass sends it.
 	line := 0
-	for scanner.Scan() {
+	_ = blog.ForEach(f, func(e *blog.Entry, _ error, terminated bool) error {
+		if !terminated {
+			return nil
+		}
 		if line >= *forwarded {
-			raw := scanner.Text()
-			var r rawBlogEntry
-			if err := json.Unmarshal([]byte(raw), &r); err == nil {
+			if e != nil {
 				p := client.LogPayload{
-					EntryType: r.Type,
-					FromRole:  r.Role,
-					Message:   r.Message,
+					EntryType: string(e.Type),
+					FromRole:  e.Role,
+					Message:   boundctx.Excerpt(e.Message, maxForwardedMessage),
 				}
 				if _, postErr := c.PostLog(ticketID, p); postErr != nil {
 					log.Printf("executor: post log line %d: %v", line, postErr)
@@ -790,7 +792,8 @@ func forwardNewLines(logPath string, ticketID string, forwarded *int, c *client.
 			*forwarded++
 		}
 		line++
-	}
+		return nil
+	})
 }
 
 // readState reads .golem/tickets/<id>/state.json and returns (phase, sha, error).
