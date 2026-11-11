@@ -323,7 +323,9 @@ An epic turns one specification into several dependent tickets (UI: **Epics**).
    unfinished integrations every 10 seconds, including after outages or
    a restart. Paused runs wait without spending fix attempts. A human can also record a receipt by hand via
    `POST /api/epics/{id}/nodes/{key}/integrate`.
-6. **Pause/Resume** stops and restarts claims and merges. When every node
+6. **Pause/Resume** stops and restarts claims and merges. **Cancel**
+   (UI or `POST /api/epics/{id}/cancel`) abandons a run that has not
+   completed and closes its open tickets; branches are kept. When every node
    is integrated the run waits for final review (`trunk-flags` completes
    instead). With the GitHub add-on enabled for the repo, this is when
    the integration branch's pull request to base is opened.
