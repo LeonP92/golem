@@ -128,6 +128,9 @@ func (h *Handlers) cancelEpic(w http.ResponseWriter, r *http.Request) {
 	var closed []db.Ticket
 	err := epics.Cancel(h.DB, r.PathValue("id"), body.Reason, who, func(tx *gorm.DB, child db.Ticket) error {
 		fresh, err := closeTicketTx(tx, child.ID)
+		if errors.Is(err, errAlreadyClosed) {
+			return nil // a human closed it while the cancel ran
+		}
 		if err != nil {
 			return err
 		}
