@@ -35,11 +35,12 @@ const (
 	StatePaused              = "paused"
 	StateAwaitingFinalReview = "awaiting-final-review"
 	StateCompleted           = "completed"
+	StateCancelled           = "cancelled"
 )
 
 // States lists the run states in display order.
 var States = []string{StateDraft, StateAwaitingApproval, StateRunning, StatePaused,
-	StateAwaitingFinalReview, StateCompleted}
+	StateAwaitingFinalReview, StateCompleted, StateCancelled}
 
 var (
 	ErrNotFound        = errors.New("epic not found")
@@ -157,6 +158,10 @@ func load(gdb *gorm.DB, id string) (*db.Epic, error) {
 func AddRevision(gdb *gorm.DB, epicID string, plan epic.Plan, repoSHA string) (*db.EpicPlanRevision, error) {
 	var rev db.EpicPlanRevision
 	err := gdb.Transaction(func(tx *gorm.DB) error {
+		// Serialize with Cancel: the state written below must not undo one.
+		if err := tx.Model(&db.Epic{}).Where("id = ?", epicID).Update("updated_at", time.Now()).Error; err != nil {
+			return err
+		}
 		e, err := load(tx, epicID)
 		if err != nil {
 			return err

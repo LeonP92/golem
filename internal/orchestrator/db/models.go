@@ -528,9 +528,13 @@ type Epic struct {
 	CurrentRevision  int    `gorm:"not null;default:0" json:"current_revision"`
 	ApprovedRevision int    `gorm:"not null;default:0" json:"approved_revision"`
 	ApprovedPlanHash string `gorm:"not null;default:''" json:"approved_plan_hash"`
-	CreatedByUserID  *uint  `gorm:"index" json:"created_by_user_id"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// Cancel* record who abandoned the run, why and when (state cancelled).
+	CancelReason    string     `gorm:"not null;default:''" json:"cancel_reason,omitempty"`
+	CancelledBy     string     `gorm:"not null;default:''" json:"cancelled_by,omitempty"`
+	CancelledAt     *time.Time `json:"cancelled_at,omitempty"`
+	CreatedByUserID *uint      `gorm:"index" json:"created_by_user_id"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // EpicPlanRevision is immutable once written; an edit is a new revision.
