@@ -485,8 +485,6 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 
-	h.DB.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{})
-
 	if ticket.AssignedShem != nil {
 		h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
 			Type:     "ticket_closed",
@@ -498,7 +496,8 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 }
 
 // closeTicketTx moves a ticket to closed and queues its linked issue's
-// close in tx, returning the closed row; errAlreadyClosed when it was.
+// close in tx, dropping its open questions, returning the closed row;
+// errAlreadyClosed when it was.
 func closeTicketTx(tx *gorm.DB, id string) (db.Ticket, error) {
 	var fresh db.Ticket
 	result := tx.Model(&db.Ticket{}).
@@ -509,6 +508,9 @@ func closeTicketTx(tx *gorm.DB, id string) (db.Ticket, error) {
 	}
 	if result.RowsAffected == 0 {
 		return fresh, errAlreadyClosed
+	}
+	if err := tx.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{}).Error; err != nil {
+		return fresh, err
 	}
 	if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
 		return fresh, fmt.Errorf("reload ticket %s: %w", id, err)
