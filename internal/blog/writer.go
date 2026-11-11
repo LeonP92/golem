@@ -1,7 +1,6 @@
 package blog
 
 import (
-	"bufio"
 	"encoding/json"
 	"os"
 	"sync"
@@ -58,20 +57,13 @@ func ReadAll(path string) ([]Entry, error) {
 	defer func() { _ = f.Close() }() // read-only: a close error cannot affect what was read
 
 	var entries []Entry
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
+	err = ForEach(f, func(e *Entry, err error, _ bool) error {
+		if e != nil {
+			entries = append(entries, *e)
 		}
-		var e Entry
-		if err := json.Unmarshal(line, &e); err != nil {
-			return nil, err
-		}
-		entries = append(entries, e)
-	}
-	if err := scanner.Err(); err != nil {
+		return err
+	})
+	if err != nil {
 		return nil, err
 	}
 	return entries, nil
