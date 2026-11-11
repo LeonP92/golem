@@ -326,8 +326,14 @@ func (c ClaudeCode) RunAgent(ctx context.Context, role string, in Context, model
 	if session.noTools {
 		cwd = session.root
 	}
+	// A tool-less session cannot open the files BuildPrompt saves, and says so.
+	in.SpillUnreadable = session.noTools
+	prompt := BuildPrompt(in) // may create in.SpillDir
+	if !session.noTools {
+		argv = append(argv, spillAccess(in.SpillDir)...)
+	}
 	cmd := agentCmd(ctx, c.opts, cwd, argv...)
-	cmd.Stdin = strings.NewReader(BuildPrompt(in))
+	cmd.Stdin = strings.NewReader(prompt)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -391,4 +397,24 @@ func labelled(name, out string) string {
 // it fails harmlessly when the file is untracked.
 func skipWorktree(worktreePath, rel string) {
 	_ = exec.Command("git", "-C", worktreePath, "update-index", "--skip-worktree", rel).Run() //nolint:gosec
+}
+
+// spillAccess lets a --print session read the files BuildPrompt saved: the
+// directory is outside its working directory, and a read there is otherwise
+// refused with no one to ask. Nothing is added when no file was saved.
+func spillAccess(dir string) []string {
+	abs, err := filepath.Abs(dir)
+	if dir == "" || err != nil {
+		return nil
+	}
+	if st, err := os.Stat(abs); err != nil || !st.IsDir() {
+		return nil
+	}
+	return []string{"--add-dir", abs, "--allowedTools", readRule(abs)}
+}
+
+// readRule is the Read permission for everything under dir: "//" marks an
+// absolute filesystem path, whether it is /data/x or C:/x.
+func readRule(dir string) string {
+	return "Read(//" + strings.TrimPrefix(filepath.ToSlash(dir), "/") + "/**)"
 }

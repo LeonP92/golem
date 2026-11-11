@@ -11,6 +11,7 @@ import (
 
 	"github.com/leonp92/golem/internal/agentrunner"
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/boundctx"
 	"github.com/leonp92/golem/internal/config"
 	"github.com/leonp92/golem/internal/models"
 	"github.com/leonp92/golem/internal/roles"
@@ -23,7 +24,7 @@ var validationStages = map[string]string{
 	"plan": "plan.md",
 }
 
-// maxArtifact caps how much of the artifact is handed to the validator. A
+// maxArtifact is how much of the artifact is handed to the validator whole; a
 // spec or plan longer than this is itself a signal, and the cap keeps one
 // runaway document from blowing the context window.
 const maxArtifact = 60000
@@ -104,8 +105,11 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s stage produced no %s: %v\n", *stage, artifactName, err)
 		return 2
 	}
-	if len(artifact) > maxArtifact {
-		artifact = artifact[:maxArtifact]
+	// A long artifact is cut to head and tail with the full text saved, and
+	// the validator is told so: approving text it never saw is not a verdict.
+	shown := (&boundctx.Set{Dir: filepath.Join(ticketDir, "context"), PerInput: maxArtifact}).Bound(artifactName, string(artifact))
+	if shown != string(artifact) {
+		shown += "\nUNSEEN: only the head and tail of this " + artifactName + " were provided. Emit a blocker for anything you cannot judge from them; read the file named above for the rest."
 	}
 
 	// Repository role file wins; fall back to the embedded default so a
@@ -138,7 +142,8 @@ func TicketValidate(args []string, stdout, stderr io.Writer) int {
 	}
 	result, err := runner.RunAgent(context.Background(), "spec-adherence", agentrunner.Context{
 		LogSlice:   before,
-		RolePrompt: string(rolePrompt) + "\n\n" + validationInstruction(*stage, *id, artifactName, string(artifact)),
+		SpillDir:   filepath.Join(ticketDir, "context"),
+		RolePrompt: string(rolePrompt) + "\n\n" + validationInstruction(*stage, *id, artifactName, shown),
 	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running spec-adherence: %v\n", err)

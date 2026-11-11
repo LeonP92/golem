@@ -100,6 +100,7 @@ func (o *Observer) DispatchForCommit(role, commitSHA, diff, rolePrompt string) e
 		LogSlice:   entries,
 		Diff:       diff,
 		RolePrompt: rolePrompt,
+		SpillDir:   filepath.Join(filepath.Dir(o.logPath), "context"),
 	}, o.model)
 	if err != nil {
 		return err

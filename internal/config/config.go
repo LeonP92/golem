@@ -48,13 +48,13 @@ type Config struct {
 	Review            ReviewConfig      `yaml:"review"`
 }
 
-// DefaultReviewMaxDiffBytes keeps a reviewer prompt well under a model's
-// context window. A 1.6 MB diff is what broke a real run.
+// DefaultReviewMaxDiffBytes is the largest diff the reviewer gets whole.
 const DefaultReviewMaxDiffBytes = 400_000
 
 type ReviewConfig struct {
-	// MaxDiffBytes caps the diff sent to the reviewer; a larger one is sent
-	// as a per-file summary with a truncation marker. 0 means the default.
+	// MaxDiffBytes is the largest diff sent to the reviewer whole; a larger one
+	// is sent as a per-file summary and excerpt, with the full diff on disk.
+	// 0 means the default.
 	MaxDiffBytes int `yaml:"max_diff_bytes"`
 }
 

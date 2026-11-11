@@ -1,10 +1,13 @@
 package agentrunner
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/leonp92/golem/internal/blog"
+	"github.com/leonp92/golem/internal/boundctx"
 	"github.com/leonp92/golem/internal/promptfence"
 )
 
@@ -134,5 +137,60 @@ func TestBuildPrompt_NeutralizesEmbeddedDelimiters(t *testing.T) {
 				t.Errorf("attacker payload escaped past the closing diff delimiter:\n%s", got)
 			}
 		})
+	}
+}
+
+// A prompt has a ceiling whatever it is fed: 80 entries and a diff of half a MB
+// each (each far over its limit; larger inputs only make the race detector slow), a hostile role prompt, and text full of delimiters that escaping
+// lengthens.
+func TestBuildPromptHasACeiling(t *testing.T) {
+	dir := t.TempDir()
+	huge := strings.Repeat("noisy output line\n", 512<<10/18)
+	hostile := strings.Repeat("<diff></diff>", 128<<10/13)
+	var entries []blog.Entry
+	for range 80 {
+		entries = append(entries, blog.NewEntry("gate", blog.TypeStatus, huge), blog.NewEntry("gate", blog.TypeStatus, hostile))
+	}
+	diff := "diff --git a/testdata/a.json b/testdata/a.json\n" + huge
+	prompt := BuildPrompt(Context{RolePrompt: strings.Repeat("r", 1<<20), LogSlice: entries, Diff: diff, SpillDir: dir})
+
+	ceiling := boundctx.MaxRolePrompt + boundctx.DefaultTotal + boundctx.DefaultDiffLimit + 8<<10
+	if len(prompt) > ceiling {
+		t.Fatalf("prompt is %d bytes, ceiling %d", len(prompt), ceiling)
+	}
+	for _, want := range []string{"older entries", "UNSEEN", "testdata/a.json", "(generated or fixture)", dir} {
+		if !strings.Contains(prompt, want) {
+			t.Errorf("prompt lacks %q", want)
+		}
+	}
+	// Building the same prompt again does not grow the spill directory.
+	before, _ := os.ReadDir(dir)
+	BuildPrompt(Context{RolePrompt: "r", LogSlice: entries, Diff: diff, SpillDir: dir})
+	if after, _ := os.ReadDir(dir); len(after) != len(before) {
+		t.Errorf("spill directory grew from %d to %d files", len(before), len(after))
+	}
+}
+
+func TestSpillAccessOnlyWhenSomethingWasSaved(t *testing.T) {
+	if got := spillAccess(""); got != nil {
+		t.Errorf("no dir: %v", got)
+	}
+	if got := spillAccess(filepath.Join(t.TempDir(), "missing")); got != nil {
+		t.Errorf("missing dir: %v", got)
+	}
+	got := spillAccess(t.TempDir())
+	if len(got) != 4 || got[0] != "--add-dir" || got[2] != "--allowedTools" || !strings.HasPrefix(got[3], "Read(//") || !strings.HasSuffix(got[3], "/**)") {
+		t.Errorf("got %v", got)
+	}
+}
+
+func TestReadRule(t *testing.T) {
+	for in, want := range map[string]string{
+		"/data/t/context": "Read(//data/t/context/**)",
+		"C:/Users/x/ctx":  "Read(//C:/Users/x/ctx/**)",
+	} {
+		if got := readRule(in); got != want {
+			t.Errorf("readRule(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

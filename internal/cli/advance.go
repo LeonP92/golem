@@ -142,10 +142,11 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "getting branch diff: %v\n", err)
 		return 1
 	}
-	// A diff over the cap cannot be reviewed whole, so no reviewer is run (its
-	// verdict on a part would not be evidence): park with the fix instead.
-	if limit := cfg.ReviewMaxDiffBytes(); len(diff) > limit {
-		tooLarge := fmt.Sprintf("%s review diff too large (%d bytes, cap %d); no reviewer was run, so no approval was recorded. "+
+	// Past four times the cap even a summary and excerpt are a poor basis for
+	// a verdict (a merge dragged in unrelated work, typically): park with the
+	// fix instead of recording an approval from a sliver.
+	if limit := 4 * cfg.ReviewMaxDiffBytes(); len(diff) > limit {
+		tooLarge := fmt.Sprintf("%s review diff too large (%d bytes, hard limit %d = 4 x review.max_diff_bytes); no reviewer was run, so no approval was recorded. "+
 			"Fix: merge or rebase onto the base branch if it carries unrelated work, split the ticket, or raise review.max_diff_bytes in .golem/config.yaml.",
 			evidence.EnvironmentMarker, len(diff), limit)
 		w, err := blog.NewWriter(logPath)
@@ -170,7 +171,9 @@ func TicketReview(args []string, stdout, stderr io.Writer) int {
 	result, err := runner.RunAgent(context.Background(), "reviewer", agentrunner.Context{
 		LogSlice:   entries,
 		Diff:       diff,
-		RolePrompt: string(rolePrompt) + reviewerVerdictContract, // the contract must not depend on an editable role file
+		SpillDir:   filepath.Join(ticketDir, "context"),
+		DiffLimit:  min(cfg.ReviewMaxDiffBytes(), maxInlineReviewDiff), // larger diffs go as summary + excerpt + file
+		RolePrompt: string(rolePrompt) + reviewerVerdictContract,       // the contract must not depend on an editable role file
 	}, model)
 	if err != nil {
 		fmt.Fprintf(stderr, "running reviewer: %v\n", err)
@@ -241,3 +244,7 @@ func reviewBase(worktree, flagBase, pinned string) string {
 	}
 	return pinned
 }
+
+// maxInlineReviewDiff caps what review.max_diff_bytes can ask to send whole: a larger setting would bring back the
+// prompt overflow this limit exists to prevent. Bigger diffs get the summary, an excerpt and the file.
+const maxInlineReviewDiff = 600_000

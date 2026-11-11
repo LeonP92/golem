@@ -172,6 +172,7 @@ func (c Codex) RunAgent(ctx context.Context, role string, in Context, model stri
 		cwd, argv = session.root, readOnlySandbox(argv)
 	}
 	cmd := agentCmd(ctx, c.opts, cwd, argv...)
+	in.SpillUnreadable = session.noTools // a no-tool session cannot open the saved files; the excerpt is all it has
 	cmd.Stdin = strings.NewReader(BuildPrompt(in))
 
 	var stdout, stderr bytes.Buffer
