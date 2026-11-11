@@ -34,7 +34,7 @@ func TestEpicDetailCancelControls(t *testing.T) {
 	if strings.Contains(body, "/cancel\"") || strings.Contains(body, "Approve this plan") || strings.Contains(body, "Generate plan") {
 		t.Fatal("cancelled run still offers controls")
 	}
-	if !strings.Contains(body, "Cancelled by leon") || !strings.Contains(body, "wrong idea") {
+	if !strings.Contains(body, "Cancelled by leon") || !strings.Contains(body, "wrong idea") || !strings.Contains(body, now.UTC().Format("2006-01-02 15:04")+" UTC") {
 		t.Fatal("cancelled run does not say who and why")
 	}
 }

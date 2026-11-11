@@ -11,14 +11,14 @@
     · open questions: {{if .Epic.AskDecisions}}ask a human{{else}}agents decide{{end}}
   </p>
   {{if eq .Epic.State "cancelled"}}
-  <div class="alert mt-3"><span>Cancelled{{if .Epic.CancelledBy}} by {{.Epic.CancelledBy}}{{end}}{{with .Epic.CancelledAt}} on {{.Format "2006-01-02 15:04"}}{{end}}{{if .Epic.CancelReason}}: {{.Epic.CancelReason}}{{end}}.
+  <div class="alert mt-3"><span>Cancelled{{if .Epic.CancelledBy}} by {{.Epic.CancelledBy}}{{end}}{{with .Epic.CancelledAt}} on {{.UTC.Format "2006-01-02 15:04"}} UTC{{end}}{{if .Epic.CancelReason}}: {{.Epic.CancelReason}}{{end}}.
     Its open tickets were closed; branches and merged work were left in place.</span></div>
   {{else if ne .Epic.State "completed"}}
   <form class="flex items-center gap-2 mt-3"
         hx-post="/api/epics/{{.Epic.ID}}/cancel"
         hx-confirm="Cancel this run? Every open ticket in it is closed. Branches and merged work stay."
-        hx-on::after-request="if(event.detail.successful) window.location.reload(); else alert(event.detail.xhr.responseText)">
-    <input type="text" name="reason" placeholder="Reason (optional)" class="input input-bordered input-sm w-64">
+        hx-on::after-request="if(event.detail.successful) window.location.reload()">
+    <input type="text" name="reason" maxlength="500" placeholder="Reason (optional)" class="input input-bordered input-sm w-64">
     <button type="submit" class="btn btn-outline btn-error btn-sm">Cancel run</button>
   </form>
   {{end}}
@@ -83,8 +83,7 @@
       </table>
     </div>
 
-    {{if eq $.Epic.State "cancelled"}}
-    {{else if not .Revision.ApprovedBy}}
+    {{if and (ne $.Epic.State "cancelled") (not .Revision.ApprovedBy)}}
     <div class="card-actions justify-end mt-4">
       <form method="POST" action="/epics/{{$.Epic.ID}}/approve">
         <input type="hidden" name="csrf_token" value="{{$.CSRFToken}}">
