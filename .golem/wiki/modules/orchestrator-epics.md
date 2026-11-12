@@ -8,7 +8,8 @@ ticket-level tester stage, to a standalone ticket), and epic columns on
 `tickets`.
 
 States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
-`paused` → `awaiting-final-review` → `completed`.
+`paused` → `awaiting-final-review` → `completed`; any state before
+`completed` can move to the terminal `cancelled`.
 
 ## Planning (epics.go)
 - `Create` validates strategy (`epic-branch` | `trunk-flags`) and delivery
@@ -34,6 +35,14 @@ States (`State*` constants): `draft` → `awaiting-approval` → `running` ⇄
   run to `awaiting-final-review` (`completed` under trunk-flags). See the
   lane section below for the full receipt semantics.
 - `Pause`/`Resume`: running ⇄ paused. Claims and the lane need `running`.
+- `Cancel`: one transaction sets `cancelled` with `CancelReason`,
+  `CancelledBy`, `CancelledAt`, deletes the integration slot, fails an
+  active plan job, and passes every non-closed child to a close hook
+  (`api.cancelEpic` uses the ticket close path, logs on each child, then
+  pushes `ticket_closed`). A repeat is a no-op (`changed` false); `completed` is refused.
+  `Start` and `AddRevision` touch the epic row first so they serialize with
+  it. Every other step already whitelists its states, so a cancelled run
+  never starts, claims, integrates or completes.
 
 ## Integration lane (gate.go)
 The merge lives on the shem that did the child's work (see

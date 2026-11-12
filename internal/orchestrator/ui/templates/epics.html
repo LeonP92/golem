@@ -14,7 +14,7 @@
          class="input input-bordered input-sm" list="epic-repos" />
   <datalist id="epic-repos">{{range .AvailableRepos}}<option value="{{.}}">{{end}}</datalist>
   <select name="state" class="select select-bordered select-sm">
-    <option value="">All states</option>
+    <option value="">All but cancelled</option>
     {{range $s := .States}}
     <option value="{{$s}}" {{if eq $.StateFilter $s}}selected{{end}}>{{$s}}</option>
     {{end}}
@@ -38,10 +38,10 @@
         </thead>
         <tbody>
           {{range .Epics}}
-          <tr>
+          <tr{{if eq .State "cancelled"}} class="opacity-60"{{end}}>
             <td><a href="/epics/{{.ID}}" class="link link-hover font-medium">{{.Title}}</a></td>
             <td class="text-sm">{{.RepoRemote}}</td>
-            <td><span class="badge badge-sm">{{.State}}</span></td>
+            <td><span class="badge badge-sm{{if eq .State "cancelled"}} badge-ghost{{end}}">{{.State}}</span></td>
             <td class="text-sm">{{.BranchStrategy}} / {{.DeliveryTarget}}</td>
             <td class="text-sm">
               {{if .ApprovedPlanHash}}approved r{{.ApprovedRevision}}
@@ -66,4 +66,10 @@
     </div>
   </div>
 </div>
+{{if .HiddenCancelled}}
+<p class="text-sm text-base-content/60 mt-3">
+  {{.HiddenCancelled}} cancelled {{if eq .HiddenCancelled 1}}epic{{else}}epics{{end}} hidden.
+  <a class="link" href="/epics?state=cancelled&repo={{.RepoFilter}}">Show cancelled</a>
+</p>
+{{end}}
 {{end}}

@@ -261,6 +261,22 @@ with its own UUID. From then on the run is just tickets, plus scheduling:
 **Pause** and **Resume** stop and restart claims and merges at the next
 attempt; work already claimed finishes.
 
+**Cancel** abandons a run that has not completed, from any earlier state,
+with an optional reason. Every open child is closed the same way the ticket
+Close action closes one: its shem is told to stop, a linked issue is closed,
+and the child's log says who cancelled the run and why. An active plan job is
+failed and the merge slot is freed. Nothing is deleted: branches, the
+integration branch, merged receipts and a final pull request stay as they
+are. A cancelled run cannot be resumed, started or completed. The epics page
+hides cancelled runs by default; pick `cancelled` in the state filter to see
+them. `GET /api/epics` is not filtered that way: it returns cancelled runs
+with the rest unless `?state=` asks for one state. The reason is capped at
+500 characters.
+
+Known limit: a shem already running a plan-generation session is not told to
+stop. Its job is marked failed at once, so whatever it posts afterwards is
+refused, but the session runs to its end first.
+
 ![An epic run: approved plan, requirements, and children in dependency order](images/epic-run.png)
 
 The run view reads the same on a phone:
@@ -321,7 +337,8 @@ When every node is integrated:
   run.
 
 Run states: `draft → awaiting-approval → running ⇄ paused →
-awaiting-final-review → completed`.
+awaiting-final-review → completed`, or `cancelled` from any state before
+`completed`.
 
 ![The epics list: state, strategy, and plan status at a glance](images/epics-list.png)
 
@@ -341,6 +358,7 @@ the child.
 | `POST /api/epics/{id}/approve` | Approve a revision, bound to its plan hash |
 | `POST /api/epics/{id}/start` | Materialize the approved plan into tickets |
 | `POST /api/epics/{id}/pause` · `.../resume` | Stop and restart claims and merges |
+| `POST /api/epics/{id}/cancel` | Cancel the run and close its open tickets (optional `{"reason":"..."}`); answers `{"closed":n}`, a repeat answers `{"closed":0}`, a completed run is a 409 |
 | `POST /api/epics/{id}/nodes/{key}/integrate` | Record an integration receipt by hand |
 | `POST /api/epics/{id}/verdicts` | Post a tester verdict (shem-authenticated) |
 | `POST /api/epics/{id}/merge-final` | Record the human final merge attestation (`{"sha":"<base-head>"}`); does not perform a merge |

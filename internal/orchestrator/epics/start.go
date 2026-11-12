@@ -30,6 +30,14 @@ var (
 func Start(gdb *gorm.DB, epicID string) (int, error) {
 	created := 0
 	err := gdb.Transaction(func(tx *gorm.DB) error {
+		// Lock by convention: this no-op write takes the run's row lock
+		// before the state is read, the lock Cancel's update also takes.
+		// Without it, on PostgreSQL a cancel that commits between the state
+		// check and the inserts below closes nothing (no children yet), and
+		// this Start then creates open children under a cancelled run.
+		if err := tx.Model(&db.Epic{}).Where("id = ?", epicID).Update("updated_at", time.Now()).Error; err != nil {
+			return err
+		}
 		e, err := load(tx, epicID)
 		if err != nil {
 			return err
@@ -233,6 +241,50 @@ func Pause(gdb *gorm.DB, epicID string) error {
 
 func Resume(gdb *gorm.DB, epicID string) error {
 	return transition(gdb, epicID, StatePaused, StateRunning)
+}
+
+// Cancel abandons a run that has not completed, in one transaction: the run
+// moves to cancelled with the reason, its merge slot and active plan job are
+// released, and closeChild closes every child not already closed. Branches
+// and receipts stay. Cancelling a cancelled run is a no-op; changed reports
+// whether this call did the cancel.
+func Cancel(gdb *gorm.DB, epicID, reason, actor string, closeChild func(tx *gorm.DB, child db.Ticket) error) (changed bool, err error) {
+	err = gdb.Transaction(func(tx *gorm.DB) error {
+		// The conditional update takes the run's row lock first, the same
+		// lock receipts, gates and Start take, so none of them interleave.
+		now := time.Now()
+		res := tx.Model(&db.Epic{}).Where("id = ? AND state NOT IN ?", epicID, []string{StateCompleted, StateCancelled}).
+			Updates(map[string]any{"state": StateCancelled, "cancel_reason": reason, "cancelled_by": actor, "cancelled_at": &now})
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			e, err := load(tx, epicID)
+			if err != nil || e.State == StateCancelled {
+				return err
+			}
+			return fmt.Errorf("%w: run is %s", ErrWrongState, e.State)
+		}
+		changed = true
+		if err := tx.Where("epic_id = ?", epicID).Delete(&db.EpicIntegrationSlot{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Model(&db.EpicPlanJob{}).Where("epic_id = ? AND status IN ?", epicID, []string{PlanJobQueued, PlanJobRunning}).
+			Updates(map[string]any{"status": PlanJobFailed, "error": "the epic was cancelled"}).Error; err != nil {
+			return err
+		}
+		var kids []db.Ticket
+		if err := tx.Where("epic_id = ? AND phase <> ?", epicID, "closed").Order("epic_node_key").Find(&kids).Error; err != nil {
+			return err
+		}
+		for _, k := range kids {
+			if err := closeChild(tx, k); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return changed && err == nil, err
 }
 
 func transition(gdb *gorm.DB, epicID, from, to string) error {

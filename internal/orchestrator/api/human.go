@@ -473,31 +473,8 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 	// superseded is the pattern that produced I5, and it is applied
 	// family-wide here rather than left as the one remaining instance.
 	txErr := h.DB.Transaction(func(tx *gorm.DB) error {
-		result := tx.Model(&db.Ticket{}).
-			Where("id = ? AND phase != 'closed'", id).
-			Update("phase", "closed")
-		if result.Error != nil {
-			return result.Error
-		}
-		if result.RowsAffected == 0 {
-			return errAlreadyClosed
-		}
-		var fresh db.Ticket
-		if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
-			return fmt.Errorf("reload ticket %s: %w", id, err)
-		}
-		if fresh.IssueNumber == nil {
-			return nil
-		}
-		if err := ghsync.Enqueue(tx, db.GitHubOutbox{
-			TicketID:       id,
-			Kind:           ghsync.KindClose,
-			Payload:        "{}",
-			IdempotencyKey: ghsync.CloseKey(id),
-		}); err != nil {
-			return fmt.Errorf("enqueue close: %w", err)
-		}
-		return nil
+		_, err := closeTicketTx(tx, id)
+		return err
 	})
 	if errors.Is(txErr, errAlreadyClosed) {
 		http.Error(w, "ticket already closed", http.StatusConflict)
@@ -508,8 +485,6 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		return
 	}
 
-	h.DB.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{})
-
 	if ticket.AssignedShem != nil {
 		h.Hub.Push(*ticket.AssignedShem, ws.WSMessage{ //nolint:errcheck
 			Type:     "ticket_closed",
@@ -518,6 +493,40 @@ func (h *Handlers) actionClose(w http.ResponseWriter, r *http.Request, id string
 		})
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// closeTicketTx moves a ticket to closed and queues its linked issue's
+// close in tx, dropping its open questions, returning the closed row;
+// errAlreadyClosed when it was.
+func closeTicketTx(tx *gorm.DB, id string) (db.Ticket, error) {
+	var fresh db.Ticket
+	result := tx.Model(&db.Ticket{}).
+		Where("id = ? AND phase != 'closed'", id).
+		Update("phase", "closed")
+	if result.Error != nil {
+		return fresh, result.Error
+	}
+	if result.RowsAffected == 0 {
+		return fresh, errAlreadyClosed
+	}
+	if err := tx.Where("ticket_id = ? AND resolved_at IS NULL", id).Delete(&db.HumanInput{}).Error; err != nil {
+		return fresh, err
+	}
+	if err := tx.First(&fresh, "id = ?", id).Error; err != nil {
+		return fresh, fmt.Errorf("reload ticket %s: %w", id, err)
+	}
+	if fresh.IssueNumber == nil {
+		return fresh, nil
+	}
+	if err := ghsync.Enqueue(tx, db.GitHubOutbox{
+		TicketID:       id,
+		Kind:           ghsync.KindClose,
+		Payload:        "{}",
+		IdempotencyKey: ghsync.CloseKey(id),
+	}); err != nil {
+		return fresh, fmt.Errorf("enqueue close: %w", err)
+	}
+	return fresh, nil
 }
 
 // errAlreadyClosed signals that the ticket was already in the closed phase

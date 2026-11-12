@@ -215,8 +215,14 @@ func CompletePlanJob(gdb *gorm.DB, jobID string, shemID uint, draftJSON, runErr 
 		canonical = c
 		updates["status"], updates["draft_json"] = PlanJobDone, canonical
 	}
-	if err := gdb.Model(&job).Updates(updates).Error; err != nil {
-		return err
+	// Guarded like the check above: a cancel can fail the job after it was
+	// read, and that outcome must not be overwritten.
+	res := gdb.Model(&db.EpicPlanJob{}).Where("id = ? AND status = ? AND shem_id = ?", jobID, PlanJobRunning, shemID).Updates(updates)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return ErrPlanJobNotOwned
 	}
 	// Opt-in automation: a valid generated draft flows straight into the
 	// ordinary revision -> approve -> start chain. Every step is the same
