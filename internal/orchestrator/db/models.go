@@ -273,11 +273,33 @@ func PhaseUpdates(phase string) map[string]any {
 	return updates
 }
 
-// DisplayPhase is the phase the UI badges. A needs-attention ticket whose
-// supervisor wait has not elapsed yet is recovering, not waiting on a human,
-// and reads that way everywhere a badge renders.
+// queuedRetryWindow bounds how long an unclaimed eligible retry reads as
+// recovering: it covers the 10 s poll, the 10 min lease and the 15 min max
+// wait backoff. A retry nobody picks up (offline shem, auto_retry off, held
+// backend) reverts to needs-attention after it.
+const queuedRetryWindow = 15 * time.Minute
+
+// DisplayPhase is the phase shown to people and scripts. The stored phase
+// stays needs-attention for the whole recovery (every claim, resume and epic
+// guard keys on it); this only labels what the badge means:
+//
+//	diagnosing  a shem holds the recovery lease: the diagnoser is running
+//	recovering  an automatic retry is queued (eligible) or a supervisor wait
+//	            has not elapsed yet
+//	needs-attention  only a human (or the lead) can act: exhausted, repeated
+//	            failure, manual approval, legacy or human-parked rows
 func (t Ticket) DisplayPhase() string {
-	if t.Phase == "needs-attention" && t.AttentionWaitUntil != nil && t.AttentionWaitUntil.After(time.Now()) {
+	if t.Phase != "needs-attention" {
+		return t.Phase
+	}
+	now := time.Now()
+	if t.AttentionToken != "" && t.AttentionLeaseUntil != nil && t.AttentionLeaseUntil.After(now) {
+		return "diagnosing"
+	}
+	if t.AttentionWaitUntil != nil && t.AttentionWaitUntil.After(now) {
+		return "recovering"
+	}
+	if t.AttentionEligible && !t.ManualApproval && (t.IssueNumber == nil || t.IntakeApproved) && time.Since(t.UpdatedAt) < queuedRetryWindow {
 		return "recovering"
 	}
 	return t.Phase

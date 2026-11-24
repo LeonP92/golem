@@ -764,3 +764,48 @@ func TestTransientIncidentsAreCappedPerTicket(t *testing.T) {
 		t.Fatalf("an eleventh transient incident was still waited out: %d", out.Code)
 	}
 }
+
+// display_phase is what people and scripts watch: needs-attention only when
+// a human must act, while the stored phase stays needs-attention throughout.
+func TestDisplayPhaseFollowsRecovery(t *testing.T) {
+	f := newRecoveryHarness(t)
+	show := func(want string) {
+		t.Helper()
+		fresh := f.fresh(t)
+		if fresh.Phase != "needs-attention" {
+			t.Fatalf("stored phase changed: %q", fresh.Phase)
+		}
+		if got := fresh.DisplayPhase(); got != want {
+			t.Fatalf("display phase %q, want %q (%+v)", got, want, fresh)
+		}
+	}
+	f.fail(t, "agent step failed: build broke")
+	show("recovering")
+	if body := f.request(t, "GET", "/api/tickets?attention=true", nil).Body.String(); !strings.Contains(body, `"display_phase":"recovering"`) || !strings.Contains(body, `"phase":"needs-attention"`) {
+		t.Fatalf("api output: %s", body)
+	}
+	c := f.claim(t, 3)
+	show("diagnosing")
+	// The diagnoser decides a human must act (no retry): needs-attention.
+	if out := f.resolveResult(t, c, &client.AttentionResult{Reason: "needs a product decision"}); out.Code != 204 {
+		t.Fatalf("park: %d", out.Code)
+	}
+	show("needs-attention")
+}
+
+func TestDisplayPhaseAttemptsExhaustedIsHumanOwned(t *testing.T) {
+	f := newRecoveryHarness(t)
+	f.fail(t, "agent step failed: lint")
+	c := f.claim(t, 1)
+	if out := f.resolveResult(t, c, nil); out.Code != 200 {
+		t.Fatalf("retry: %d", out.Code)
+	}
+	f.fail(t, "agent step failed: tests")
+	if code := f.claimCode(t, 1); code != 409 {
+		t.Fatalf("claim past budget: %d", code)
+	}
+	fresh := f.fresh(t)
+	if got := fresh.DisplayPhase(); got != "needs-attention" {
+		t.Fatalf("exhausted ticket shows %q: %+v", got, fresh)
+	}
+}

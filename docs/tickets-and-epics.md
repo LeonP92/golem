@@ -37,11 +37,21 @@ streams the blackboard to the dashboard as the shem works.
 unassigned → claimed → brainstorm → plan → implement → review → ready-for-review → closed
 ```
 
-Two side states route work back for attention:
+Side states route work back for attention:
 
 - **needs-attention** — a gate command failed, the reviewer's verdict was
   FAIL, or a required verdict is missing. A human (or a shem, after a
-  decision) resumes the ticket from here.
+  decision) resumes the ticket from here. The API's `display_phase` and
+  the UI say `needs-attention` only when a person must act; the stored
+  `phase` stays `needs-attention` throughout a recovery.
+- **diagnosing** (display only) — the diagnoser holds the recovery lease on
+  a needs-attention ticket. Badge: "Diagnosing".
+- **recovering** (display only) — an automatic retry is queued, or a
+  supervisor wait (usage limit, transient fault) has not elapsed. Badge:
+  "Recovering automatically". It reverts to `needs-attention` when the
+  diagnoser asks for a person, attempts or wait budget run out, the same
+  failure repeats, the ticket has waited over 15 minutes without being picked up, the ticket is in manual-approval mode, or the failure is
+  not model-diagnosable.
 - **revising** — a reviewer or tester sent the work back with feedback; the
   shem fixes on the same branch and re-enters review.
 
@@ -420,7 +430,8 @@ nothing else.
 ## Automatic recovery from failed work
 
 New worker failures enter bounded automatic diagnosis by default. A ticket
-still shows `needs-attention` while the worker diagnoses it. Known usage,
+stored as `needs-attention` shows `display_phase` `diagnosing` while the worker
+diagnoses it and `recovering` while a retry or wait is pending. Known usage,
 authentication, permissions and missing-command errors, and provider outages
 (overloaded, 503 or 529, timeouts, connection resets), stay parked without a
 model call: a retry would fail the same way. For a failed review gate only the

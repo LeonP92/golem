@@ -73,7 +73,7 @@
             <td class="text-sm">
               {{if .Integrated}}<span class="badge badge-success badge-sm">integrated</span>
               {{else if .TicketID}}
-                <a href="/tickets/{{.TicketID}}" class="link link-hover">{{.TicketPhase}}</a>
+                <a href="/tickets/{{.TicketID}}" class="link link-hover">{{template "phase_label" .TicketPhase}}</a>
                 {{if .Ready}}<span class="badge badge-info badge-sm">ready</span>{{end}}
               {{else}}<span class="text-base-content/40">not started</span>{{end}}
             </td>

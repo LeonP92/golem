@@ -749,13 +749,20 @@ func (h *Handlers) ticketDetail(w http.ResponseWriter, r *http.Request) {
 	data["Ticket"] = ticket
 	data["CanRetryCurrentStep"] = ticket.Phase == "needs-attention" && ticket.CheckpointPhase != nil &&
 		strings.TrimSpace(*ticket.CheckpointPhase) != "" && ticket.CheckpointSHA != nil && strings.TrimSpace(*ticket.CheckpointSHA) != ""
-	if ticket.DisplayPhase() == "recovering" {
-		what := "a transient fault"
-		if ticket.AttentionWaitKind == "usage_limit" {
-			what = "a usage limit"
+	switch ticket.DisplayPhase() {
+	case "diagnosing":
+		data["RecoveryStatus"] = "The diagnoser is working out what went wrong. It retries on its own or asks you if it needs a decision."
+	case "recovering":
+		if ticket.AttentionWaitUntil != nil && ticket.AttentionWaitUntil.After(time.Now()) {
+			what := "a transient fault"
+			if ticket.AttentionWaitKind == "usage_limit" {
+				what = "a usage limit"
+			}
+			data["RecoveryStatus"] = fmt.Sprintf("The supervisor is waiting out %s - resumes %s. It escalates to you only if the fault outlives the wait.",
+				what, ticket.AttentionWaitUntil.Local().Format("15:04"))
+		} else {
+			data["RecoveryStatus"] = "An automatic retry is queued. It comes back to you only if recovery gives up."
 		}
-		data["RecoveryStatus"] = fmt.Sprintf("The supervisor is waiting out %s - resumes %s. It escalates to you only if the fault outlives the wait.",
-			what, ticket.AttentionWaitUntil.Local().Format("15:04"))
 	}
 	data["ResolvedModels"] = inStageOrder(ticketModels(fleet, ticket, assigned))
 	data["Selections"] = ticket.ModelSelections()

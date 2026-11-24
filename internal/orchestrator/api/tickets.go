@@ -28,6 +28,10 @@ import (
 type ticketResponse struct {
 	db.Ticket
 	CreatedBy string `json:"created_by"`
+	// DisplayPhase is phase with automatic recovery made visible: diagnosing,
+	// recovering, or needs-attention only when a human must act. phase stays
+	// the stored value every shem and guard keys on.
+	DisplayPhase string `json:"display_phase"`
 }
 
 func toTicketResponse(t db.Ticket, names map[uint]string) ticketResponse {
@@ -35,7 +39,7 @@ func toTicketResponse(t db.Ticket, names map[uint]string) ticketResponse {
 	if t.CreatedByUserID != nil {
 		created = names[*t.CreatedByUserID]
 	}
-	return ticketResponse{Ticket: t, CreatedBy: created}
+	return ticketResponse{Ticket: t, CreatedBy: created, DisplayPhase: t.DisplayPhase()}
 }
 
 // ClaimResponse is returned by a successful ticket claim.

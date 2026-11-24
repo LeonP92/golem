@@ -170,7 +170,7 @@ func (h *Handlers) epicDetail(w http.ResponseWriter, r *http.Request) {
 				Integrated: c.EpicIntegratedSHA != "", Ready: c.EpicReady,
 			}
 			if ok {
-				row.TicketID, row.TicketPhase = c.ID, c.Phase
+				row.TicketID, row.TicketPhase = c.ID, c.DisplayPhase()
 			}
 			if row.Integrated {
 				integrated++
